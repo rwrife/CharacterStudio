@@ -10,7 +10,7 @@ Local Windows ARM64 desktop app with **Designer** and **Animator** workspaces. D
 
 | Feature | What you can do |
 |---|---|
-| [First-launch setup checklist](#first-launch-setup-checklist) | On first launch, see what this PC already has and what Designer and Animator still need. One-click actions install a checksum-verified Blender, connect and start ComfyUI, download pinned and verified Designer weights, and open the right pages for gated or manual steps. |
+| [First-launch setup checklist](#first-launch-setup-checklist) | On first launch, see what this PC already has and what Designer and Animator still need. One-click actions install a checksum-verified Blender, connect and start ComfyUI, download pinned and verified Designer weights, and open the right pages for gated or manual steps. Later launches [validate dependencies](#dependency-check-on-later-launches) and prompt you to fix problems such as a stopped ComfyUI. |
 | [Staged character design](#designer-workflow) | Describe a character, scenario, and art style, or condition a concept with a local reference image. Review each scene, transparent T-pose, and GLB before continuing. |
 | [Textured models](#local-textured-models) | Select native TRELLIS.2 to generate geometry and embedded base-color/metallic/roughness textures together from the T-pose. Hunyuan remains the lower-memory geometry-only option. |
 | [External inputs](#start-from-external-inputs) | Skip ahead with an existing T-pose or embedded GLB instead of regenerating earlier stages. Scenes are always generated from a description or a reference photo plus description. Preserve originals and distinguish imported artifacts from generated results. |
@@ -32,6 +32,12 @@ Local Windows ARM64 desktop app with **Designer** and **Animator** workspaces. D
 ![Setup checklist showing detected core tools, an Install Blender action, Animator text-encoder options and Designer model rows](docs/screenshots/setup-checklist.png)
 
 A real first launch against a fresh workspace on the development PC. Items already present show as complete; the remaining steps have one-click actions. Readiness checks confirm prerequisites, not successful generation.
+
+### Dependency check on a later launch
+
+![Dependency check prompt listing Blender and the gated Llama text encoder, each with one-click actions and a Don't warn at launch option](docs/screenshots/launch-check.png)
+
+A real later launch on the development PC, in a fresh workspace without Blender and with the Llama encoder not yet approved. ComfyUI was already running there, so it is not listed.
 
 ### Designer: character concept and transparent T-pose
 
@@ -104,7 +110,13 @@ Designer downloads are pinned to an immutable Hugging Face revision and an exact
 
 **Limitations:** the checklist does not install ComfyUI, GPU drivers, PyTorch or custom nodes such as ComfyUI-Kimodo. Follow the linked guides, then select **Re-check**. TRELLIS.2 textured generation and the optional scene IP-Adapter are not part of the one-click downloads. The gated Llama encoder still needs approved access and a Hugging Face login inside the ComfyUI environment. The LFM bridge needs ComfyUI-Kimodo on disk and a ComfyUI restart. A completed checklist means the prerequisites were found, not that generation or export will succeed on this hardware. Clear **Show this checklist at launch** to stop it from opening automatically. Automation can set `STUDIO_SKIP_SETUP_CHECKLIST=1` to suppress the first-launch dialog.
 
-After `npm run build`, `npm run test:setup` opens the checklist for a fresh temporary workspace using this PC's real tools. It intercepts external links and does not start downloads or installs.
+#### Dependency check on later launches
+
+After the first launch, Studio checks its dependencies each time it opens (unless **Show this checklist at launch** opens the full checklist instead). A small **Checking Blender, ComfyUI and models…** card appears in the corner while you keep working; select **Cancel** to stop the check. If every required item passes, a brief confirmation appears. If anything Designer or Animator needs is missing or not working, the **Some dependencies need attention** prompt lists only those items with the same one-click actions as the checklist, such as **Start ComfyUI** or **Install Blender 4.5.15**. The prompt re-checks after each action and offers **Re-check** (with **Cancel check**), **Open setup checklist** and **Continue anyway**. Optional items never interrupt a launch.
+
+**Don't warn at launch** hides one item until it works again; afterwards a new failure is reported again. If several Designer models are missing, **Don't warn about Designer models** silences them together for Animator-only use. Clear **Check dependencies at launch** in the prompt, or **Otherwise, check dependencies at launch** in the checklist, to stop the check entirely. The check runs the same probes as the checklist, so it confirms prerequisites, not successful generation. `STUDIO_SKIP_SETUP_CHECKLIST=1` also suppresses it.
+
+After `npm run build`, `npm run test:setup` opens the checklist for a fresh temporary workspace using this PC's real tools, then relaunches to exercise the dependency check and its **Cancel**. It intercepts external links and does not start downloads or installs.
 
 ### Automated builds and releases
 

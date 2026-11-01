@@ -8,7 +8,7 @@ import { designConfigSchema } from '../src/main/designer'
 import { downloadVerified } from '../src/main/download'
 import { comfyCandidates, displayPath, isComfyInstall, loaderChoices, modelItem, modelPath, SetupAssistant, type SetupHost } from '../src/main/setup'
 import { comfyPythonPath } from '../src/main/native-runtime'
-import { modelUrl, setupLinks, setupModels, summarizeSetup, type SetupItem, type SetupState } from '../src/shared/setup'
+import { launchIssues, modelUrl, setupLinks, setupModels, summarizeSetup, type SetupItem, type SetupState } from '../src/shared/setup'
 import type { DesignerConfig } from '../src/shared/designer'
 import type { Settings } from '../src/shared/types'
 
@@ -179,4 +179,51 @@ test('the checklist reports missing local tools as actionable steps', async () =
   assert.ok(report.items.find(i => i.id === 'blender')!.actions.some(a => a.id === 'install-blender'))
   assert.equal(report.items.find(i => i.id === 'comfy-running')!.actions[0].disabled, 'Choose a ComfyUI folder first.')
   assert.equal(report.items.filter(i => i.group === 'designer').length, setupModels.length)
+})
+
+test('launch checks report unresolved requirements and honour ignored items until they work again', async () => {
+  const root = temp(), output = join(root, 'output')
+  mkdirSync(output)
+  const h = host(root, { firstLaunch: false })
+  const assistant = new SetupAssistant(h.value)
+  assert.equal(assistant.state().checkOnLaunch, true)
+  assert.deepEqual(assistant.state().ignoredAtLaunch, [])
+
+  let result = await assistant.launchCheck()
+  assert.equal(result.cancelled, false)
+  if (result.cancelled) return
+  const ids = result.issues.map(item => item.id)
+  assert.ok(ids.includes('blender') && ids.includes('comfy-running') && ids.includes('comfy-output'))
+  assert.ok(result.issues.every(item => item.requiredFor.length && item.status !== 'done'))
+  assert.ok(!ids.includes('ollama'), 'optional items never interrupt a launch')
+
+  await assistant.preferences({ ignoredAtLaunch: ['blender', 'comfy-output'], checkOnLaunch: false })
+  result = await assistant.launchCheck()
+  assert.ok(!result.cancelled && !result.issues.some(item => item.id === 'blender' || item.id === 'comfy-output'))
+
+  // Once an ignored item works it is forgotten, so a later failure is reported again.
+  h.value.saveSettings({ ...h.settings(), comfyOutput: output })
+  await assistant.launchCheck()
+  const reopened = new SetupAssistant(host(root, { firstLaunch: false }).value).state()
+  assert.deepEqual(reopened.ignoredAtLaunch, ['blender'])
+  assert.equal(reopened.checkOnLaunch, false)
+  assert.equal(new SetupAssistant(host(temp(), { firstLaunch: false, quietLaunch: true }).value).state().checkOnLaunch, false)
+  await assert.rejects(assistant.preferences({ ignoredAtLaunch: ['../../evil'] } as never))
+})
+
+test('launch checks can be cancelled and a new check supersedes the previous one', async () => {
+  const assistant = new SetupAssistant(host(temp(), { firstLaunch: false }).value)
+  const first = assistant.launchCheck()
+  assistant.cancelLaunchCheck()
+  assert.deepEqual(await first, { cancelled: true })
+  const superseded = assistant.launchCheck()
+  const latest = assistant.launchCheck()
+  assert.deepEqual(await superseded, { cancelled: true })
+  assert.equal((await latest).cancelled, false)
+})
+
+test('launch issues exclude finished, optional and ignored items', () => {
+  const item = (id: SetupItem['id'], status: SetupItem['status'], requiredFor: SetupItem['requiredFor']): SetupItem => ({ id, group: 'core', title: id, status, detail: '', requiredFor, actions: [] })
+  const items = [item('blender', 'todo', ['animator']), item('comfy-running', 'done', ['designer']), item('ollama', 'optional', []), item('comfy-output', 'warning', ['designer'])]
+  assert.deepEqual(launchIssues(items, ['comfy-output']).map(i => i.id), ['blender'])
 })
