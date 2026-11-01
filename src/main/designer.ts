@@ -11,6 +11,12 @@ import { api, cancelMotion } from './comfy'
 import { errorText } from './validation'
 import { imageWorkflow, isolationWorkflow, meshWorkflow, tposeWorkflow, type Workflow } from './design-workflows'
 import { validateDesignGlb } from './export-validation'
+import { designerModelPackages, needsDesignerModel, type DesignerModelPackage, type DesignerModel, type ModelDownload } from '../shared/designer-models'
+import { installDesignerModel } from './model-download'
+
+class ModelRequirementError extends Error {
+  constructor(message: string, readonly packageId?: DesignerModelPackage) { super(message) }
+}
 
 export const designConfigSchema = z.object({
   imageProfile: z.enum(['sd15', 'sdxl']), checkpoint: z.string().max(1024),
@@ -104,9 +110,12 @@ async function ollama(path: string, body?: unknown, signal?: AbortSignal): Promi
 export class Designer {
   private state: DesignerSnapshot
   private active?: { design: Design; controller: AbortController; settled: Promise<void> }
+  private modelDownload?: ModelDownload
+  private downloadActive?: { controller: AbortController; settled: Promise<void> }
   constructor(readonly root: string, readonly appRoot: string, private assets: Map<string, string>,
     private settings: () => Settings, private acquire: () => () => void, private notify: () => void,
-    private validateImage: (file: string, cutout?: boolean, squareSize?: number) => Promise<Buffer>) {
+    private validateImage: (file: string, cutout?: boolean, squareSize?: number) => Promise<Buffer>,
+    private installModel = installDesignerModel) {
     mkdirSync(join(root, 'designs'), { recursive: true })
     const path = join(root, 'designer.json')
     this.state = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {
@@ -116,6 +125,9 @@ export class Designer {
     this.state.config = designConfigSchema.parse(this.state.config)
     for (const reference of this.state.references) reference.url = this.asset(reference.id, this.referenceFile(reference.id))
     for (const design of this.state.designs) {
+      if (design.status === 'failed' && !design.recovery &&
+          design.message === 'Install a native BiRefNet background-removal checkpoint in ComfyUI models\\background_removal, refresh, and select it. A prompt-only background is not safe for 3D generation.')
+        design.recovery = { package: 'background' }
       if (design.status === 'running') {
         design.status = 'failed'
         design.message = `App closed during ${design.stage}. Partial output was not published.${design.promptId ? ` Inspect ComfyUI prompt ${design.promptId} before retrying.` : ''}`
@@ -125,7 +137,7 @@ export class Designer {
     }
     this.persist(false)
   }
-  snapshot() { return structuredClone(this.state) }
+  snapshot() { return structuredClone({ ...this.state, modelDownload: this.modelDownload }) }
   private asset(id: string, file: string) { const key = `design-${id}`; this.assets.set(key, file); return `studio://asset/${key}` }
   private persist(notify = true) {
     const file = join(this.root, 'designer.json')
@@ -144,6 +156,72 @@ export class Designer {
   saveSettings(value: DesignerConfig) {
     const release = this.acquire()
     try { this.state.config = designConfigSchema.parse(value); this.persist() } finally { release() }
+  }
+  async installModels(value: DesignerModelPackage,
+    confirm: (label: string, models: DesignerModel[], root: string) => Promise<boolean>): Promise<DesignerConfig | null> {
+    if (typeof value !== 'string' || !Object.hasOwn(designerModelPackages, value)) throw new Error('Unknown Designer model package.')
+    const release = this.acquire()
+    const controller = new AbortController()
+    let settle!: () => void
+    this.downloadActive = { controller, settled: new Promise<void>(resolve => { settle = resolve }) }
+    const signal = controller.signal
+    this.modelDownload = { package: value, status: 'running', message: 'Checking required models...', receivedBytes: 0, totalBytes: 0 }
+    try {
+      this.notify()
+      const ready = await this.readiness()
+      signal.throwIfAborted()
+      const config = this.state.config
+      if ((value === 'sd15' || value === 'sdxl') && config.imageProfile !== value ||
+          value === 'hunyuan' && config.meshProfile !== 'standard' || value === 'textured' && config.meshProfile !== 'textured')
+        throw new Error('The model profile changed. Retry the stage to refresh its required models.')
+      const selected = designerModelPackages[value]
+      const models = selected.models.filter(model => needsDesignerModel(model, config, ready))
+      const root = this.settings().comfyRoot
+      if (!models.length) {
+        this.modelDownload = { ...this.modelDownload, status: 'complete', message: 'Required models are already selected. Retry the stage when ready.' }
+        return structuredClone(config)
+      }
+      this.modelDownload.totalBytes = models.reduce((sum, model) => sum + model.bytes, 0)
+      this.modelDownload.message = 'Waiting for download approval.'
+      this.notify()
+      if (!await confirm(selected.label, models, root)) { this.modelDownload = undefined; return null }
+      signal.throwIfAborted()
+      const updated = { ...config }
+      let completed = 0, lastUpdate = 0
+      for (const model of models) {
+        this.modelDownload.message = `Downloading / verifying ${model.file}`
+        this.notify()
+        await this.installModel(root, model, signal, received => {
+          this.modelDownload!.receivedBytes = completed + received
+          if (Date.now() - lastUpdate >= 250) { lastUpdate = Date.now(); this.notify() }
+        })
+        completed += model.bytes
+        updated[model.key] = model.file
+      }
+      signal.throwIfAborted()
+      this.modelDownload.message = 'Refreshing ComfyUI model choices...'; this.notify()
+      const refreshed = await this.readiness()
+      signal.throwIfAborted()
+      const missing = models.filter(model => !refreshed[model.choices].includes(model.file))
+      if (missing.length)
+        throw new Error(`Files downloaded, but ComfyUI cannot see ${missing.map(model => model.file).join(', ')}. Check that Backend connections points to this running ComfyUI's folder and that its native nodes are available; restart ComfyUI if needed, then retry this action. Model choices were not changed.`)
+      this.state.config = designConfigSchema.parse(updated)
+      this.modelDownload = { ...this.modelDownload, status: 'complete', receivedBytes: completed, message: 'Required models verified and selected. Retry the stage when ready.' }
+      this.persist()
+      return structuredClone(this.state.config)
+    } catch (error) {
+      this.modelDownload = { ...this.modelDownload!, status: signal.aborted ? 'cancelled' : 'failed',
+        message: signal.aborted ? 'Model download cancelled. Verified files are kept; model choices were not changed.' : errorText(error) }
+      throw new Error(this.modelDownload.message)
+    } finally {
+      this.downloadActive = undefined; release(); settle(); this.notify()
+    }
+  }
+  async cancelDownload() {
+    const active = this.downloadActive
+    if (!active) return
+    active.controller.abort()
+    await active.settled
   }
   async addReference(file: string) {
     const release = this.acquire()
@@ -270,7 +348,7 @@ export class Designer {
     let settle!: () => void
     const settled = new Promise<void>(resolve => { settle = resolve })
     this.active = { design, controller, settled }
-    Object.assign(design, { status: 'running', stage, message: 'Checking installed local models and available GPU memory.', promptId: undefined })
+    Object.assign(design, { status: 'running', stage, message: 'Checking installed local models and available GPU memory.', promptId: undefined, recovery: undefined })
     try {
       this.persist()
       const ready = await this.readiness()
@@ -296,15 +374,17 @@ export class Designer {
       const identity = stage === 'scene' && !!config.ipadapter && !!design.request.referenceId
       checkDesignBudget(ready, cleanupOnly ? 2 : editPose ? tposeEditProfile.gb + 2 : stage === 'model' ? meshProfiles[config.meshProfile].gb : imageProfiles[config.imageProfile].gb + (identity ? 2 : 0))
       const checkpoint = stage === 'model' ? config.meshCheckpoint : config.checkpoint
-      if (!cleanupOnly && !editPose && !textured && (!checkpoint || !ready.checkpoints.includes(checkpoint))) throw new Error('Select an installed checkpoint for this stage in Designer model settings. No models are downloaded during generation.')
+      if (!cleanupOnly && !editPose && !textured && (!checkpoint || !ready.checkpoints.includes(checkpoint)))
+        throw new ModelRequirementError('Select an installed checkpoint for this stage, or download the supported weights. Downloads require your approval and do not start during generation.',
+          stage === 'scene' ? config.imageProfile : config.meshProfile === 'standard' ? 'hunyuan' : undefined)
       if (editPose && (!config.editModel || !ready.diffusionModels.includes(config.editModel) ||
           !config.editTextEncoder || !ready.textEncoders.includes(config.editTextEncoder) || !config.editVae || !ready.vaes.includes(config.editVae)))
-        throw new Error('Select installed FLUX.2 klein 4B editing weights, Qwen 3 4B text encoder and FLUX.2 VAE. T-pose editing does not fall back to SD image regeneration.')
+        throw new ModelRequirementError('Select installed FLUX.2 klein 4B editing weights, Qwen 3 4B text encoder and FLUX.2 VAE, or download the required models. T-pose editing does not fall back to SD image regeneration.', 'edit')
       if (editPose && (!/(?:^|[\\/])flux-2-klein-4b(?:-fp8)?\.safetensors$/i.test(config.editModel!) ||
           !/(?:^|[\\/])qwen_3_4b\.safetensors$/i.test(config.editTextEncoder!) || !/(?:^|[\\/])flux2-vae\.safetensors$/i.test(config.editVae!)))
         throw new Error('Use the supported distilled FLUX.2 klein 4B (optionally FP8), qwen_3_4b and flux2-vae safetensors. Base, 9B and other model architectures use different workflows.')
       if (stage === 'tpose' && (!config.backgroundModel || !ready.backgroundModels.includes(config.backgroundModel)))
-        throw new Error('Install a native BiRefNet background-removal checkpoint in ComfyUI models\\background_removal, refresh, and select it. A prompt-only background is not safe for 3D generation.')
+        throw new ModelRequirementError('BiRefNet background-removal weights are missing or not selected. Download the required model to install and select it automatically. A prompt-only background is not safe for 3D generation.', 'background')
       if (textured) {
         for (const [name, installed, expected] of [
           [config.meshTextureModel, ready.diffusionModels, meshTextureProfile.model],
@@ -313,7 +393,7 @@ export class Designer {
           [config.meshTextureVae, ready.vaes, meshTextureProfile.textureVae]
         ] as const) {
           if (!name || !installed.includes(name) || basename(name) !== expected)
-            throw new Error(`Textured generation requires installed ${expected}. Select the native TRELLIS.2 weights; no geometry-only fallback is used.`)
+            throw new ModelRequirementError(`Textured generation requires installed ${expected}. Download the required models or select the native TRELLIS.2 weights; no geometry-only fallback is used.`, 'textured')
         }
       }
       if (stage === 'model' && !textured && (!/hunyuan.*(?:3d|dit)/i.test(checkpoint) || /(?:turbo|2[._-]?1|mv)/i.test(checkpoint) ||
@@ -384,6 +464,7 @@ export class Designer {
     } catch (error) {
       design.status = signal.aborted ? 'cancelled' : 'failed'
       design.message = signal.aborted ? 'Design generation cancelled. Previously completed stages are preserved.' : errorText(error)
+      design.recovery = !signal.aborted && error instanceof ModelRequirementError ? { package: error.packageId } : undefined
       if (design.promptId) {
         try { await cancelMotion(settings.comfyUrl, design.promptId) }
         catch (error) { design.message += ` Could not cancel prompt ${design.promptId}: ${errorText(error)}. Inspect ComfyUI before retrying.` }
@@ -395,6 +476,7 @@ export class Designer {
     }
   }
   async cancel() {
+    await this.cancelDownload()
     const active = this.active
     if (!active) return
     active.controller.abort()

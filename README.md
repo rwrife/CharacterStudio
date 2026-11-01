@@ -13,7 +13,7 @@ Local Windows ARM64 desktop app with **Designer** and **Animator** workspaces. D
 | [Staged character design](#designer-workflow) | Describe a character, scenario, and art style, or condition a concept with a local reference image. Review each scene, transparent T-pose, and GLB before continuing. |
 | [Textured models](#local-textured-models) | Select native TRELLIS.2 to generate geometry and embedded base-color/metallic/roughness textures together from the T-pose. Hunyuan remains the lower-memory geometry-only option. |
 | [External inputs](#start-from-external-inputs) | Skip ahead with an existing T-pose or embedded GLB instead of regenerating earlier stages. Scenes are always generated from a description or a reference photo plus description. Preserve originals and distinguish imported artifacts from generated results. |
-| [Local model profiles](#offline-models-and-memory-profiles) | Choose installed SD 1.5/SDXL scene weights, FLUX.2 klein image editing, BiRefNet, optional scene IP-Adapter, Hunyuan3D geometry or TRELLIS.2 textured generation, with GPU-memory readiness checks. Optional local Ollama naming is separate from motion generation. |
+| [Local model profiles](#offline-models-and-memory-profiles) | Choose installed weights or use **Download required models** on supported missing-model warnings. Approve the download, then Studio verifies and selects the files for local inference. GPU-memory checks still apply; optional IP-Adapter and Ollama naming need separate setup. |
 | [Guided humanoid rigging](#animator-workflow) | Import FBX assets or send Designer meshes to Animator. Inspect the character in 3D, adjust mirrored joint landmarks and orientation, and build a Blender-skinned body rig. |
 | [Natural-language animation](#animator-workflow) | Generate motion takes with duration, seed, denoising steps, and in-place controls. Branch from a completed take's actual endpoint; preview with playback, scrubbing, orbit, zoom, and wireframe. |
 | [Motion encoder choice](#experimental-lfm-setup-no-llama-approval) | Use the original local Llama/LLM2Vec encoder or explicitly select the experimental ungated LFM bridge. Readiness checks and GPU guidance surface setup requirements without silently switching models. |
@@ -102,7 +102,7 @@ Local packaging uses `npm run setup:blender` followed by `npm run package`; `npm
 
 Switch to **Designer** in the top bar. The existing character lab remains in **Animator**; switching tabs preserves in-progress briefs, rig edits, and motion settings. These are two workspaces in one desktop app, not two competing inference services. Designer and Animator share one job slot to avoid GPU contention.
 
-1. Open **Backend connections** and connect the existing local ComfyUI. In Designer, refresh **Local model profiles**, choose installed weights, and **Save model choices**. Designer does not require Kimodo's Llama encoder. The shared backend dialog still reports Animator-specific readiness separately.
+1. Open **Backend connections** and connect the existing local ComfyUI. In Designer, refresh **Local model profiles**, choose installed weights, and **Save model choices**. Supported missing-model warnings offer **Download required models** to install and select the required files after approval. Designer does not require Kimodo's Llama encoder. The shared backend dialog still reports Animator-specific readiness separately.
 2. Choose **Text description** to describe the character, or **Reference image** (local PNG/JPEG/WebP, up to 20 MB and 32 megapixels) to supply a photo and describe what to use from it in **What to use from this photo**. Either way, Designer generates a new scene; a reference photo is conditioning, not a finished scene. Supply **Art style** separately. For example: a Brazilian MMA fighter raised in the jungles of Brazil, rendered as a vibrant 90s game character with exaggerated upper-body muscles.
 3. Enter an optional title, or select an already-installed local Ollama instruction model for automatic naming. Ollama is restricted to `http://127.0.0.1:11434`, runs the naming model on CPU, and unloads it afterward. Cloud-backed models are rejected. Without a title or an available local naming model, generation stops with instructions rather than inventing a placeholder title.
 4. **Create character concept** generates a character-and-scene image using both descriptions. Image input is actual reference conditioning, not an ignored attachment. Select an installed **IP-Adapter Plus** and its matching **CLIP Vision** model to carry visual identity without copying scene pixels; otherwise the workflow uses basic img2img. **Reference influence** controls conditioning strength.
@@ -119,7 +119,7 @@ The native ComfyUI graph generates structure, shape and texture latents in seque
 
 **Save textured GLB** exports one self-contained file with UVs and embedded textures. **Send to Animator** preserves the original GLB and checks that generated texture maps survive Blender import. Missing weights, unsupported native nodes, absent textures, incomplete UVs, corrupt PNGs or wrong-sized generated atlases fail explicitly; they are not published as completed textured models. Review all sides: back surfaces are inferred from one image, and clothing details, fingers, texture seams and lighting baked into color maps may need manual repair.
 
-This profile uses the TRELLIS.2 branch of the [official native texture workflow](https://github.com/Comfy-Org/workflow_templates/blob/main/templates/3d_pixal3d_trellis2_image_to_model.json), without Pixal3D or cloud/API nodes. Install these approximately **8.5 GB** of weights separately:
+This profile uses the TRELLIS.2 branch of the [official native texture workflow](https://github.com/Comfy-Org/workflow_templates/blob/main/templates/3d_pixal3d_trellis2_image_to_model.json), without Pixal3D or cloud/API nodes. Install these approximately **8.5 GB** of weights manually or use **Download required models** when the stage reports missing weights:
 
 | Selector | Required file | ComfyUI folder |
 |---|---|---|
@@ -146,7 +146,21 @@ Each import creates a **new design**, preserves a byte-for-byte original, and re
 
 ### Offline models and memory profiles
 
-Models must already be installed before going offline. Studio neither downloads models nor installs custom nodes/packages while generating. Weight selectors come from the connected ComfyUI, not a fictitious installed-model list. Model licenses, GPU architecture, drivers, precision, and available system RAM still matter.
+Models must already be installed before going offline. Studio never downloads models or installs custom nodes/packages **during generation**. After a missing-model failure, **Download required models** starts a separate, explicitly approved setup operation. Weight selectors come from the connected ComfyUI, not a fictitious installed-model list. Model licenses, GPU architecture, drivers, precision, and available system RAM still matter.
+
+#### Download models from a warning
+
+![Actual Designer missing-BiRefNet warning with Download required models, Review model settings and Backend connections buttons](docs/screenshots/model-download-action.png)
+
+Actual desktop capture from a controlled missing-model setup fixture, not an inference result.
+
+Use **Download required models** on a supported warning. The confirmation lists the files, maximum transfer size, upstream model pages and license information, and destination under the saved **ComfyUI backend folder**. Review those terms before choosing **Download & select**. Studio downloads only public, pinned safetensors from the listed upstream sources; it does not upload your character assets, collect credentials, or change Python packages.
+
+The download panel shows byte progress and **Cancel download**. Files are checked against pinned sizes and SHA-256 hashes before publication. Existing verified files are reused; conflicting files are never overwritten. An interrupted or corrupt transfer is not treated as installed. Cancellation keeps previously verified files but leaves model selections unchanged. A later retry reuses those files; partial downloads are not resumed.
+
+On completion, Studio refreshes ComfyUI, selects and saves the required models automatically, and leaves generation stopped. Click the stage's original action to retry. Downloads share the local job slot with Designer and Animator. If files are not visible to ComfyUI, Studio reports that setup is incomplete and does not change selections: check **Backend connections** against the actual running backend folder, check its native nodes, and restart ComfyUI if necessary before retrying.
+
+Automatic packages cover BiRefNet, the FLUX.2 klein 4B edit components plus BiRefNet, DreamShaper 8 for SD 1.5, SDXL base 1.0, standard Hunyuan3D 2, and TRELLIS.2. Already-selected compatible weights are preserved. Hunyuan3D 2mini, other checkpoints, optional IP-Adapter, Ollama naming, native nodes and gated Animator models still require their documented setup. **Review model settings** and **Backend connections** remain available for those cases; Studio never silently switches profiles or accepts model access terms for you.
 
 | Stage | Supported profile | Estimated available GPU budget | Setup |
 |---|---|---|---|
@@ -175,7 +189,7 @@ Use the [official native Hunyuan3D setup](https://docs.comfy.org/tutorials/3d/hu
 
 The standard native checkpoint is [`hunyuan3d-dit-v2_fp16.safetensors`](https://huggingface.co/Comfy-Org/hunyuan3D_2.0_repackaged/tree/main/split_files), approximately 4.9 GB, placed in `ComfyUI\models\checkpoints`. Review its [Tencent Hunyuan Community License](https://huggingface.co/Comfy-Org/hunyuan3D_2.0_repackaged/blob/main/LICENSE) before use. Select **Hunyuan3D 2 (geometry)** and this checkpoint, then save model choices.
 
-Background removal uses [Comfy-Org's native BiRefNet weights](https://huggingface.co/Comfy-Org/BiRefNet), also listed in the official `utility_birefnet_remove_background` workflow. Download the approximately 424 MiB safetensors separately, select it after refreshing Designer models, and all subsequent cutout processing is local/offline. A missing segmentation model blocks T-pose completion, not scene generation.
+Background removal uses [Comfy-Org's native BiRefNet weights](https://huggingface.co/Comfy-Org/BiRefNet), also listed in the official `utility_birefnet_remove_background` workflow. Its missing-model warning can download the approximately 424 MiB safetensors into `models\background_removal`, verify it, refresh ComfyUI and select it automatically. Manual installation remains supported. Subsequent cutout processing is local/offline. A missing segmentation model blocks T-pose completion, not scene generation.
 
 Observed Designer runs have exercised DreamShaper 8 scene generation, FLUX.2 klein scene-image editing, BiRefNet isolation, and standard native Hunyuan3D 2 geometry with Blender/Animator handoff. A separate native TRELLIS.2 run started from that edited cutout and produced a textured GLB with embedded 1K material maps, which survived export and Blender/Animator import. The earlier SD/OpenPose T-pose path was replaced because it changed clothing and identity. These runs do not establish successful skinning or animation of the generated meshes, compatibility on other machines, or production quality. Automatic naming still requires a separately installed local Ollama model and has not been exercised with real naming weights.
 
@@ -320,6 +334,7 @@ node scripts\graph-smoke.mjs
 node scripts\graph-smoke.mjs --packaged
 node scripts\packaged-smoke.mjs
 node scripts\model-setup-smoke.mjs
+node scripts\model-download-smoke.mjs
 & "$env:LOCALAPPDATA\ComfyUI\venv\Scripts\python.exe" tests\test_preflight.py
 node --import tsx scripts\batch-integration.ts
 node --import tsx scripts\graph-integration.ts
@@ -328,6 +343,8 @@ node --import tsx scripts\check-local-backends.ts
 ```
 
 The FBX integration scripts expect the user-supplied copy at `artifacts\Bruiser_base.fbx`; no character asset is fetched from third parties. Blender's redistribution/license files remain bundled with its runtime.
+
+`model-download-smoke.mjs` runs against the built app with an isolated workspace and a controlled local model catalog. It exercises the real missing-BiRefNet warning and declined native confirmation, then fixture transfer progress, cancellation, failure and automatic selection. It downloads no weights and performs no inference. Backend tests separately exercise byte transfer, verification, file preservation and saved configuration.
 
 The Designer smoke command without flags checks layout, the existing local model list, and external image entry points using explicitly test-only image fixtures. `--generate` starts a temporary app-owned ComfyUI on a free loopback port, uses installed DreamShaper, FLUX.2 klein 4B/Qwen 3/FLUX.2 VAE, BiRefNet and standard native Hunyuan3D 2 weights, and runs the real scene-to-edited-cutout-to-mesh pipeline without restarting the user's service. It requires actual GLB generation and Blender/Animator handoff, checks external GLB import, and preserves real references, `character.glb` and screenshots in `artifacts\designer-smoke`. It does not treat fixtures as learned output or populate the user's workspace with test records. `--packaged` runs the same check against the portable Character Studio executable.
 

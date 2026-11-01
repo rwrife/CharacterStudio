@@ -51,6 +51,12 @@
 .design-actions .primary{flex:1}
 .design-status{font-size:11px;line-height:1.8;margin-top:16px;color:#a9bf97;white-space:pre-wrap;overflow-wrap:anywhere}
 .design-status.failure{color:#e3b697}
+.design-recovery>div,.design-download>div{flex:1;min-width:0}
+.design-recovery p,.design-download p{overflow-wrap:anywhere}
+.design-recovery-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.design-download progress{display:block;width:100%;margin:10px 0;accent-color:#afcf8c}
+.design-download span{font-size:11px;margin-right:12px}
+.design-download button{margin-top:10px}
 .design-limits{display:flex;align-items:flex-start;gap:10px;margin-top:22px;padding:15px;border-top:1px solid #34402d;color:#7e9470}
 .design-limits p{font-size:10px;line-height:1.8}
 .design-limits strong{font-weight:550;color:#b3c6a1}

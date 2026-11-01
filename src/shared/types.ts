@@ -146,6 +146,8 @@ export interface Snapshot {
 }
 export interface StudioApi {
   designerReadiness(): Promise<import('./designer').DesignerReadiness>
+  designerInstallModels(id: import('./designer-models').DesignerModelPackage): Promise<import('./designer').DesignerConfig | null>
+  designerCancelDownload(): Promise<void>
   designerSettings(config: import('./designer').DesignerConfig): Promise<void>
   designerReference(): Promise<import('./designer').DesignReference | null>
   designerCreate(request: import('./designer').DesignRequest): Promise<string>

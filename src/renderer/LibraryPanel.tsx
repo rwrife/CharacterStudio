@@ -41,7 +41,7 @@ export function LibraryPanel(props: Props) {
   const selected = plan.nodes.find(n => n.id === selectedId) ?? plan.nodes[0]
   const selectedEdge = plan.edges.find(e => e.id === edgeId)
   const running = props.snapshot.batches.find(b => b.status === 'running')
-  const locked = working || !!running || props.snapshot.jobs.some(j => !['complete', 'failed', 'cancelled'].includes(j.stage))
+  const locked = working || !!running || props.snapshot.jobs.some(j => !['complete', 'failed', 'cancelled'].includes(j.stage)) || props.snapshot.designer?.modelDownload?.status === 'running'
   const expansion = useMemo(() => {
     try { return { contexts: expandGraph(plan), error: '' } }
     catch (e) { return { contexts: [], error: message(e) } }

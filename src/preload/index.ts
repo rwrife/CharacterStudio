@@ -3,6 +3,8 @@ import type { StudioApi, Snapshot } from '../shared/types'
 
 const api: StudioApi = {
   designerReadiness: () => ipcRenderer.invoke('designer:readiness'),
+  designerInstallModels: id => ipcRenderer.invoke('designer:install-models', id),
+  designerCancelDownload: () => ipcRenderer.invoke('designer:cancel-download'),
   designerSettings: config => ipcRenderer.invoke('designer:settings', config),
   designerReference: () => ipcRenderer.invoke('designer:reference'),
   designerCreate: request => ipcRenderer.invoke('designer:create', request),
