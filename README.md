@@ -144,6 +144,9 @@ node --import tsx scripts\lfm-integration.ts
 node --import tsx scripts\lfm-integration.ts http://127.0.0.1:8190
 # Optional constrained branch experiment (currently observed to fail endpoint checks):
 node --import tsx scripts\lfm-integration.ts http://127.0.0.1:8190 --branch
+# Built Electron UI with real GPU detection, saved LFM selection, generation and skinned exports:
+npm run build
+node --import tsx scripts\lfm-desktop-smoke.mjs http://127.0.0.1:8190
 ```
 
 ## Visual animation graphs
