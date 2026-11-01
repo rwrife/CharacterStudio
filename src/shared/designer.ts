@@ -30,7 +30,7 @@ export interface DesignRequest {
 }
 export interface DesignReference { id: string; name: string; url: string }
 export interface DesignImportRequest {
-  stage: DesignStage
+  stage: Exclude<DesignStage, 'scene'>
   brief: DesignRequest
   isolated: boolean
 }

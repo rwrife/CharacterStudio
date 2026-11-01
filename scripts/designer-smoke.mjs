@@ -137,7 +137,7 @@ try {
     }
     if (inputPose) {
       await chooseFile(inputPose)
-      await page.getByLabel('Continue from an existing file').selectOption('tpose')
+      await page.locator('.design-stages').getByRole('button', { name: 'T-pose reference', exact: false }).click()
       await page.getByLabel('Already isolated transparent PNG').check()
       await page.getByRole('button', { name: 'Import T-pose', exact: true }).click()
     } else {
@@ -229,12 +229,10 @@ try {
   await page.getByLabel('Character & scenario').fill('')
   await page.getByLabel('Art style', { exact: true }).fill('')
   await page.getByLabel('Character title', { exact: false }).fill('')
-  await page.getByLabel('Continue from an existing file').selectOption('scene')
+  await page.locator('.design-stages').getByRole('button', { name: 'Character & scene', exact: false }).click()
+  await expect(page.locator('.design-entry')).toHaveCount(0)
+  await page.locator('.design-stages').getByRole('button', { name: 'T-pose reference', exact: false }).click()
   await chooseFile(importedImage)
-  await page.getByRole('button', { name: 'Import scene', exact: true }).click()
-  await expect(page.locator('.design-source')).toContainText('Imported:')
-  await expect(page.getByRole('button', { name: 'Use scene & generate T-pose' })).toBeEnabled()
-  await page.getByLabel('Continue from an existing file').selectOption('tpose')
   await page.getByLabel('Already isolated transparent PNG').check()
   await page.getByRole('button', { name: 'Import T-pose', exact: true }).click()
   await expect(page.getByRole('button', { name: 'Use T-pose & generate 3D' })).toBeEnabled()
@@ -245,7 +243,7 @@ try {
   assert.equal(imported.tposeIsolated, true)
   assert.equal(imported.sources.tpose.kind, 'imported')
   if (native) {
-    await page.getByLabel('Continue from an existing file').selectOption('model')
+    await page.locator('.design-stages').getByRole('button', { name: '3D model', exact: false }).click()
     await chooseFile(join(output, 'character.glb'))
     await page.getByRole('button', { name: 'Import GLB mesh', exact: true }).click()
     await expect(page.getByRole('button', { name: 'Send to Animator' })).toBeEnabled()
