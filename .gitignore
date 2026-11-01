@@ -7,6 +7,9 @@ artifacts/
 __pycache__/
 .env
 .env.*
+mcp-connection.json
+mcp-settings.json
+.mcp-*.tmp
 !.env.example
 .venv/
 venv/
