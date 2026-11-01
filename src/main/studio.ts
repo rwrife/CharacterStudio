@@ -12,6 +12,7 @@ import { api, cancelMotion, generateMotion } from './comfy'
 import { runProcess } from './process'
 import { validateCharacterGlb } from './export-validation'
 import { Designer } from './designer'
+import { bundledBlenderPath, comfyPythonPath, defaultComfyRoot } from './native-runtime'
 
 interface StoredCharacter extends Character { rigDirectory?: string }
 interface StoredState extends Omit<Snapshot, 'characters' | 'designer'> { characters: StoredCharacter[] }
@@ -31,12 +32,12 @@ export class Studio {
 
   constructor(readonly root: string, readonly appRoot: string, decodeImage: (file: string, cutout?: boolean) => Promise<Buffer> = async () => { throw new Error('Image decoding requires the desktop app.') }) {
     mkdirSync(root, { recursive: true })
-    const comfyRoot = join(process.env.LOCALAPPDATA ?? '', 'ComfyUI')
+    const comfyRoot = defaultComfyRoot()
     const statePath = join(root, 'studio.json')
     this.state = existsSync(statePath) ? JSON.parse(readFileSync(statePath, 'utf8')) as StoredState : {
       settings: {
         comfyUrl: 'http://127.0.0.1:8189', comfyRoot, comfyOutput: join(comfyRoot, 'output'),
-        blenderPath: join(appRoot, '.tools', `blender-4.5.15-windows-${process.arch === 'arm64' ? 'arm64' : 'x64'}`, 'blender.exe')
+        blenderPath: bundledBlenderPath(appRoot)
       },
       characters: [], jobs: [], plans: [], batches: []
     }
@@ -239,7 +240,7 @@ export class Studio {
       }
       signal.throwIfAborted()
       const dir = join(this.root, 'jobs', job.id)
-      const python = join(settings.comfyRoot, 'venv', 'Scripts', 'python.exe')
+      const python = comfyPythonPath(settings.comfyRoot)
       const kimodo = join(settings.comfyRoot, 'custom_nodes', 'ComfyUI-Kimodo', 'kimodo')
       const processOptions = { signal, log: join(dir, 'backend.log') }
       const motionTool = (command: string, args: string[]) => runProcess(python, [join(this.appRoot, 'backend', 'branch_motion.py'), command, '--kimodo', kimodo, ...args], processOptions)
@@ -491,8 +492,8 @@ export class Studio {
     const [blender, python, comfy] = await Promise.all([
       runProcess(settings.blenderPath, ['--background', '--factory-startup', '--version'], { signal, timeout: 30_000 })
         .then<Check>(out => ({ name: 'Blender rigging backend', status: 'ready', detail: out.split(/\r?\n/).find(s => s.startsWith('Blender')) ?? 'Blender is available' }))
-        .catch((e): Check => ({ name: 'Blender rigging backend', status: 'blocked', detail: `Native Blender cannot start. Run npm run setup:blender or choose blender.exe in Settings. ${errorText(e)}` })),
-      runProcess(join(settings.comfyRoot, 'venv', 'Scripts', 'python.exe'), [join(this.appRoot, 'backend', 'preflight.py'), '--encoder', settings.textEncoder ?? 'llm2vec'], { signal, timeout: 90_000 })
+        .catch((e): Check => ({ name: 'Blender rigging backend', status: 'blocked', detail: `Native Blender cannot start. Run npm run setup:blender or choose the native Blender executable in Settings. ${errorText(e)}` })),
+      runProcess(comfyPythonPath(settings.comfyRoot), [join(this.appRoot, 'backend', 'preflight.py'), '--encoder', settings.textEncoder ?? 'llm2vec'], { signal, timeout: 90_000 })
         .then<Check[]>(out => {
           const line = out.split(/\r?\n/).find(s => s.startsWith('STUDIO_CHECKS:'))
           if (!line) throw new Error('Environment probe returned no checks.')
@@ -524,7 +525,7 @@ export class Studio {
     this.startingComfy = true
     const log = createWriteStream(join(this.root, 'comfy-server.log'), { flags: 'a' })
     try {
-      const child = spawn(join(settings.comfyRoot, 'venv', 'Scripts', 'python.exe'), [
+      const child = spawn(comfyPythonPath(settings.comfyRoot), [
         '-u', join(settings.comfyRoot, 'main.py'), '--listen', '127.0.0.1',
         '--port', new URL(settings.comfyUrl).port || '80', '--disable-auto-launch'
       ], {

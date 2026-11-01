@@ -1,6 +1,6 @@
 import { test, type TestContext } from 'node:test'
 import assert from 'node:assert/strict'
-import { copyFile, mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises'
+import { copyFile, mkdtemp, mkdir, writeFile, readFile, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createServer } from 'node:http'
@@ -109,7 +109,7 @@ test('output paths reject traversal, external files, wrong type and wrong extens
   await writeFile(join(root, 'output', 'image.png'), 'fixture')
   await writeFile(join(root, 'private.png'), 'fixture')
   const item = { filename: 'image.png', subfolder: '', type: 'output' }
-  assert.equal(await designOutputPath(join(root, 'output'), item, '.png'), join(root, 'output', 'image.png'))
+  assert.equal(await designOutputPath(join(root, 'output'), item, '.png'), await realpath(join(root, 'output', 'image.png')))
   await assert.rejects(designOutputPath(join(root, 'output'), { ...item, filename: 'private.png', subfolder: '..' }, '.png'), /outside/)
   await assert.rejects(designOutputPath(join(root, 'output'), { ...item, filename: '..\\private.png' }, '.png'))
   await assert.rejects(designOutputPath(join(root, 'output'), { ...item, type: 'input' }, '.png'))
