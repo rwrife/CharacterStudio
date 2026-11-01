@@ -7,7 +7,7 @@ const output = resolve('artifacts', 'desktop-smoke')
 await mkdir(output, { recursive: true })
 const packaged = process.argv.includes('--packaged')
 const app = await electron.launch({
-  ...(packaged ? { executablePath: resolve('release', 'KimodoStudio-win32-arm64', 'KimodoStudio.exe'), args: [] } : { args: ['.'] }),
+  ...(packaged ? { executablePath: resolve('release', 'CharacterStudio-win32-arm64', 'CharacterStudio.exe'), args: [] } : { args: ['.'] }),
   env: { ...process.env, STUDIO_DATA_DIR: resolve('artifacts', 'validation-state') }, timeout: 60000
 })
 try {

@@ -124,12 +124,16 @@ test('cancellation during preflight starts no graph jobs', async t => {
   writeFileSync(join(root, 'studio.json'), JSON.stringify({ ...initial.snapshot(), characters: [target] }))
   const studio = new Studio(root, resolve('.'))
   studio.savePlan(graph)
+  studio.saveSettings({ ...studio.snapshot().settings, textEncoder: 'lfm' })
   studio.check = async signal => new Promise(resolve => signal!.addEventListener('abort', () => resolve([]), { once: true }))
   const pending = assert.rejects(studio.runBatch({ planId: graph.id, characterIds: [target.id], seedStride: 0, autoRig: false }), /Batch cancelled/)
   await studio.cancel(); await pending
   assert.equal(studio.snapshot().batches[0].status, 'cancelled')
   assert.ok(studio.snapshot().batches[0].items.every(i => i.status === 'cancelled'))
   assert.equal(studio.snapshot().jobs.length, 0)
+  assert.equal(studio.snapshot().batches[0].textEncoder, 'lfm')
+  studio.saveSettings({ ...studio.snapshot().settings, textEncoder: 'llm2vec' })
+  await assert.rejects(studio.rerunBatch(studio.snapshot().batches[0].id), /original LFM bridge/)
   await studio.dispose()
 })
 test('a failed context blocks only its descendants; replay uses the immutable graph', async t => {

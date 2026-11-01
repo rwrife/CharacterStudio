@@ -1,8 +1,9 @@
 {
-  "name": "kimodo-studio",
+  "name": "character-studio",
+  "productName": "Character Studio",
   "version": "0.1.0",
   "private": true,
-  "description": "Local FBX rigging and Kimodo character animation studio",
+  "description": "Local AI character design, humanoid rigging and animation studio",
   "main": "out/main/index.js",
   "type": "module",
   "scripts": {
@@ -13,7 +14,7 @@
     "test": "node --import tsx --test tests/*.test.ts",
     "test:desktop": "node scripts/desktop-smoke.mjs",
     "setup:blender": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\setup-blender.ps1",
-    "package": "npm run build && electron-packager . KimodoStudio --platform=win32 --arch=arm64 --out=release --overwrite --no-asar --ignore=\"^/(src|tests|release|artifacts|scripts|node_modules/.cache)(/|$)\" --ignore=\"\\.zip$\""
+    "package": "npm run build && electron-packager . CharacterStudio --win32metadata.ProductName=\"Character Studio\" --platform=win32 --arch=arm64 --out=release --overwrite --no-asar --ignore=\"^/(src|tests|release|artifacts|scripts|node_modules/.cache)(/|$)\" --ignore=\"\\.zip$\""
   },
   "dependencies": {
     "@xyflow/react": "12.12.0",

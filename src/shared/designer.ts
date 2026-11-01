@@ -8,6 +8,9 @@ export interface DesignerConfig {
   meshProfile: MeshProfile
   meshCheckpoint: string
   titleModel: string
+  ipadapter?: string
+  clipVision?: string
+  backgroundModel?: string
 }
 export interface DesignRequest {
   title: string
@@ -31,6 +34,7 @@ export interface Design {
   promptId?: string
   sceneUrl?: string
   tposeUrl?: string
+  tposeIsolated?: boolean
   modelUrl?: string
   characterId?: string
 }
@@ -45,6 +49,9 @@ export interface DesignerReadiness {
   controlnets: string[]
   titleModels: string[]
   titleError?: string
+  ipadapters: string[]
+  clipVision: string[]
+  backgroundModels: string[]
 }
 // Conservative working budgets, not guaranteed minima. Runtime availability is checked per stage.
 export const imageProfiles = {

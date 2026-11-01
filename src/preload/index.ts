@@ -2,6 +2,14 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { StudioApi, Snapshot } from '../shared/types'
 
 const api: StudioApi = {
+  designerReadiness: () => ipcRenderer.invoke('designer:readiness'),
+  designerSettings: config => ipcRenderer.invoke('designer:settings', config),
+  designerReference: () => ipcRenderer.invoke('designer:reference'),
+  designerCreate: request => ipcRenderer.invoke('designer:create', request),
+  designerRun: (id, stage) => ipcRenderer.invoke('designer:run', id, stage),
+  designerCancel: () => ipcRenderer.invoke('designer:cancel'),
+  designerExport: (id, stage) => ipcRenderer.invoke('designer:export', id, stage),
+  designerAnimate: id => ipcRenderer.invoke('designer:animate', id),
   snapshot: () => ipcRenderer.invoke('studio:snapshot'),
   settings: settings => ipcRenderer.invoke('studio:settings', settings),
   browse: kind => ipcRenderer.invoke('studio:browse', kind),

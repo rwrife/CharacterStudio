@@ -9,6 +9,7 @@ export interface Settings {
   comfyRoot: string
   comfyOutput: string
   blenderPath: string
+  textEncoder?: 'llm2vec' | 'lfm'
 }
 export interface Character {
   id: string
@@ -49,11 +50,13 @@ export interface Job {
   graphContext?: GraphContext
   clipPreviewUrl?: string
   transitionPreviewUrl?: string
+  textEncoder?: 'llm2vec' | 'lfm'
 }
 export interface Check {
   name: string
   status: 'ready' | 'blocked' | 'warning'
   detail: string
+  gpu?: { name: string; totalGB: number; freeGB: number }
 }
 export interface GenerateRequest {
   characterId: string
@@ -131,6 +134,7 @@ export interface Batch {
   plan: MotionPlan
   request: BatchRequest
   items: BatchItem[]
+  textEncoder?: 'llm2vec' | 'lfm'
 }
 export interface Snapshot {
   settings: Settings

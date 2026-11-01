@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, net, protocol, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, net, protocol, shell } from 'electron'
 import { copyFile, readFile, writeFile, stat } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { join, extname } from 'node:path'
@@ -6,12 +6,15 @@ import { pathToFileURL } from 'node:url'
 import { Studio } from './studio'
 import { errorText } from './validation'
 import type { GenerateRequest, RigSetup, Settings, MotionPlan, BatchRequest } from '../shared/types'
+import type { DesignRequest, DesignerConfig, DesignStage } from '../shared/designer'
+import { validateCutout } from './image-validation'
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'studio', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }])
 let window: BrowserWindow
 let studio: Studio
 let quitting = false
-app.setName('KimodoStudio')
+app.setName('Character Studio')
+// Keep the established data directory so the product rename does not hide existing work.
 app.setPath('userData', process.env.STUDIO_DATA_DIR ?? join(app.getPath('appData'), 'KimodoStudio'))
 const ownsWorkspace = app.requestSingleInstanceLock()
 if (!ownsWorkspace) app.quit()
@@ -23,7 +26,14 @@ app.on('second-instance', () => {
 })
 
 if (ownsWorkspace) app.whenReady().then(async () => {
-  studio = new Studio(app.getPath('userData'), app.getAppPath())
+  studio = new Studio(app.getPath('userData'), app.getAppPath(), async (file, cutout) => {
+    if ((await stat(file)).size > 20 * 1024 * 1024) throw new Error('Reference image exceeds 20 MB.')
+    const image = nativeImage.createFromBuffer(await readFile(file))
+    const { width, height } = image.getSize()
+    if (image.isEmpty() || !width || !height || width * height > 32_000_000) throw new Error('Reference image is invalid or exceeds 32 megapixels.')
+    if (cutout) validateCutout(image.toBitmap(), width, height)
+    return image.toPNG()
+  })
   protocol.handle('studio', async request => {
     const url = new URL(request.url)
     const file = url.hostname === 'asset' && !url.search ? studio.assets.get(url.pathname.slice(1)) : undefined
@@ -31,7 +41,7 @@ if (ownsWorkspace) app.whenReady().then(async () => {
     return net.fetch(pathToFileURL(file).toString())
   })
   window = new BrowserWindow({
-    title: 'KimodoStudio', width: 1440, height: 960, minWidth: 1100, minHeight: 760,
+    title: 'Character Studio', width: 1440, height: 960, minWidth: 1100, minHeight: 760,
     backgroundColor: '#111313', autoHideMenuBar: true,
     webPreferences: { preload: join(import.meta.dirname, '../preload/index.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true }
   })
@@ -52,6 +62,24 @@ if (ownsWorkspace) app.whenReady().then(async () => {
   }
   studio.onUpdate = snapshot => { if (!window.isDestroyed()) window.webContents.send('studio:update', snapshot) }
   handle('studio:snapshot', () => studio.snapshot())
+  handle('designer:readiness', () => studio.designer.readiness())
+  handle('designer:settings', (config: DesignerConfig) => studio.designer.saveSettings(config))
+  handle('designer:create', (request: DesignRequest) => studio.designer.create(request))
+  handle('designer:run', (id: string, stage: DesignStage) => studio.designer.run(id, stage))
+  handle('designer:cancel', () => studio.designer.cancel())
+  handle('designer:animate', (id: string) => studio.importDesign(id))
+  handle('designer:reference', async () => {
+    const result = await dialog.showOpenDialog(window, { title: 'Choose a local character reference', properties: ['openFile'], filters: [{ name: 'Character image', extensions: ['png', 'jpg', 'jpeg', 'webp'] }] })
+    return result.canceled ? null : studio.designer.addReference(result.filePaths[0])
+  })
+  handle('designer:export', async (id: string, stage: DesignStage) => {
+    const source = studio.designer.output(id, stage)
+    const extension = stage === 'model' ? 'glb' : 'png'
+    const choice = await dialog.showSaveDialog(window, { defaultPath: `${studio.designer.title(id).replace(/[^a-zA-Z0-9 _-]/g, '_')}-${stage}.${extension}`, filters: [{ name: 'Design output', extensions: [extension] }] })
+    if (choice.canceled || !choice.filePath) return null
+    await copyFile(source, choice.filePath)
+    return choice.filePath
+  })
   handle('studio:settings', (settings: Settings) => studio.saveSettings(settings))
   handle('studio:browse', async (kind: string) => {
     if (!['blender', 'comfy', 'output'].includes(kind)) throw new Error('Invalid path selector')
@@ -114,7 +142,7 @@ if (ownsWorkspace) app.whenReady().then(async () => {
   })
   if (allowedRenderer) await window.loadURL(allowedRenderer)
   else await window.loadFile(join(import.meta.dirname, '../renderer/index.html'))
-}).catch(error => { dialog.showErrorBox('KimodoStudio could not start', errorText(error)); app.exit(1) })
+}).catch(error => { dialog.showErrorBox('Character Studio could not start', errorText(error)); app.exit(1) })
 
 app.on('before-quit', event => {
   if (!quitting && studio) {

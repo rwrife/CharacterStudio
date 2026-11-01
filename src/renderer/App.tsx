@@ -4,13 +4,17 @@ import type { Character, Check, Job, RigSetup, Settings, Snapshot, Vec3 } from '
 import { Viewport } from './Viewport'
 import { LibraryPanel } from './LibraryPanel'
 import { ModelSetupGuide } from './ModelSetupGuide'
+import { DesignerPanel } from './DesignerPanel'
 import { defaultLandmarks } from '../shared/rig'
+import { recommendTextEncoder } from '../shared/text-encoder'
 
 const done = new Set(['complete', 'failed', 'cancelled'])
 const explain = (e: unknown) => (e instanceof Error ? e.message : String(e)).replace(/^Error invoking remote method '[^']+': Error: /, '')
+const humanOutline = 'M59.9 40.15A19.8 19.8 0 1 0 40.1 40.15Q41.2 44.5 34.5 46.5Q31.2 47.5 29.5 50.5L3.5 93.5A6.8 6.8 0 0 0 15.2 100.5L28.5 78.5L28.5 155.5A8.75 8.75 0 0 0 46 155.5L46 122A4 4 0 0 1 54 122L54 155.5A8.75 8.75 0 0 0 71.5 155.5L71.5 78.5L84.8 100.5A6.8 6.8 0 0 0 96.5 93.5L70.5 50.5Q68.8 47.5 65.5 46.5Q58.8 44.5 59.9 40.15Z'
 
 export function App() {
   const [snapshot, setSnapshot] = useState<Snapshot>()
+  const [workspace, setWorkspace] = useState<'designer' | 'animator'>('animator')
   const [characterId, setCharacterId] = useState('')
   const [setup, setSetup] = useState<RigSetup>({ rotation: [0, 0, 0], landmarks: defaultLandmarks() })
   const [dirty, setDirty] = useState(false)
@@ -42,8 +46,10 @@ export function App() {
   const output = completed.find(j => j.id === jobId)
   const active = snapshot?.jobs.find(j => !done.has(j.stage))
   const activeBatch = snapshot?.batches.find(b => b.status === 'running')
-  const locked = busy || !!active || !!activeBatch
+  const locked = busy || !!active || !!activeBatch || !!snapshot?.designer?.designs.some(d => d.status === 'running')
   const blocked = checks.filter(c => c.status === 'blocked')
+  const gpu = checks.find(check => check.gpu)?.gpu
+  const encoderAdvice = recommendTextEncoder(gpu)
   const animationUrl = animationPart === 'clip' ? output?.clipPreviewUrl : animationPart === 'transition' ? output?.transitionPreviewUrl : output?.previewUrl
   const url = mode === 'animation' ? animationUrl : mode === 'rig' ? character?.rigPreviewUrl : character?.previewUrl
 
@@ -53,7 +59,7 @@ export function App() {
     try { setChecks(await window.studio.check()) } catch (e) { setError(explain(e)) } finally { setChecking(false) }
   }
   useEffect(() => {
-    if (!window.studio) { setError('The native desktop bridge is unavailable. Start KimodoStudio.exe or run npm run dev.'); return }
+    if (!window.studio) { setError('The native desktop bridge is unavailable. Start CharacterStudio.exe or run npm run dev.'); return }
     window.studio.snapshot().then(s => {
       setSnapshot(s); setSettings(s.settings)
       if (s.characters.length) selectCharacter(s.characters[0])
@@ -116,11 +122,22 @@ export function App() {
   ]
   return <div className="app">
     <header className="topbar">
-      <div className="brand"><span className="brand-mark"><Layers3 size={22} /></span><strong>kimodo<span>studio</span></strong><span className="version">LOCAL / 01</span></div>
-      <div className="workspace-label">CHARACTER MOTION WORKSPACE</div>
+      <div className="brand"><span className="brand-mark"><svg viewBox="-44 -30 152 200" width="26" height="28" fill="none" stroke="currentColor" strokeWidth="8.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={humanOutline} transform="translate(-34 -22)" fill="var(--lime)" strokeOpacity={0.46} /><path d={humanOutline} transform="translate(-17 -11)" fill="var(--lime)" strokeOpacity={0.74} /><path d={humanOutline} fill="var(--lime)" /></svg></span><div className="brand-name"><strong>character<span>studio</span></strong><span className="version" title="Model downloads from Hugging Face; character inference runs locally through ComfyUI.">powered by HuggingFace</span></div></div>
+      <nav className="workspace-tabs" role="tablist" aria-label="Character workspace" onKeyDown={event => {
+        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+        event.preventDefault()
+        const next = event.key === 'Home' ? 'designer' : event.key === 'End' ? 'animator' : workspace === 'designer' ? 'animator' : 'designer'
+        setWorkspace(next)
+        document.getElementById(`${next}-tab`)?.focus()
+      }}>
+        <button id="designer-tab" role="tab" tabIndex={workspace === 'designer' ? 0 : -1} aria-selected={workspace === 'designer'} aria-controls="designer-panel" className={workspace === 'designer' ? 'active' : ''} onClick={() => setWorkspace('designer')}>Designer</button>
+        <span className="module-divider" aria-hidden="true">|</span>
+        <button id="animator-tab" role="tab" tabIndex={workspace === 'animator' ? 0 : -1} aria-selected={workspace === 'animator'} aria-controls="animator-panel" className={workspace === 'animator' ? 'active' : ''} onClick={() => setWorkspace('animator')}>Animator</button>
+      </nav>
       <button aria-label="Backend connections" className={`connection ${blocked.length ? 'warning' : ''}`} onClick={() => setSettingsOpen(true)}><span className="tiny-dot" />{checking ? 'Checking backends' : blocked.length ? 'Setup needs attention' : checks.length ? 'Local backends ready' : 'Backend settings'}<Settings2 size={14} /></button>
     </header>
-    <div className="studio-layout">
+    {snapshot && <DesignerPanel snapshot={snapshot} visible={workspace === 'designer'} animatorBusy={busy || !!active || !!activeBatch} onSettings={() => setSettingsOpen(true)} onAnimate={c => { selectCharacter(c); setFit(true); setWorkspace('animator') }} />}
+    <div id="animator-panel" role="tabpanel" aria-labelledby="animator-tab" hidden={workspace !== 'animator'} className="studio-layout">
       <aside className="left-panel">
         <div className="section-kicker">YOUR WORKSPACE</div><h1>Character lab</h1>
         <p className="intro">From static mesh to something<br />with a little more life.</p>
@@ -195,7 +212,7 @@ export function App() {
           <p className="fine-print">Periods create separate motion segments. Playback loops the clip; seamless looping is not guaranteed.</p>
           {!character?.rigged || dirty ? <button className="primary full" disabled={!character || locked} onClick={() => { setFit(true); setMode('input') }}><SlidersHorizontal size={17} /> Fit character first<ArrowRight size={17} /></button> : <button className="primary full" disabled={locked || prompt.trim().length < 3} onClick={generate}><WandSparkles size={17} /> Generate animation<ArrowRight size={17} /></button>}
           {character?.rigged && !dirty && <button className="text-button full" disabled={locked} onClick={() => { setFit(true); setMode('input') }}><Bone size={14} /> Adjust rig fit</button>}
-          {!!blocked.length && <button className="setup-warning" onClick={() => setSettingsOpen(true)}><CircleAlert size={16} /><span>{blocked.some(c => c.name.includes('Llama')) ? 'Set up the local text encoder' : `${blocked.length} backend check${blocked.length > 1 ? 's' : ''} need attention`}<small>Review setup before generation <ArrowRight size={11} /></small></span></button>}
+          {!!blocked.length && <button className="setup-warning" onClick={() => setSettingsOpen(true)}><CircleAlert size={16} /><span>{blocked.some(c => c.name.includes('text encoder')) ? 'Set up the local text encoder' : `${blocked.length} backend check${blocked.length > 1 ? 's' : ''} need attention`}<small>Review setup before generation <ArrowRight size={11} /></small></span></button>}
         </>}
         {!!character?.warnings.length && <details className="warnings"><summary>Import notes <ChevronDown size={13} /></summary>{character.warnings.map(w => <p key={w}>{w}</p>)}</details>}
         <div className="output-section">
@@ -206,7 +223,7 @@ export function App() {
         </div>
       </aside>
     </div>
-    <footer><span><ShieldCheck size={12} /> LOCAL PIPELINE</span><span>FBX import <ArrowRight size={10} /> Blender rig + skin <ArrowRight size={10} /> ComfyUI / Kimodo <ArrowRight size={10} /> Character export</span><span>ARM64 READY</span></footer>
+    <footer><span><ShieldCheck size={12} /> LOCAL PIPELINE</span><span>{workspace === 'designer' ? <>Character & scene <ArrowRight size={10} /> T-pose reference <ArrowRight size={10} /> 3D geometry <ArrowRight size={10} /> Animator</> : <>FBX import <ArrowRight size={10} /> Blender rig + skin <ArrowRight size={10} /> ComfyUI / Kimodo <ArrowRight size={10} /> Character export</>}</span><span>ARM64 READY</span></footer>
     {libraryOpen && snapshot && <LibraryPanel snapshot={snapshot} setup={setup} current={{ prompt, seconds, seed, steps, inPlace }} characterId={characterId} startNew={libraryNew} onClose={() => setLibraryOpen(false)} onApply={(node, savedFit) => {
       setPrompt(node.prompt); setSeconds(node.seconds); setSeed(node.seed); setSteps(node.steps); setInPlace(node.inPlace); setParentJobId('')
       if (savedFit && character) { setSetup({ ...structuredClone(savedFit), rotation: setup.rotation }); setDirty(true); setFit(true); setMode('input') }
@@ -216,7 +233,19 @@ export function App() {
     {settingsOpen && settings && <div className="modal-backdrop"><section className="settings-modal" role="dialog" aria-modal="true" aria-label="Local backend settings">
       <div className="modal-heading"><div><span className="section-kicker">LOCAL INFRASTRUCTURE</span><h2>Backend connections</h2></div><button aria-label="Close settings" onClick={() => setSettingsOpen(false)}><X size={20} /></button></div>
       <p className="panel-description">Blender runs independently on CPU. The existing ComfyUI GPU environment is reused, never reinstalled or downgraded.</p>
-      <ModelSetupGuide comfyRoot={snapshot?.settings.comfyRoot ?? settings.comfyRoot} needsSetup={blocked.some(c => c.name.includes('Llama'))} checking={checking}
+      <label className="field-label" htmlFor="text-encoder">Kimodo text encoder</label>
+      <select id="text-encoder" aria-describedby="encoder-memory-guidance" disabled={locked || starting} value={settings.textEncoder ?? 'llm2vec'} onChange={e => setSettings({ ...settings, textEncoder: e.target.value === 'lfm' ? 'lfm' : 'llm2vec' })}>
+        <option value="llm2vec">Llama + LLM2Vec (original, ~16 GB weights){encoderAdvice.encoder === 'llm2vec' ? ' - Recommended for available memory' : ''}</option>
+        <option value="lfm">LFM bridge (experimental, ~0.7 GB weights, no approval){encoderAdvice.encoder === 'lfm' ? ' - Recommended for available memory' : ''}</option>
+      </select>
+      <div id="encoder-memory-guidance" className="fine-print" aria-live="polite">
+        {gpu && <p aria-label="Detected GPU memory"><strong>{gpu.name}</strong>: {gpu.freeGB.toFixed(1)} GiB free / {gpu.totalGB.toFixed(1)} GiB total GPU memory.</p>}
+        <p>{encoderAdvice.detail}</p>
+        <p>The 24 GiB recommendation is a conservative estimate, not a tested minimum or a guarantee of fit.
+          Weight sizes are downloads, not peak usage; LFM runs in float32. Kimodo, motion duration, other models and existing allocations also use memory.
+          Shared/unified GPU memory may differ from dedicated VRAM. Your saved selection is never changed automatically.</p>
+      </div>
+      <ModelSetupGuide comfyRoot={snapshot?.settings.comfyRoot ?? settings.comfyRoot} textEncoder={settings.textEncoder ?? 'llm2vec'} needsSetup={blocked.some(c => c.name.includes('text encoder') || (settings.textEncoder === 'lfm' && c.detail.includes('Studio_Kimodo_LoadLFM')))} checking={checking}
         onAccessPage={() => void perform(() => window.studio.openAccessPage())}
         onTokenSettings={() => void perform(() => window.studio.openTokenSettings())}
         onRefresh={() => void refreshChecks()} />
@@ -227,7 +256,7 @@ export function App() {
       <div className="section-heading"><span className="section-kicker">READINESS CHECKS</span><button className="text-button" disabled={checking} onClick={refreshChecks}><RefreshCw size={13} className={checking ? 'spin' : ''} /> Refresh</button></div>
       <div className="checks">{checks.map(check => <div className={`check ${check.status}`} key={check.name}>{check.status === 'ready' ? <CheckIcon size={16} /> : <CircleAlert size={16} />}<div><strong>{check.name}</strong><p>{check.detail}</p></div></div>)}</div>
       {error && <p className="modal-error" role="alert">{error}</p>}
-      <p className="fine-print">Llama runs locally inside ComfyUI, not in the cloud. Studio starts it with TEXT_ENCODER_MODE=local; use the same setting for an externally started ComfyUI. Hugging Face is only the model download source. Kimodo needs its trained LLM2Vec encoder, not a generic vLLM/chat endpoint. Closing Studio stops only the ComfyUI process it started.</p>
+      <p className="fine-print">Both encoders run locally inside ComfyUI. LFM uses an explicit experimental Kimodo loader; it never falls back to Llama or remote inference. The original Llama loader uses TEXT_ENCODER_MODE=local when Studio starts ComfyUI; use that setting for an externally started backend. Hugging Face supplies downloads only. Closing Studio stops only the ComfyUI process it started.</p>
     </section></div>}
   </div>
 }

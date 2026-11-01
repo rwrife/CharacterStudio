@@ -5,10 +5,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 import httpx
-from huggingface_hub.errors import GatedRepoError, HfHubHTTPError
+from huggingface_hub.errors import GatedRepoError, HfHubHTTPError, LocalEntryNotFoundError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
-from preflight import check_text_encoder
+from preflight import check_text_encoder, check_lfm_encoder, check_gpu
 
 
 class ModelAccessTests(unittest.TestCase):
@@ -59,6 +59,47 @@ class ModelAccessTests(unittest.TestCase):
     def test_network_failure_is_not_an_authorization_failure(self):
         self.metadata.side_effect = httpx.ConnectError("sensitive-exception-detail")
         self.check_blocked("not evidence that model access was denied")
+
+
+class LFMAccessTests(unittest.TestCase):
+    def test_cached_lfm_does_not_check_llama_or_credentials(self):
+        with patch("studio_kimodo_lfm.assets.resolve_assets"), patch("huggingface_hub.get_token") as token:
+            check = check_lfm_encoder()
+        self.assertEqual(check["status"], "warning")
+        self.assertIn("Experimental", check["detail"])
+        token.assert_not_called()
+
+    def test_missing_assets_require_setup_not_model_approval(self):
+        for error in (FileNotFoundError(), LocalEntryNotFoundError("offline")):
+            with self.subTest(error=type(error).__name__), patch("studio_kimodo_lfm.assets.resolve_assets", side_effect=error):
+                check = check_lfm_encoder()
+            self.assertEqual(check["status"], "blocked")
+            self.assertIn("setup-lfm.ps1", check["detail"])
+            self.assertIn("No Llama approval", check["detail"])
+
+
+class GPUMemoryTests(unittest.TestCase):
+    def test_reports_free_and_total_memory_in_gib(self):
+        with patch("torch.cuda.is_available", return_value=True), patch("torch.cuda.current_device", return_value=0), \
+                patch("torch.cuda.get_device_name", return_value="Test GPU"), \
+                patch("torch.cuda.mem_get_info", return_value=(8 * 1024 ** 3, 24 * 1024 ** 3)):
+            result = check_gpu()
+        self.assertEqual(result["gpu"], {"name": "Test GPU", "freeGB": 8, "totalGB": 24})
+
+    def test_cpu_has_no_invented_memory(self):
+        with patch("torch.cuda.is_available", return_value=False):
+            result = check_gpu()
+        self.assertEqual(result["status"], "warning")
+        self.assertNotIn("gpu", result)
+
+    def test_driver_query_failure_is_explicit(self):
+        with patch("torch.cuda.is_available", return_value=True), patch("torch.cuda.current_device", return_value=0), \
+                patch("torch.cuda.get_device_name", return_value="Test GPU"), \
+                patch("torch.cuda.mem_get_info", side_effect=RuntimeError("test driver failure")):
+            result = check_gpu()
+        self.assertEqual(result["status"], "warning")
+        self.assertIn("memory detection failed", result["detail"])
+        self.assertNotIn("gpu", result)
 
 
 if __name__ == "__main__":

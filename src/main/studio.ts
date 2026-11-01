@@ -11,9 +11,10 @@ import { errorText, generateSchema, settingsSchema, setupSchema, planSchema, bat
 import { api, cancelMotion, generateMotion } from './comfy'
 import { runProcess } from './process'
 import { validateCharacterGlb } from './export-validation'
+import { Designer } from './designer'
 
 interface StoredCharacter extends Character { rigDirectory?: string }
-interface StoredState extends Omit<Snapshot, 'characters'> { characters: StoredCharacter[] }
+interface StoredState extends Omit<Snapshot, 'characters' | 'designer'> { characters: StoredCharacter[] }
 const terminal = new Set(['complete', 'failed', 'cancelled'])
 
 export class Studio {
@@ -23,10 +24,12 @@ export class Studio {
   private startingComfy = false
   private batchController?: AbortController
   private lifetime = new AbortController()
+  private designerBusy = false
+  readonly designer: Designer
   readonly assets = new Map<string, string>()
   onUpdate: (snapshot: Snapshot) => void = () => {}
 
-  constructor(readonly root: string, readonly appRoot: string) {
+  constructor(readonly root: string, readonly appRoot: string, decodeImage: (file: string, cutout?: boolean) => Promise<Buffer> = async () => { throw new Error('Image decoding requires the desktop app.') }) {
     mkdirSync(root, { recursive: true })
     const comfyRoot = join(process.env.LOCALAPPDATA ?? '', 'ComfyUI')
     const statePath = join(root, 'studio.json')
@@ -40,7 +43,7 @@ export class Studio {
     this.state.plans ??= []
     this.state.plans = this.state.plans.map(plan => planSchema.parse(plan))
     this.state.batches ??= []
-    settingsSchema.parse(this.state.settings)
+    this.state.settings = settingsSchema.parse(this.state.settings)
     for (const job of this.state.jobs) if (!terminal.has(job.stage)) {
       job.stage = 'failed'
       job.message = 'App closed before this job finished. Partial files are not a completed result.' +
@@ -52,6 +55,12 @@ export class Studio {
         item.status = 'blocked'; item.message = 'App closed before this item completed. Run this saved batch again to retry.'
       }
     }
+    this.designer = new Designer(root, appRoot, this.assets, () => this.state.settings, () => {
+      if (this.designerBusy || this.active || this.batchController || this.startingComfy)
+        throw new Error('Designer and Animator share one local job slot. Wait for the current operation or cancel it.')
+      this.designerBusy = true
+      return () => { this.designerBusy = false }
+    }, () => this.onUpdate(this.snapshot()), decodeImage)
     this.refreshAssets()
     this.persist()
   }
@@ -75,7 +84,7 @@ export class Studio {
 
   snapshot(): Snapshot {
     return structuredClone({
-      ...this.state, characters: this.state.characters.map(({ rigDirectory: _, ...character }) => character)
+      ...this.state, designer: this.designer.snapshot(), characters: this.state.characters.map(({ rigDirectory: _, ...character }) => character)
     })
   }
 
@@ -87,7 +96,7 @@ export class Studio {
   }
 
   saveSettings(value: Settings) {
-    if (this.active || this.startingComfy || this.batchController) throw new Error('Wait for the current operation before changing backend settings.')
+    if (this.designerBusy || this.active || this.startingComfy || this.batchController) throw new Error('Wait for the current operation before changing backend settings.')
     this.state.settings = settingsSchema.parse(value)
     this.persist()
     return this.state.settings
@@ -100,7 +109,7 @@ export class Studio {
   }
 
   saveSetup(id: string, value: RigSetup): Character {
-    if (this.active || this.batchController) throw new Error('Wait for the current job before changing the rig.')
+    if (this.designerBusy || this.active || this.batchController) throw new Error('Wait for the current job before changing the rig.')
     const c = this.character(id)
     c.setup = setupSchema.parse(value)
     c.rigged = false
@@ -115,7 +124,7 @@ export class Studio {
   }
 
   private async job(kind: Job['kind'], characterId: string, name: string, work: (job: Job, signal: AbortSignal, settings: Settings) => Promise<void>, batchOwned = false): Promise<Job> {
-    if (this.active || (this.batchController && !batchOwned)) throw new Error('A character job or batch is already running. Cancel it or wait for completion.')
+    if (this.designerBusy || this.active || (this.batchController && !batchOwned)) throw new Error('A designer/character job or batch is already running. Cancel it or wait for completion.')
     const job: Job = { id: randomUUID(), characterId, characterName: name, kind, stage: kind === 'import' ? 'importing' : kind === 'rig' ? 'rigging' : 'preflight', message: 'Starting', progress: 0, createdAt: new Date().toISOString() }
     const settings = structuredClone(this.state.settings)
     const controller = new AbortController()
@@ -157,24 +166,37 @@ export class Studio {
     })
   }
 
-  async importCharacter(input: string): Promise<Character> {
-    if (!input.toLowerCase().endsWith('.fbx')) throw new Error('Select an FBX character file.')
-    if ((await stat(input)).size > 500 * 1024 * 1024) throw new Error('FBX exceeds the 500 MB import limit.')
+  async importCharacter(input: string, name = basename(input)): Promise<Character> {
+    const extension = input.toLowerCase().endsWith('.glb') ? 'glb' : 'fbx'
+    if (!input.toLowerCase().endsWith('.' + extension)) throw new Error('Select an FBX or generated GLB character file.')
+    if ((await stat(input)).size > 500 * 1024 * 1024) throw new Error('Character exceeds the 500 MB import limit.')
     const id = randomUUID()
     const output = join(this.root, 'characters', id)
-    await this.job('import', id, basename(input), async (job, signal, settings) => {
+    await this.job('import', id, name, async (job, signal, settings) => {
       mkdirSync(output, { recursive: true })
-      await copyFile(input, join(output, 'original.fbx'))
+      await copyFile(input, join(output, 'original.' + extension))
       await this.blender(job, { command: 'import', input, output }, signal, settings)
       signal.throwIfAborted()
       const report = JSON.parse(readFileSync(join(output, 'import-report.json'), 'utf8'))
       this.state.characters.unshift({
-        id, name: basename(input), importedAt: new Date().toISOString(), previewUrl: this.asset(`${id}-input`, join(output, 'preview.glb')),
+        id, name, importedAt: new Date().toISOString(), previewUrl: this.asset(`${id}-input`, join(output, 'preview.glb')),
         vertices: report.vertices, meshes: report.meshes, warnings: report.warnings,
         setup: { rotation: report.suggestedRotation, landmarks: defaultLandmarks() }, rigged: false
       })
     })
     return this.snapshot().characters.find(c => c.id === id)!
+  }
+
+  async importDesign(id: string): Promise<Character> {
+    const assigned = this.designer.assignedCharacter(id)
+    if (assigned) {
+      const character = this.snapshot().characters.find(c => c.id === assigned)
+      if (!character) throw new Error('Previously imported design character is missing.')
+      return character
+    }
+    const character = await this.importCharacter(this.designer.output(id, 'model'), this.designer.title(id))
+    this.designer.assign(id, character.id)
+    return character
   }
 
   async rig(id: string, batchOwned = false) {
@@ -207,6 +229,7 @@ export class Studio {
         throw new Error('The full branch would exceed 60 seconds. Shorten this segment or start an independent motion.')
     }
     return this.job('generate', character.id, character.name, async (job, signal, settings) => {
+      job.textEncoder = settings.textEncoder ?? 'llm2vec'
       Object.assign(job, { prompt: batch?.node.prompt ?? request.prompt, seconds: request.seconds, seed: request.seed, steps: request.steps, inPlace: request.inPlace, parentJobId: parent?.id, label: batch?.label, batchId: batch?.id, planNodeId: batch?.nodeId, reusedMotionFrom: batch?.reuseJobId, graphContext: batch?.context })
       this.update(job, 'preflight', 'Checking local rig, ComfyUI nodes, and text-encoder access', 5)
       if (!batch) {
@@ -225,7 +248,7 @@ export class Studio {
         signal.throwIfAborted()
         const prefix = `studio_${job.id.replaceAll('-', '')}_${stage}`
         const result = await generateMotion({
-          base: settings.comfyUrl, request: sampleRequest, prefix, signal, constraintsPath,
+          base: settings.comfyUrl, request: sampleRequest, prefix, signal, constraintsPath, textEncoder: settings.textEncoder,
           submitted: promptId => { job.promptId = promptId; this.persist() },
           progress: (message, p) => this.update(job, p < 30 ? 'queued' : 'generating', `${stage}: ${message}`, p)
         })
@@ -335,9 +358,10 @@ export class Studio {
       }
       for (const file of job.outputFiles) if ((await stat(join(dir, file))).size < 50) throw new Error(`Generated output is empty: ${file}`)
       job.previewUrl = this.asset(`${job.id}-output`, join(dir, 'animated.glb'))
-      job.warnings = [...report.warnings, ...(graph?.node.loop ? ['Loop endpoint poses were checked; review velocity continuity and foot contact before production use.'] : [])]
+      job.warnings = [...report.warnings, ...(settings.textEncoder === 'lfm' ? ['Experimental LFM text conditioning: inspect handedness, stance and motion details before production use.'] : []),
+        ...(graph?.node.loop ? ['Loop endpoint poses were checked; review velocity continuity and foot contact before production use.'] : [])]
       await writeFile(join(dir, 'manifest.json'), JSON.stringify({ request, samplingRequest, graph: batch ? { node: batch.node, context: batch.context } : undefined,
-        stages, promptId: generated.promptId, clipFrames: generated.frames, reusedMotionFrom: batch?.reuseJobId, source: character.name, setup: character.setup, report }, null, 2))
+        textEncoder: job.textEncoder, stages, promptId: generated.promptId, clipFrames: generated.frames, reusedMotionFrom: batch?.reuseJobId, source: character.name, setup: character.setup, report }, null, 2))
     }, !!batch)
   }
 
@@ -369,12 +393,13 @@ export class Studio {
   private activeJobId(): string | undefined { return this.active?.job.id }
 
   async runBatch(value: BatchRequest, savedPlan?: MotionPlan): Promise<void> {
-    if (this.active || this.batchController) throw new Error('Wait for the current job or batch to finish.')
+    if (this.designerBusy || this.active || this.batchController) throw new Error('Wait for the current job or batch to finish.')
     const request = batchSchema.parse(value)
     const plan = planSchema.parse(savedPlan ?? this.plan(request.planId))
     const batch: Batch = {
       id: randomUUID(), name: plan.name, createdAt: new Date().toISOString(), status: 'running',
       plan: structuredClone(plan), request: structuredClone(request),
+      textEncoder: this.state.settings.textEncoder ?? 'llm2vec',
       items: createBatchItems(plan, request, this.state.characters, randomUUID)
     }
     this.state.batches.unshift(batch)
@@ -435,6 +460,8 @@ export class Studio {
   async rerunBatch(id: string) {
     const batch = this.state.batches.find(b => b.id === id)
     if (!batch) throw new Error('Saved batch not found.')
+    if ((batch.textEncoder ?? 'llm2vec') !== (this.state.settings.textEncoder ?? 'llm2vec'))
+      throw new Error(`Select this batch's original ${batch.textEncoder === 'lfm' ? 'LFM bridge' : 'Llama + LLM2Vec'} encoder in Backend connections before rerunning. Encoder changes would alter its saved motion conditioning.`)
     return this.runBatch(batch.request, batch.plan)
   }
 
@@ -465,7 +492,7 @@ export class Studio {
       runProcess(settings.blenderPath, ['--background', '--factory-startup', '--version'], { signal, timeout: 30_000 })
         .then<Check>(out => ({ name: 'Blender rigging backend', status: 'ready', detail: out.split(/\r?\n/).find(s => s.startsWith('Blender')) ?? 'Blender is available' }))
         .catch((e): Check => ({ name: 'Blender rigging backend', status: 'blocked', detail: `Native Blender cannot start. Run npm run setup:blender or choose blender.exe in Settings. ${errorText(e)}` })),
-      runProcess(join(settings.comfyRoot, 'venv', 'Scripts', 'python.exe'), [join(this.appRoot, 'backend', 'preflight.py')], { signal, timeout: 90_000 })
+      runProcess(join(settings.comfyRoot, 'venv', 'Scripts', 'python.exe'), [join(this.appRoot, 'backend', 'preflight.py'), '--encoder', settings.textEncoder ?? 'llm2vec'], { signal, timeout: 90_000 })
         .then<Check[]>(out => {
           const line = out.split(/\r?\n/).find(s => s.startsWith('STUDIO_CHECKS:'))
           if (!line) throw new Error('Environment probe returned no checks.')
@@ -473,8 +500,9 @@ export class Studio {
         }).catch((e): Check[] => [{ name: 'Comfy Python / model access', status: 'blocked', detail: errorText(e) }]),
       api<Record<string, unknown>>(settings.comfyUrl, '/object_info', undefined, signal)
         .then<Check>(info => {
-          const missing = ['Kimodo_LoadModel', 'Kimodo_TextEncode', 'Kimodo_Sampler', 'Kimodo_SaveNPZ', 'Kimodo_ExportBVH', 'Kimodo_Preview3D'].filter(n => !(n in info))
-          return { name: 'ComfyUI / Kimodo nodes', status: missing.length ? 'blocked' : 'ready', detail: missing.length ? 'Missing nodes: ' + missing.join(', ') : `Connected to ${settings.comfyUrl}; all required nodes registered.` }
+          const loader = settings.textEncoder === 'lfm' ? 'Studio_Kimodo_LoadLFM' : 'Kimodo_LoadModel'
+          const missing = [loader, 'Kimodo_TextEncode', 'Kimodo_Sampler', 'Kimodo_SaveNPZ', 'Kimodo_ExportBVH', 'Kimodo_Preview3D'].filter(n => !(n in info))
+          return { name: 'ComfyUI / Kimodo nodes', status: missing.length ? 'blocked' : 'ready', detail: missing.length ? 'Missing nodes: ' + missing.join(', ') + (settings.textEncoder === 'lfm' ? '. Run scripts\\setup-lfm.ps1 for this backend, then restart ComfyUI.' : '') : `Connected to ${settings.comfyUrl}; all required nodes registered.` }
         }).catch((e): Check => ({ name: 'ComfyUI / Kimodo nodes', status: 'blocked', detail: `Cannot connect to ${settings.comfyUrl}. Start the local backend, or change its port in Settings. ${errorText(e)}` }))
     ])
     let output: Check
@@ -488,6 +516,7 @@ export class Studio {
   }
 
   async startComfy() {
+    if (this.designerBusy) throw new Error('Wait for Designer generation before starting a backend.')
     if (this.startingComfy) throw new Error('ComfyUI is already starting.')
     const settings = this.state.settings
     try { await api(settings.comfyUrl, '/system_stats'); return } catch { /* Start is explicitly requested when the service is offline. */ }
@@ -527,7 +556,7 @@ export class Studio {
 
   async dispose() {
     this.lifetime.abort()
-    try { await this.cancel() }
+    try { await Promise.all([this.cancel(), this.designer.cancel()]) }
     finally { this.managedComfy?.kill() }
   }
 }

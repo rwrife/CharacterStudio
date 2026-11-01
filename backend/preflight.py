@@ -1,5 +1,6 @@
 """Read-only environment/access probe. Never print or accept credentials."""
 import json
+import argparse
 import sys
 from pathlib import Path
 
@@ -44,12 +45,43 @@ def check_text_encoder():
     return {"name": "Local Llama text encoder", "status": status, "detail": detail}
 
 
-def main():
+def check_lfm_encoder():
+    from huggingface_hub.errors import LocalEntryNotFoundError
+    from studio_kimodo_lfm.assets import resolve_assets
+
+    try:
+        resolve_assets()
+    except (LocalEntryNotFoundError, FileNotFoundError):
+        return {"name": "Local LFM text encoder", "status": "blocked",
+                "detail": "Pinned LFM weights/bridge are not completely cached. Run scripts\\setup-lfm.ps1 with your saved ComfyUI folder, then restart ComfyUI. No Llama approval or Hugging Face login is required. See Model access & local setup."}
+    return {"name": "Local LFM text encoder", "status": "warning",
+            "detail": "Pinned ungated LFM weights and bridge are cached. Inference remains local. Experimental conditioning can change motion details; inspect handedness, stance and graph seams. LFM's custom license has a commercial revenue limitation. Integrity and model compatibility are checked when loading."}
+
+
+def check_gpu():
     import torch
 
-    checks = [{"name": "PyTorch / GPU", "status": "ready" if torch.cuda.is_available() else "warning",
-               "detail": f"torch {torch.__version__}; CUDA {'available' if torch.cuda.is_available() else 'unavailable (CPU generation is slow)'}"}]
-    checks.append(check_text_encoder())
+    if not torch.cuda.is_available():
+        return {"name": "PyTorch / GPU", "status": "warning",
+                "detail": f"torch {torch.__version__}; CUDA unavailable (CPU generation is slow). GPU memory guidance is unavailable."}
+    device = torch.cuda.current_device()
+    name = torch.cuda.get_device_name(device)
+    try:
+        free, total = torch.cuda.mem_get_info(device)
+    except RuntimeError as exc:
+        return {"name": "PyTorch / GPU", "status": "warning",
+                "detail": f"torch {torch.__version__}; CUDA available, but GPU memory detection failed ({type(exc).__name__}). Refresh readiness or inspect the GPU driver; choose the encoder manually."}
+    gpu = {"name": name, "totalGB": total / 1024 ** 3, "freeGB": free / 1024 ** 3}
+    return {"name": "PyTorch / GPU", "status": "ready", "gpu": gpu,
+            "detail": f"torch {torch.__version__}; {name}; {gpu['freeGB']:.1f} GiB free / {gpu['totalGB']:.1f} GiB total GPU memory."}
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--encoder", choices=("llm2vec", "lfm"), default="llm2vec")
+    args = parser.parse_args()
+    checks = [check_gpu()]
+    checks.append(check_lfm_encoder() if args.encoder == "lfm" else check_text_encoder())
     print("STUDIO_CHECKS:" + json.dumps(checks), flush=True)
 
 

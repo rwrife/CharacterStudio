@@ -15,7 +15,8 @@ export const settingsSchema = z.object({
   comfyUrl: z.string().transform(localUrl),
   comfyRoot: z.string().min(1).max(1024),
   comfyOutput: z.string().min(1).max(1024),
-  blenderPath: z.string().min(1).max(1024)
+  blenderPath: z.string().min(1).max(1024),
+  textEncoder: z.enum(['llm2vec', 'lfm']).default('llm2vec')
 }).strict()
 
 const point = z.tuple([z.number().finite().min(-4).max(4), z.number().finite().min(-4).max(4), z.number().finite().min(-4).max(4)])

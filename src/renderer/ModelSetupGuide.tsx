@@ -4,13 +4,32 @@ interface Props {
   comfyRoot: string
   needsSetup: boolean
   checking: boolean
+  textEncoder?: 'llm2vec' | 'lfm'
   onAccessPage(): void
   onTokenSettings(): void
   onRefresh(): void
 }
 
-export function ModelSetupGuide({ comfyRoot, needsSetup, checking, onAccessPage, onTokenSettings, onRefresh }: Props) {
+export function ModelSetupGuide({ comfyRoot, needsSetup, checking, textEncoder = 'llm2vec', onAccessPage, onTokenSettings, onRefresh }: Props) {
   const hf = `& '${comfyRoot.replace(/[\\]+$/, '').replaceAll("'", "''")}\\venv\\Scripts\\hf.exe'`
+  if (textEncoder === 'lfm') return <details className="model-setup-guide" open={needsSetup}>
+    <summary>Model access &amp; local setup <span>Experimental ungated LFM</span></summary>
+    <div className="model-setup-content">
+      <p>Kimodo still generates the motion. <strong>LFM2.5-Embedding-350M + the community v2 bridge</strong> replaces only its text encoder.
+        Downloads are public; no Llama approval or Hugging Face login is required. Inference runs locally; your FBX is not uploaded.</p>
+      <p>From the source repository in PowerShell, run:</p>
+      <pre aria-label="LFM setup command"><code>{`.\\scripts\\setup-lfm.ps1 -ComfyRoot '${comfyRoot.replaceAll("'", "''")}'`}</code></pre>
+      <p>This downloads about 0.8 GB of pinned weights and installs the Studio Kimodo loader without replacing Python packages.
+        Restart ComfyUI after installation, select <strong>LFM bridge</strong>, save settings, then refresh checks.
+        A portable installation needs this one-time setup from the source repository too.</p>
+      <p><strong>Experimental:</strong> embeddings approximate LLM2Vec, not identical motion quality. Review which hand moves, stance,
+        foot contacts and graph joins. Pose constraints and seam validation remain enabled.
+        Initial walk-to-punch branches failed endpoint checks; constrained graphs and loops are not production-validated with LFM.</p>
+      <p>The bridge is Apache-2.0. LFM uses the LFM Open License v1.0 with a $10M annual-revenue commercial-use limitation;
+        it is not an unrestricted MIT/Apache model.</p>
+      <button className="secondary" disabled={checking} onClick={onRefresh}><RefreshCw size={14} className={checking ? 'spin' : ''} /> Refresh model access checks</button>
+    </div>
+  </details>
   return <details className="model-setup-guide" open={needsSetup}>
     <summary>Model access &amp; local setup <span>Start here for text generation</span></summary>
     <div className="model-setup-content">
@@ -62,9 +81,9 @@ export function ModelSetupGuide({ comfyRoot, needsSetup, checking, onAccessPage,
         <p>An already-authorized copy in the Hugging Face cache used by ComfyUI can be reused without requesting access again.
           A complete installation also needs the tokenizer, configuration, and both LLM2Vec adapters;
           Studio does not currently have an arbitrary local-model-folder selector.</p>
-        <p>There is no supported ungated encoder swap for this Kimodo checkpoint. vLLM and Ollama do not remove the weight requirement,
-          and generic chat responses or embeddings are not compatible replacements.
-          Avoiding Llama entirely would require a separately integrated and validated motion engine, not a settings change.</p>
+        <p>Studio also offers an experimental <strong>LFM bridge</strong> encoder in Backend connections.
+          It avoids the Llama approval request while keeping Kimodo, but approximates its trained conditioning and can change motion details.
+          vLLM, Ollama and generic chat embeddings are not compatible replacements.</p>
         <p>You can still import FBXs, fit and build rigs, and save configurations while access is pending. New text-generated motions remain unavailable.</p>
       </details>
     </div>

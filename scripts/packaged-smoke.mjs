@@ -6,8 +6,8 @@ import { resolve, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import assert from 'node:assert/strict'
 
-const directory = resolve('release', 'KimodoStudio-win32-arm64')
-const executablePath = join(directory, 'KimodoStudio.exe')
+const directory = resolve('release', 'CharacterStudio-win32-arm64')
+const executablePath = join(directory, 'CharacterStudio.exe')
 const appRoot = join(directory, 'resources', 'app')
 const data = process.argv[2] ? resolve(process.argv[2]) : resolve('artifacts', 'packaged-state')
 const output = resolve('artifacts', 'desktop-smoke')

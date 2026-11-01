@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
-import type { GenerateRequest } from '../shared/types'
+import type { GenerateRequest, Settings } from '../shared/types'
 import { localUrl } from './validation'
 
 type Prompt = Record<string, { class_type: string; inputs: Record<string, unknown> }>
-export function buildPrompt(request: GenerateRequest, prefix: string, constraintsPath = ''): Prompt {
+export function buildPrompt(request: GenerateRequest, prefix: string, constraintsPath = '', textEncoder: Settings['textEncoder'] = 'llm2vec'): Prompt {
   return {
-    '1': { class_type: 'Kimodo_LoadModel', inputs: { model: 'Kimodo-SOMA-RP-v1' } },
+    '1': { class_type: textEncoder === 'lfm' ? 'Studio_Kimodo_LoadLFM' : 'Kimodo_LoadModel', inputs: { model: 'Kimodo-SOMA-RP-v1' } },
     '2': { class_type: 'Kimodo_TextEncode', inputs: { model: ['1', 0], prompt: request.prompt } },
     '3': { class_type: 'Kimodo_Sampler', inputs: { model: ['1', 0], conditioning: ['2', 0], duration: request.seconds, seed: request.seed, num_samples: 1, diffusion_steps: request.steps, constraints_json: constraintsPath } },
     '4': { class_type: 'Kimodo_SaveNPZ', inputs: { motion: ['3', 0], filename_prefix: prefix } },
@@ -42,6 +42,7 @@ export async function generateMotion(options: {
   progress: (message: string, progress: number) => void
   submitted: (promptId: string) => void
   constraintsPath?: string
+  textEncoder?: Settings['textEncoder']
 }): Promise<{ promptId: string; fps: number; frames: number }> {
   const { base, request, signal, progress } = options
   const clientId = randomUUID()
@@ -73,7 +74,7 @@ export async function generateMotion(options: {
     // History polling is authoritative, so generation also works if WebSocket progress disconnects.
     socket.addEventListener('error', () => progress('Live progress unavailable; checking ComfyUI job history', 30))
     const submitted = await api<{ prompt_id: string }>(base, '/prompt', {
-      prompt: buildPrompt(request, options.prefix, options.constraintsPath), client_id: clientId, prompt_id: promptId
+      prompt: buildPrompt(request, options.prefix, options.constraintsPath, options.textEncoder), client_id: clientId, prompt_id: promptId
     })
     if (submitted.prompt_id !== promptId) throw new Error('ComfyUI did not preserve the submitted job ID. Update ComfyUI before retrying.')
     progress('Motion queued. Waiting for ComfyUI.', 28)

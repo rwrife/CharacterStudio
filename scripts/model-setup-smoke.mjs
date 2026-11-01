@@ -9,7 +9,7 @@ const output = resolve('artifacts', 'desktop-smoke')
 await mkdir(output, { recursive: true })
 const packaged = process.argv.includes('--packaged')
 const app = await electron.launch({
-  ...(packaged ? { executablePath: resolve('release', 'KimodoStudio-win32-arm64', 'KimodoStudio.exe'), args: [] } : { args: ['.'] }),
+  ...(packaged ? { executablePath: resolve('release', 'CharacterStudio-win32-arm64', 'CharacterStudio.exe'), args: [] } : { args: ['.'] }),
   env: { ...process.env, STUDIO_DATA_DIR: data }, timeout: 60000
 })
 try {
@@ -20,11 +20,13 @@ try {
   await page.getByRole('heading', { name: 'Character lab' }).waitFor()
   // Test-only readiness states and browser interception: never submit access requests or create credentials.
   await app.evaluate(({ ipcMain, shell }) => {
-    globalThis.setupTest = { status: 'blocked', calls: 0, links: [], failLinks: false }
+    globalThis.setupTest = { status: 'blocked', calls: 0, links: [], failLinks: false,
+      gpu: { name: 'Test GPU', totalGB: 16, freeGB: 12 } }
     ipcMain.removeHandler('studio:check')
     ipcMain.handle('studio:check', () => {
       globalThis.setupTest.calls++
-      return [{ name: 'Local Llama text encoder', status: globalThis.setupTest.status, detail: 'Controlled model-access UI fixture.' }]
+      return [{ name: 'PyTorch / GPU', status: 'ready', detail: 'Controlled GPU fixture.', gpu: globalThis.setupTest.gpu },
+        { name: 'Local Llama text encoder', status: globalThis.setupTest.status, detail: 'Controlled model-access UI fixture.' }]
     })
     shell.openExternal = async url => {
       if (globalThis.setupTest.failLinks) throw new Error('Test browser launch failed')
@@ -34,6 +36,9 @@ try {
   await page.reload({ waitUntil: 'domcontentloaded' })
   await page.getByRole('button', { name: 'Backend connections', exact: true }).click()
   const guide = page.locator('.model-setup-guide')
+  await expect(page.getByLabel('Detected GPU memory')).toContainText('12.0 GiB free / 16.0 GiB total')
+  await expect(page.locator('#text-encoder option[value="lfm"]')).toContainText('Recommended for available memory')
+  await expect(page.getByLabel('Kimodo text encoder', { exact: true })).toHaveValue('llm2vec')
   await expect(guide).toHaveAttribute('open', '')
   await expect(guide.getByText('Expand to review and access', { exact: true })).toBeVisible()
   await expect(guide.getByText('Wait for approval', { exact: true })).toBeVisible()
@@ -46,7 +51,7 @@ try {
     'https://huggingface.co/meta-llama/Meta-Llama-3-8B-Instruct', 'https://huggingface.co/settings/tokens'
   ])
   await guide.getByText('Can I avoid the access request?', { exact: true }).click()
-  await expect(guide.getByText(/There is no supported ungated encoder swap/)).toBeVisible()
+  await expect(guide.getByText(/Studio also offers an experimental/)).toBeVisible()
   const calls = await app.evaluate(() => globalThis.setupTest.calls)
   await guide.getByRole('button', { name: 'Refresh model access checks' }).click()
   await expect.poll(() => app.evaluate(() => globalThis.setupTest.calls)).toBeGreaterThan(calls)
@@ -72,8 +77,27 @@ try {
   await expect(guide.getByLabel('Hugging Face login command')).toHaveText("& 'C:\\Model tools\\O''Brien\\ComfyUI\\venv\\Scripts\\hf.exe' auth login")
   await expect(guide.getByText('Expand to review and access', { exact: true })).toBeVisible()
   assert.equal(await guide.locator('input').count(), 0, 'Setup must never collect a token in the app.')
+  await page.getByLabel('Kimodo text encoder', { exact: true }).selectOption('lfm')
+  if (await guide.getAttribute('open') === null) await guide.locator(':scope > summary').click()
+  await expect(guide.getByLabel('LFM setup command')).toContainText(".\\scripts\\setup-lfm.ps1 -ComfyRoot 'C:\\Model tools\\O''Brien\\ComfyUI'")
+  assert.equal(await guide.getByRole('button', { name: 'Open Meta Llama model page' }).count(), 0)
+  await expect(guide.getByText(/no Llama approval or Hugging Face login is required/i)).toBeVisible()
+  await page.getByRole('button', { name: 'Save settings', exact: true }).click()
+  await expect.poll(() => page.evaluate(async () => (await window.studio.snapshot()).settings.textEncoder)).toBe('lfm')
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await page.getByRole('button', { name: 'Backend connections', exact: true }).click()
+  await expect(page.getByLabel('Kimodo text encoder', { exact: true })).toHaveValue('lfm')
+  await app.evaluate(() => { globalThis.setupTest.gpu = { name: 'Large Test GPU', totalGB: 48, freeGB: 32 } })
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click()
+  await expect(page.getByLabel('Detected GPU memory')).toContainText('32.0 GiB free / 48.0 GiB total')
+  await expect(page.locator('#text-encoder option[value="llm2vec"]')).toContainText('Recommended for available memory')
+  await expect(page.getByLabel('Kimodo text encoder', { exact: true })).toHaveValue('lfm')
+  await app.evaluate(() => { globalThis.setupTest.gpu = undefined })
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click()
+  await expect(page.locator('#encoder-memory-guidance')).toContainText('Choose manually')
+  await expect(page.getByLabel('Kimodo text encoder', { exact: true })).toHaveValue('lfm')
   assert.deepEqual(errors, [])
-  console.log(`${packaged ? 'Packaged' : 'Built'} model setup: exact access steps, local CLI commands, safe links, browser-error handling, refresh, ready-state help and minimum-width layout passed.`)
+  console.log(`${packaged ? 'Packaged' : 'Built'} model setup: original access guide, safe links, local CLI commands, LFM guide and persisted encoder selection passed.`)
 } finally {
   await app.close()
   await rm(data, { recursive: true, force: true })

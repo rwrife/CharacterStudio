@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { localUrl, generateSchema, setupSchema } from '../src/main/validation'
+import { localUrl, generateSchema, setupSchema, settingsSchema } from '../src/main/validation'
 import { defaultLandmarks } from '../src/shared/rig'
 import { buildPrompt } from '../src/main/comfy'
 import { Studio } from '../src/main/studio'
@@ -26,6 +26,20 @@ test('workflow uses native API node objects and retains user parameters', () => 
   assert.deepEqual(graph['4'].inputs.motion, ['3', 0])
   assert.equal(graph['5'].inputs.filename_prefix, 'studio_unique')
   assert.equal(Object.keys(graph).length, 6)
+})
+test('LFM changes only the loader and preserves pose constraints and original sampling nodes', () => {
+  const original = buildPrompt(request, 'lfm-test', 'C:\\constraints.json')
+  const lfm = buildPrompt(request, 'lfm-test', 'C:\\constraints.json', 'lfm')
+  assert.equal(original['1'].class_type, 'Kimodo_LoadModel')
+  assert.equal(lfm['1'].class_type, 'Studio_Kimodo_LoadLFM')
+  assert.deepEqual(lfm['1'].inputs, original['1'].inputs)
+  for (const key of ['2', '3', '4', '5', '6']) assert.deepEqual(lfm[key], original[key])
+})
+test('legacy backend settings retain Llama; LFM is explicit and validated', () => {
+  const settings = { comfyUrl: 'http://127.0.0.1:8189', comfyRoot: 'C:\\ComfyUI', comfyOutput: 'C:\\ComfyUI\\output', blenderPath: 'C:\\blender.exe' }
+  assert.equal(settingsSchema.parse(settings).textEncoder, 'llm2vec')
+  assert.equal(settingsSchema.parse({ ...settings, textEncoder: 'lfm' }).textEncoder, 'lfm')
+  assert.equal(settingsSchema.safeParse({ ...settings, textEncoder: 'remote' }).success, false)
 })
 test('reject invalid motion settings and excessive combined duration', () => {
   assert.deepEqual(generateSchema.parse(request), request)

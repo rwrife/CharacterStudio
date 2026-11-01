@@ -102,9 +102,12 @@ def suggest_rotation(objects):
 
 
 def import_character(req):
-    emit("importing", "Reading FBX geometry and materials", 15)
+    emit("importing", "Reading character geometry and materials", 15)
     bpy.ops.wm.read_factory_settings(use_empty=True)
-    bpy.ops.import_scene.fbx(filepath=req["input"], use_anim=False, ignore_leaf_bones=True)
+    if Path(req["input"]).suffix.lower() == ".glb":
+        bpy.ops.import_scene.gltf(filepath=req["input"])
+    else:
+        bpy.ops.import_scene.fbx(filepath=req["input"], use_anim=False, ignore_leaf_bones=True)
     warnings = []
     if any(o.type == "ARMATURE" for o in bpy.context.scene.objects):
         warnings.append("Existing armature is replaced by the studio humanoid rig. Original FBX is preserved.")
