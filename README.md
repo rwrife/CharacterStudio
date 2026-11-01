@@ -176,7 +176,7 @@ Enable this only for agents you trust with **all of the app's local user privile
 
 The server controls **Studio's window only**, not the OS, external browser pages, authentication prompts, ComfyUI's separate UI, or other desktop applications. Model access, downloads and third-party authentication remain subject to the existing manual setup guidance. The user can continue interacting with the same window; coordinate edits to avoid conflicting selections. Turn off **Enable MCP control** to revoke access immediately, including when launched with `--mcp`. A stale connection file after a crash is not a running server; restart Studio rather than reusing its token.
 
-`npm run test:mcp` builds and exercises the real stdio-to-HTTP-to-Electron path in an isolated workspace under ignored `artifacts\mcp-smoke`: visible Designer fields and cancellation, graph edits and dragging, save/import/export with overwrite checks, backend settings and folder selection, stale refs, keyboard/scrolling, screenshots, in-app disable/re-enable with revoked credentials, saved-toggle restoration, cleanup and a default-off launch. It needs no model weights, Blender or third-party character. It does not establish successful learned generation, rigging, motion quality, or cross-platform GUI compatibility.
+`npm run test:mcp` builds and exercises the real stdio-to-HTTP-to-Electron path in an isolated workspace under ignored `artifacts\mcp-smoke`: visible Designer fields and cancellation, graph edits and dragging, save/import/export with overwrite checks, backend settings and folder selection, stale refs, keyboard/scrolling, screenshots, in-app disable/re-enable with revoked credentials, saved-toggle restoration, cleanup and a default-off launch. It also runs the generation-rerun regression below in a temporary workspace with a deterministic local ComfyUI fixture. It needs no model weights, Blender or third-party character. It does not establish successful learned generation, rigging, motion quality, or cross-platform GUI compatibility.
 
 ## Designer workflow
 
@@ -191,9 +191,11 @@ Switch to **Designer** in the top bar. The existing character lab remains in **A
 
 The T-pose edit also explicitly requests **flat hands, palms down, straight fingers held together side by side, and thumbs resting naturally alongside**, with no splayed/curled fingers or fists. This is prompt guidance, not an anatomical validator; inspect hands before generating the mesh.
 
+Generation controls stay available after completion: **Regenerate scene**, **Regenerate T-pose** and **Regenerate 3D** use the current brief/sampling fields and saved model choices. A rerun creates and selects a saved variation, copying only the preceding references needed for that stage; it never replaces completed outputs or an existing Animator character. Changing an earlier stage does not carry forward stale T-poses or meshes. T-pose regeneration requires a scene; an imported isolated T-pose can generate 3D repeatedly without one. Scene prompts affect scenes, while T-pose editing keeps its fixed instruction and 3D uses the validated T-pose. Change the seed for a different sample; identical models, inputs and seeds may reproduce the same result. Controls remain locked during active work and until model-choice edits are saved. Animator's **Generate animation**, graph generation and batch reruns also remain repeatable, preserving completed takes and batch snapshots.
+
 ### Local textured models
 
-Before generating 3D, choose **TRELLIS.2 (textured)** in **3D model profile**, select the four installed weights below, and **Save model choices**. Use **Use T-pose & generate 3D** as usual. This alternative generates both geometry and textures from the same validated T-pose. It does **not** paint an existing Hunyuan mesh: to try it on an already-completed design, save and import that design's T-pose as a new design, preserving the original mesh.
+Before generating 3D, choose **TRELLIS.2 (textured)** in **3D model profile**, select the four installed weights below, and **Save model choices**. Use **Use T-pose & generate 3D**, or **Regenerate 3D** on an already-completed design. This alternative generates both geometry and textures from the same validated T-pose in a new variation, preserving the original mesh. It does **not** paint an existing Hunyuan mesh.
 
 The native ComfyUI graph generates structure, shape and texture latents in sequence, remeshes the decoded surface before simplification and UV unwrapping, then bakes a **1024 x 1024 base-color atlas plus metallic/roughness maps**. Remeshing avoids the fragmented UV islands and faceted appearance observed when simplifying the raw decoder output directly. Sampling uses fixed 12/20/12 steps and a 512 shape/remesh profile, independently of the scene/Hunyuan step field. Mesh simplification targets 50,000 faces; this is not game-ready retopology. TRELLIS conditioning uses only the alpha-masked foreground on black, as required by its native workflow; Hunyuan's foreground remains on white. Neither sees the hidden original scenery.
 
@@ -275,7 +277,7 @@ Observed Designer runs have exercised DreamShaper 8 scene generation, FLUX.2 kle
 
 **Scope:** native Hunyuan3D produces **untextured, unrigged geometry**; it does not bake the reference's colors onto the mesh. TRELLIS.2 adds local texture synthesis, but its output is also unrigged. Neither profile guarantees retopology, fingers/faces, precise pose, faithful unseen surfaces or production-ready game assets. Review and potentially repair the mesh before guided humanoid rigging.
 
-Designs, reference copies, settings snapshots, and API workflow JSON live under `%APPDATA%\KimodoStudio\designs` with an independent `designer.json` index. Generated stages publish only a validated output from their own completed ComfyUI history entry; imports are labeled separately, and opaque T-poses remain blocked from 3D until cleanup. Cancellation targets only that prompt; restart marks interrupted stages failed while keeping earlier completed references. Failed stages can be retried after fixing setup, and completed stages cannot be overwritten. Model choices can be corrected for an unfinished stage; completed generated image stages retain their original image model family.
+Designs, reference copies, settings snapshots, and API workflow JSON live under `%APPDATA%\KimodoStudio\designs` with an independent `designer.json` index. Generated stages publish only a validated output from their own completed ComfyUI history entry; imports are labeled separately, and opaque T-poses remain blocked from 3D until cleanup. Cancellation targets only that prompt; restart marks interrupted stages failed while keeping earlier completed references. Failed stages can be retried after fixing setup. Completed stages can be regenerated as new saved variations, never overwritten. Current saved model choices apply to the stage being generated; copied references retain their original workflow manifests and image model family.
 
 ## Animator workflow
 
@@ -405,6 +407,7 @@ npm test
 npm run typecheck
 npm run test:desktop
 npm run test:mcp
+node --import tsx scripts\generation-smoke.mjs
 node scripts\designer-smoke.mjs
 node scripts\designer-smoke.mjs --generate
 node scripts\designer-smoke.mjs --textured --input artifacts\designer-smoke\tpose-cutout.png
@@ -426,6 +429,8 @@ node --import tsx scripts\check-local-backends.ts
 The FBX integration scripts expect the user-supplied copy at `artifacts\Bruiser_base.fbx`; no character asset is fetched from third parties. Blender's redistribution/license files remain bundled with its runtime.
 
 `model-download-smoke.mjs` runs against the built app with an isolated workspace and a controlled local model catalog. It exercises the real missing-BiRefNet warning and declined native confirmation, then fixture transfer progress, cancellation, failure and automatic selection. It downloads no weights and performs no inference. Backend tests separately exercise byte transfer, verification, file preservation and saved configuration.
+
+`generation-smoke.mjs` uses the real desktop MCP controls with a deterministic loopback ComfyUI fixture to complete and rerun scene, T-pose and 3D stages. It checks prompt/seed/model changes, busy and unsaved-setting locks, failed-run retry, persistence and preservation of earlier outputs. It requires the built app but no weights or Blender, and is not evidence of learned inference or asset quality.
 
 The Designer smoke command without flags checks layout, the existing local model list, and external image entry points using explicitly test-only image fixtures. `--generate` starts a temporary app-owned ComfyUI on a free loopback port, uses installed DreamShaper, FLUX.2 klein 4B/Qwen 3/FLUX.2 VAE, BiRefNet and standard native Hunyuan3D 2 weights, and runs the real scene-to-edited-cutout-to-mesh pipeline without restarting the user's service. It requires actual GLB generation and Blender/Animator handoff, checks external GLB import, and preserves real references, `character.glb` and screenshots in `artifacts\designer-smoke`. It does not treat fixtures as learned output or populate the user's workspace with test records. `--packaged` runs the same check against the portable Character Studio executable.
 

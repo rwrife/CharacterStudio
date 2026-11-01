@@ -39,6 +39,7 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
   const free = Math.max(0, ...(ready?.devices.map(d => d.freeGB) ?? []))
   const url = design?.[`${preview}Url`]
   const source = design?.sources?.[preview]
+  const sceneBlocked = request.description.trim().length < 3 || request.style.trim().length < 3 || input === 'image' && !reference
 
   async function perform(action: () => Promise<void>) {
     setBusy(true); setError(''); setNotice('')
@@ -58,7 +59,16 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
   ]
   async function run(stage: DesignStage) {
     if (!design) return
-    await perform(async () => { setPreview(stage); await window.studio.designerRun(design.id, stage) })
+    await perform(async () => {
+      const brief = { ...request, referenceId: input === 'image' ? request.referenceId : undefined }
+      const changed = (Object.keys(brief) as (keyof DesignRequest)[]).some(key => brief[key] !== design.request[key])
+      const cleanupOnly = stage === 'tpose' && design.tposeUrl && !design.tposeIsolated
+      const variation = changed || !!design[`${stage}Url`] && !cleanupOnly ||
+        stage === 'scene' && !!(design.tposeUrl || design.modelUrl)
+      const target = variation ? await window.studio.designerVariation(design.id, stage, brief) : design.id
+      setId(target); setPreview(stage)
+      await window.studio.designerRun(target, stage)
+    })
   }
   async function installModels(packageId: DesignerModelPackage) {
     await perform(async () => {
@@ -107,7 +117,7 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
       <label className="field-label" htmlFor="design-strength">Reference influence <span>{Math.round(request.referenceStrength * 100)}%</span></label>
       <input id="design-strength" type="range" min={0.1} max={0.6} step={0.05} disabled={locked} value={request.referenceStrength} onChange={e => setRequest({ ...request, referenceStrength: Number(e.target.value) })} />
       <p className="fine-print">For creating a scene from an optional reference image. T-pose editing instead uses the completed scene directly, with its own fixed four-step edit workflow.</p>
-      <button className="primary full" disabled={locked || settingsDirty || request.description.trim().length < 3 || request.style.trim().length < 3 || input === 'image' && !reference} onClick={() => void perform(async () => {
+      <button className="primary full" disabled={locked || settingsDirty || sceneBlocked} onClick={() => void perform(async () => {
         const created = await window.studio.designerCreate({ ...request, referenceId: input === 'image' ? request.referenceId : undefined })
         setId(created); setPreview('scene')
         await window.studio.designerRun(created, 'scene')
@@ -116,7 +126,7 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
       <div className="panel-rule" />
       <div className="section-heading"><span className="section-kicker">SAVED DESIGNS</span><span className="count">{data?.designs.length ?? 0}</span></div>
       <div className="design-list">
-        {data?.designs.map(item => <button key={item.id} className={`asset ${item.id === id ? 'active' : ''}`} disabled={locked} onClick={() => { setId(item.id); setPreview(item.modelUrl ? 'model' : item.tposeUrl ? 'tpose' : 'scene'); setError('') }}>
+        {data?.designs.map(item => <button key={item.id} className={`asset ${item.id === id ? 'active' : ''}`} disabled={locked} onClick={() => { setId(item.id); setRequest({ ...item.request, title: item.title }); setInput(item.request.referenceId ? 'image' : 'text'); setPreview(item.modelUrl ? 'model' : item.tposeUrl ? 'tpose' : 'scene'); setError('') }}>
           <Palette size={16} /><span><strong>{item.title || 'Untitled concept'}</strong><small>{item.status === 'failed' || item.status === 'cancelled' ? item.status : item.modelUrl ? item.modelTextured ? 'Textured model ready' : '3D geometry ready' : item.tposeUrl ? item.tposeIsolated ? 'T-pose ready' : 'T-pose needs cleanup' : item.sceneUrl ? 'Scene ready' : 'Not generated'}</small></span>
         </button>)}
         {!data?.designs.length && <p className="fine-print">Your character concepts will appear here.</p>}
@@ -181,14 +191,15 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
       {notice && <div className="banner success" role="status"><Check size={17} /><span>{notice}</span></div>}
       {design && design.status !== 'running' && design.status !== 'failed' && <p className="design-status">{design.message}</p>}
       {design && <div className="design-actions">
-        {!design.sceneUrl && !design.tposeUrl && !design.modelUrl && <button className="primary" disabled={locked || settingsDirty} onClick={() => void run('scene')}><RefreshCw size={15} /> Generate scene</button>}
-        {design.sceneUrl && !design.tposeUrl && !design.modelUrl && <button className="primary" disabled={locked || settingsDirty} onClick={() => void run('tpose')}><Check size={15} /> Use scene & generate T-pose <ArrowRight size={15} /></button>}
-        {design.tposeUrl && !design.tposeIsolated && !design.modelUrl && <button className="primary" disabled={locked || settingsDirty} onClick={() => void run('tpose')}><RefreshCw size={15} /> Remove T-pose background</button>}
-        {design.tposeIsolated && !design.modelUrl && <button className="primary" disabled={locked || settingsDirty} onClick={() => void run('model')}><Box size={15} /> Use T-pose & generate 3D <ArrowRight size={15} /></button>}
+        <button className="primary" disabled={locked || settingsDirty || sceneBlocked} onClick={() => void run('scene')}><RefreshCw size={15} /> {design.sceneUrl ? 'Regenerate scene' : 'Generate scene'}</button>
+        {design.sceneUrl && (!design.tposeUrl || design.tposeIsolated) && <button className="primary" disabled={locked || settingsDirty} onClick={() => void run('tpose')}><Check size={15} /> {design.tposeUrl ? 'Regenerate T-pose' : 'Use scene & generate T-pose'} <ArrowRight size={15} /></button>}
+        {design.tposeUrl && !design.tposeIsolated && <button className="primary" disabled={locked || settingsDirty} onClick={() => void run('tpose')}><RefreshCw size={15} /> Remove T-pose background</button>}
+        {design.tposeIsolated && <button className="primary" disabled={locked || settingsDirty} onClick={() => void run('model')}><Box size={15} /> {design.modelUrl ? 'Regenerate 3D' : 'Use T-pose & generate 3D'} <ArrowRight size={15} /></button>}
         {design.modelUrl && <button className="primary" disabled={locked} onClick={() => void perform(async () => onAnimate(await window.studio.designerAnimate(design.id)))}><ArrowRight size={15} /> {design.characterId ? 'Open in Animator' : 'Send to Animator'}</button>}
         {url && <button className="secondary" disabled={locked} onClick={() => void perform(async () => { const path = await window.studio.designerExport(design.id, preview); if (path) setNotice(`Saved ${path}`) })}><ArrowDownToLine size={15} /> Save {preview === 'model' ? design.modelTextured ? 'textured GLB' : 'GLB geometry' : 'reference PNG'}</button>}
         <button className="text-button" disabled={locked} onClick={() => { setRequest({ ...design.request, title: design.title }); setInput(design.request.referenceId ? 'image' : 'text'); setId(''); setNotice('Brief copied. Change the seed or descriptions, then create a new concept.'); setError('') }}><Plus size={14} /> Use brief for variation</button>
       </div>}
+      {design && <p className="fine-print">Generate again after changing the brief, seed or saved model choices. Reruns create a saved variation and keep only the references needed for that stage; earlier outputs and Animator characters stay unchanged. Identical settings and seeds may reproduce the same result.</p>}
       <div className="design-limits"><ShieldCheck size={17} /><p>Review each stage before continuing. 3D uses only the validated T-pose foreground, not the original scene. Hunyuan3D produces geometry only; TRELLIS.2 generates new geometry plus embedded textures from the same reference. It does not repaint an existing Hunyuan mesh. Both are <strong>unrigged</strong>. Review unseen surfaces, texture seams, anatomy and hands before Animator.</p></div>
     </main>
     <aside className="design-models" aria-label="Designer model profiles">
