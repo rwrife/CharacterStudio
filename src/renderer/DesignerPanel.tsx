@@ -3,6 +3,7 @@ import { ArrowDownToLine, ArrowRight, Box, Check, CircleAlert, ImagePlus, Loader
 import type { Character, Snapshot } from '../shared/types'
 import type { DesignRequest, DesignerConfig, DesignerReadiness, DesignStage } from '../shared/designer'
 import { imageProfiles, meshProfiles, meshTextureProfile, tposeEditProfile, tposeEditPrompt } from '../shared/designer'
+import { designerModelPackages, type DesignerModelPackage } from '../shared/designer-models'
 import { Viewport } from './Viewport'
 import './designer.css'
 
@@ -26,7 +27,12 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
   const [isolated, setIsolated] = useState(false)
   const design = data?.designs.find(d => d.id === id)
   const active = data?.designs.find(d => d.status === 'running')
-  const locked = busy || !!active || animatorBusy
+  const download = data?.modelDownload
+  const downloading = download?.status === 'running'
+  const locked = busy || !!active || animatorBusy || downloading
+  const recovery = design?.status === 'failed' ? design.recovery : undefined
+  const recovered = download?.status === 'complete' && download.package === recovery?.package
+  const displayError = error || (!recovered && design?.status === 'failed' ? design.message : '')
   const settingsDirty = (['imageProfile', 'checkpoint', 'controlnet', 'meshProfile', 'meshCheckpoint', 'titleModel', 'ipadapter', 'clipVision', 'backgroundModel', 'editModel', 'editTextEncoder', 'editVae', 'meshTextureModel', 'meshVision', 'meshShapeVae', 'meshTextureVae'] as const)
     .some(key => (config?.[key] ?? '') !== (data?.config[key] ?? ''))
   const reference = data?.references.find(r => r.id === request.referenceId)
@@ -53,6 +59,22 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
   async function run(stage: DesignStage) {
     if (!design) return
     await perform(async () => { setPreview(stage); await window.studio.designerRun(design.id, stage) })
+  }
+  async function installModels(packageId: DesignerModelPackage) {
+    await perform(async () => {
+      const installed = await window.studio.designerInstallModels(packageId)
+      if (installed) {
+        setConfig(installed)
+        setReady(await window.studio.designerReadiness())
+        setNotice('Required models verified and selected. Retry the stage when ready.')
+      }
+    })
+  }
+  function reviewModels() {
+    const field = document.getElementById(recovery?.package === 'background' ? 'design-background' :
+      recovery?.package === 'edit' ? 'design-editModel' : 'image-profile')
+    field?.scrollIntoView({ block: 'center' })
+    field?.focus()
   }
 
   return <div id="designer-panel" role="tabpanel" aria-labelledby="designer-tab" hidden={!visible} className="designer-layout">
@@ -135,9 +157,29 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
       </div>
       {active && <div className="job-progress" role="status"><LoaderCircle size={18} className="spin" /><div><strong>{active.stage?.toUpperCase()}</strong><p>{active.message}</p></div><button disabled={active.status !== 'running'} onClick={() => void window.studio.designerCancel().catch(error => setError(explain(error)))}>Cancel design</button></div>}
       {animatorBusy && <p className="fine-print">Animator is using the shared local job slot. Designer generation will be available when it finishes.</p>}
-      {error && <div className="banner error" role="alert"><CircleAlert size={17} /><span>{error}</span></div>}
+      {displayError && <div className="banner error design-recovery" role="alert"><CircleAlert size={17} /><div>
+        <p>{displayError}</p>
+        <div className="design-recovery-actions">
+          {recovery?.package && !recovered && <button className="secondary" disabled={locked || settingsDirty} onClick={() => void installModels(recovery.package!)}>
+            <ArrowDownToLine size={15} /> Download required models
+          </button>}
+          <button className="secondary" disabled={locked} onClick={reviewModels}>Review model settings</button>
+          <button className="text-button" disabled={locked} onClick={onSettings}>Backend connections</button>
+        </div>
+        {recovery?.package && !recovered && <p className="fine-print">{designerModelPackages[recovery.package].label}. Review the download size and model terms before approving. {settingsDirty && 'Save model choices first.'}</p>}
+      </div></div>}
+      {download && <div className={`banner ${download.status === 'failed' ? 'error' : download.status === 'complete' ? 'success' : ''} design-download`} role="status">
+        {downloading ? <LoaderCircle size={17} className="spin" /> : <ArrowDownToLine size={17} />}
+        <div><p>{download.message}</p>
+          {downloading && download.totalBytes > 0 && <>
+            <progress aria-label="Model download progress" value={download.receivedBytes} max={download.totalBytes} />
+            <span>{(download.receivedBytes / 2 ** 30).toFixed(2)} / {(download.totalBytes / 2 ** 30).toFixed(2)} GiB</span>
+          </>}
+          {downloading && <button className="secondary" onClick={() => void window.studio.designerCancelDownload().catch(error => setError(explain(error)))}>Cancel download</button>}
+        </div>
+      </div>}
       {notice && <div className="banner success" role="status"><Check size={17} /><span>{notice}</span></div>}
-      {design && design.status !== 'running' && <p className={`design-status ${design.status === 'failed' ? 'failure' : ''}`}>{design.message}</p>}
+      {design && design.status !== 'running' && design.status !== 'failed' && <p className="design-status">{design.message}</p>}
       {design && <div className="design-actions">
         {!design.sceneUrl && !design.tposeUrl && !design.modelUrl && <button className="primary" disabled={locked || settingsDirty} onClick={() => void run('scene')}><RefreshCw size={15} /> Generate scene</button>}
         {design.sceneUrl && !design.tposeUrl && !design.modelUrl && <button className="primary" disabled={locked || settingsDirty} onClick={() => void run('tpose')}><Check size={15} /> Use scene & generate T-pose <ArrowRight size={15} /></button>}
@@ -243,7 +285,7 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
         <button className="secondary full" disabled={locked || !settingsDirty} onClick={() => void perform(async () => { await window.studio.designerSettings(config); setNotice('Local model choices saved.') })}><Check size={15} /> Save model choices</button>
         {settingsDirty && <p className="fine-print">Save model choices before generating. Completed image stages keep their original model family.</p>}
       </>}
-      <details className="design-setup"><summary>Model setup & offline requirements</summary><p>Scene/Hunyuan checkpoints go in models\checkpoints. T-pose edits use flux-2-klein-4b-fp8.safetensors in models\diffusion_models, qwen_3_4b.safetensors in models\text_encoders, and flux2-vae.safetensors in models\vae. Refresh and select them after installing separately. No downloads or package changes occur during generation.</p><p>Use native single-view Hunyuan3D 2 / 2mini safetensors with names identifying the model and mini variant. Turbo, multiview and 2.1 checkpoints are not supported by these profiles.</p><p>Textured generation uses {meshTextureProfile.model} in models\diffusion_models, {meshTextureProfile.vision} in models\clip_vision, and {meshTextureProfile.shapeVae} plus {meshTextureProfile.textureVae} in models\vae. These total about 8.5 GB. ComfyUI must include native TRELLIS.2, remeshing, UV unwrapping and texture-baking nodes.</p><p>Memory budgets are conservative estimates, not compatibility guarantees. GPU architecture, free system RAM, drivers and checkpoint precision also matter. Stages and Animator jobs run sequentially.</p></details>
+      <details className="design-setup"><summary>Model setup & offline requirements</summary><p>Missing-model errors offer Download required models for BiRefNet, FLUX.2 klein editing, DreamShaper 8 / SDXL, standard Hunyuan3D 2 and TRELLIS.2. Approve the size and source, then Studio verifies, refreshes and selects the required files. Retry generation yourself after setup. Other checkpoints, optional IP-Adapter and Ollama still need manual setup. No Python packages are changed.</p><p>Scene/Hunyuan checkpoints go in models\checkpoints. T-pose edits use flux-2-klein-4b-fp8.safetensors in models\diffusion_models, qwen_3_4b.safetensors in models\text_encoders, flux2-vae.safetensors in models\vae, and BiRefNet in models\background_removal.</p><p>Use native single-view Hunyuan3D 2 / 2mini safetensors with names identifying the model and mini variant. Turbo, multiview and 2.1 checkpoints are not supported by these profiles. 2mini weights must be installed manually; downloads never silently switch profiles.</p><p>Textured generation uses {meshTextureProfile.model} in models\diffusion_models, {meshTextureProfile.vision} in models\clip_vision, and {meshTextureProfile.shapeVae} plus {meshTextureProfile.textureVae} in models\vae. These total about 8.5 GB. ComfyUI must include native TRELLIS.2, remeshing, UV unwrapping and texture-baking nodes.</p><p>Memory budgets are conservative estimates, not compatibility guarantees. GPU architecture, free system RAM, drivers and checkpoint precision also matter. Stages and Animator jobs run sequentially.</p></details>
       <button className="text-button full" onClick={onSettings}>Backend connections</button>
     </aside>
   </div>

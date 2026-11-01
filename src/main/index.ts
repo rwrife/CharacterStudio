@@ -74,6 +74,18 @@ if (ownsWorkspace) app.whenReady().then(async () => {
   studio.onUpdate = snapshot => { if (!window.isDestroyed()) window.webContents.send('studio:update', snapshot) }
   handle('studio:snapshot', () => studio.snapshot())
   handle('designer:readiness', () => studio.designer.readiness())
+  handle('designer:install-models', (id: import('../shared/designer-models').DesignerModelPackage) =>
+    studio.designer.installModels(id, async (label, models, root) => {
+      const choice = await dialog.showMessageBox(window, {
+        type: 'question', title: 'Download required models', message: label,
+        detail: `Download and select up to ${(models.reduce((sum, model) => sum + model.bytes, 0) / 2 ** 30).toFixed(2)} GiB from Hugging Face into:\n${join(root, 'models')}\n\n` +
+          models.map(model => `${model.file} (${(model.bytes / 2 ** 30).toFixed(2)} GiB)\n${model.license}\n${model.page}`).join('\n\n') +
+          '\n\nReview the upstream model terms before use. Matching verified files are reused; other existing files are never overwritten. No character assets or credentials are uploaded. No Python packages are installed. Generation will not restart automatically.',
+        buttons: ['Cancel', 'Download & select'], defaultId: 0, cancelId: 0, noLink: true
+      })
+      return choice.response === 1
+    }))
+  handle('designer:cancel-download', () => studio.designer.cancelDownload())
   handle('designer:settings', (config: DesignerConfig) => studio.designer.saveSettings(config))
   handle('designer:create', (request: DesignRequest) => studio.designer.create(request))
   handle('designer:import', async (value: DesignImportRequest) => {

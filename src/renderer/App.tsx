@@ -46,7 +46,7 @@ export function App() {
   const output = completed.find(j => j.id === jobId)
   const active = snapshot?.jobs.find(j => !done.has(j.stage))
   const activeBatch = snapshot?.batches.find(b => b.status === 'running')
-  const locked = busy || !!active || !!activeBatch || !!snapshot?.designer?.designs.some(d => d.status === 'running')
+  const locked = busy || !!active || !!activeBatch || !!snapshot?.designer?.designs.some(d => d.status === 'running') || snapshot?.designer?.modelDownload?.status === 'running'
   const blocked = checks.filter(c => c.status === 'blocked')
   const gpu = checks.find(check => check.gpu)?.gpu
   const encoderAdvice = recommendTextEncoder(gpu)
