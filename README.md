@@ -21,6 +21,7 @@ Local Windows ARM64 desktop app with **Designer** and **Animator** workspaces. D
 | [Configurations and batches](#repeatability-and-collections) | Save or exchange configuration JSON, import FBX collections, and generate sequential batches with identical motion per path context or deterministic seed variations. Rerun immutable batch snapshots. |
 | [Character exports](#animator-workflow) | Save animated skinned GLB, FBX, and editable Blender scenes, plus separately labeled motion-only BVH/NPZ. Export completed batch results with manifests; failed outputs are not presented as completed characters. |
 | [Local workspace persistence](#data-and-reproducibility) | Keep original assets, designs, rig fits, settings, jobs, and outputs on this PC. Cancel app-owned work and retain completed results across restarts. |
+| [Visible desktop MCP control](#desktop-mcp-control) | Let a trusted local agent operate the actual desktop window: Designer, Animator, fitting, graphs, batches, settings, import/export, playback and viewport gestures. Watch the same controls, progress and errors as when working manually. |
 
 **Current boundaries:** Designer outputs are unrigged until prepared in Animator. Hunyuan outputs are untextured; TRELLIS.2 can infer textures but cannot guarantee accurate unseen surfaces or seam-free UVs. Rigging is guided and body-only, not universal auto-rigging. Motion and graph joins require review; endpoint checks do not guarantee seamless animation or game-engine readiness. Models and local backend setup are prerequisites, not bundled capabilities.
 
@@ -70,6 +71,16 @@ This saved desktop run used the experimental local LFM bridge and produced a lea
 
 Arrange reusable states and actions, connect transitions, and edit motion instructions and generation settings. This graph-editor screenshot predates the Designer workspace; it illustrates graph authoring, not successful learned graph generation.
 
+### MCP: agent control of the visible desktop
+
+![Actual desktop animation graph authored and saved through the local MCP server](docs/screenshots/mcp-desktop-control.png)
+
+The MCP smoke run used the real stdio client and desktop UI to author, move, save, export and reimport this graph. This is graph authoring without a character or learned generation, not evidence of rigging, inference or motion quality.
+
+![Visible MCP-enabled save dialog with an editable file path and explicit overwrite control](docs/screenshots/mcp-file-selection.png)
+
+The same desktop export action opens an in-app file picker an agent can operate while the user watches. The initial suggested filename is shown before choosing a destination; no private path or credential is included.
+
 ## Launch
 
 Open `release\CharacterStudio-win32-arm64\CharacterStudio.exe`, or run `Start-CharacterStudio.ps1`. The old `Start-KimodoStudio.ps1` launcher forwards to the new launcher for compatibility. Kimodo remains the name of the local motion-generation backend.
@@ -101,6 +112,75 @@ Each successful build makes archives available as workflow artifacts for 14 days
 Local packaging uses `npm run setup:blender` followed by `npm run package`; `npm run package:app -- --platform=win32 --arch=arm64` packages an already-built app with an already-installed matching runtime. Available targets are the five combinations above. Linux builds need native Blender libraries (the workflow installs these); macOS runtime extraction uses `hdiutil` and `ditto`.
 
 **Release limitations:** Windows and macOS apps are unsigned, and macOS apps are not notarized. Code-signing credentials are not collected or required by this workflow. These are portable archives, not installers or automatic updates. Windows ARM64 remains the locally exercised workflow; Linux and macOS packaging does not establish full rigging, inference, or export compatibility. On those platforms, ComfyUI defaults to `~/ComfyUI` and requires an existing `venv/bin/python`; select the actual backend/output folders in **Backend connections**. On Windows, the existing `%LOCALAPPDATA%\ComfyUI` and `venv\Scripts\python.exe` defaults remain unchanged. ComfyUI, GPU drivers, custom nodes, and model weights must still be configured separately; Windows-specific LFM setup and integration scripts are not made cross-platform by these releases.
+
+## Desktop MCP control
+
+The app includes an **opt-in local MCP server** that controls the running desktop, not a headless copy of Studio. It uses the existing React controls, Electron bridge, validation, job queue and persistence. Manual edits and agent edits affect the same window and workspace. All application workflows are reachable through the UI tools below; there is deliberately no second set of backend-only generation/import/export handlers.
+
+### Start and connect
+
+Open **Backend connections** and turn on **Enable MCP control**. New workspaces default to off. The toggle starts or stops the listener immediately, saves the choice independently of backend settings, and stays available during running jobs. Disabling disconnects clients and removes their connection file without cancelling work; re-enabling creates a fresh endpoint/token and requires clients to reconnect. The header has no MCP subtitle.
+
+Start the app normally and use that toggle, or use the optional command-line override:
+
+```powershell
+npm run build
+npm start
+# Optional: enable MCP for this launch without first opening settings.
+npm run start:mcp
+# Or, for the Windows ARM64 portable distribution:
+& ".\release\CharacterStudio-win32-arm64\CharacterStudio.exe" --mcp
+```
+
+For development, use `npm run dev` and the in-app toggle, or `npm run dev:mcp`. The MCP scripts pass `--mcp` through electron-vite's argument separator to Electron; the flag enables MCP for that launch even if the saved preference is off. Close an existing instance before using the flag, or just change its in-app toggle instead. **Backend connections** shows the live enabled/disabled status.
+
+When enabled, a random-port HTTP listener binds only to `127.0.0.1`; its fresh bearer token and endpoint are written to `mcp-connection.json` in the current Studio data directory. On Windows this is `%APPDATA%\KimodoStudio`. The saved toggle lives in `mcp-settings.json`; neither file is packaged or tracked in Git. A custom `STUDIO_DATA_DIR` changes workspace, preference and connection-file locations. The connection file is removed on shutdown, but the toggle preference survives. Restarting an enabled app rotates the endpoint/token, so restart connected MCP clients too.
+
+Configure a trusted MCP host with this **stdio** server entry, replacing the example path with this checkout's absolute path. Node.js 22+ must be installed separately, including for portable builds. The client attaches to an already-running desktop; it never launches or hides one.
+
+```json
+{
+  "mcpServers": {
+    "character-studio": {
+      "command": "node",
+      "args": ["C:\\path\\to\\CharacterStudio\\scripts\\mcp-client.mjs"]
+    }
+  }
+}
+```
+
+For a portable distribution, point `args` to `scripts\mcp-client.mjs` under its `resources\app` folder (on macOS, `CharacterStudio.app\Contents\Resources\app`). The packaged client includes its MCP SDK dependency. For a custom workspace, append `"--connection", "C:\\path\\to\\data\\mcp-connection.json"` to `args`. The development shortcut is `npm run mcp -- --connection <absolute-path>`, but configure MCP hosts with `node` directly so npm's console banners do not corrupt stdio. Hosts supporting Streamable HTTP can instead use the exact URL and `Authorization: Bearer <token>` from the connection file; do not copy the token into committed configuration.
+
+### Tools and workflow coverage
+
+| Tool | Visible desktop operation |
+|---|---|
+| `studio_get_ui` | Read current text, alerts, modal, control labels, element refs, enabled states, values, dropdown options, and CSS-pixel bounds. Hidden workspace controls are excluded. |
+| `studio_get_state` | Read persisted settings, designs/references, characters/rig setups, jobs, plans and batches to track asynchronous work. Does not mutate UI or run workflows. |
+| `studio_click` | Activate a visible enabled control: switch workspace, select designs/characters/takes, create/run/cancel design or motion work, hand a mesh to Animator, build/save/reset a fit, refresh readiness, save settings, start ComfyUI, edit/save/apply graphs, run/rerun/cancel/export batches, open import/export dialogs, and use viewport/playback buttons. |
+| `studio_set_value` | Edit briefs/style, sampling, prompts, numeric joint coordinates, node/graph/transition fields, backend paths, file paths and playback ranges through their actual input handlers. |
+| `studio_select` | Choose returned option values for model profiles/weights/encoder, rotation/joint, branch parent, node type, incoming context, connection destination and batch seed variation. |
+| `studio_set_checked` | Set mirrored fitting, isolated T-pose, in-place motion, state looping/entry, batch targets/auto-rig, explicit file overwrite, and the MCP enable toggle (disabling it disconnects the agent). |
+| `studio_press_key` | Focus a returned element and send a single character or navigation key, optionally with Shift/Control/Alt/Meta. |
+| `studio_pointer` | Click, double-click, move or drag within the app: orbit/pan 3D, drag joint gizmos, arrange graph nodes, connect handles, select edges. Coordinates are CSS pixels from `studio_get_ui`; drag accepts a path of points. |
+| `studio_scroll` | Scroll a returned panel ref to reach additional controls. |
+| `studio_wheel` | Send a wheel event at a CSS-pixel point for 3D/graph zoom or ordinary panel scrolling. |
+| `studio_screenshot` | Return the current app content as an MCP PNG image, including canvases and the visible file picker. |
+| `studio_show_window` | Restore/show the actual desktop so the user can watch. |
+
+Start with `studio_get_ui`, then pass an element's returned `ref` to an action. Re-inspect after navigation, modal changes or asynchronous updates; do not invent refs. For example, click the **Designer** tab, fill **Character title**, **Character & scenario** and **Art style**, then click **Create character concept** when enabled. The visible app updates exactly as for manual input. Disabled prerequisites and modal boundaries are enforced rather than bypassed.
+
+With MCP enabled, app file pickers appear as **visible in-app dialogs**. Fill the absolute local file/folder path (one path per line for collections) and click **Use selected paths** or **Save selected file**. The main process checks existing files/folders, supported extensions, collection limits and destination parents before using the existing import/export validation. Overwriting an existing export requires the visible **Replace existing file** checkbox. **Cancel file selection** leaves the existing workflow unchanged. A person can still use **Browse on this PC** for a native picker; the MCP tools do not control that separate OS window. With MCP disabled, new file selections use the normal native dialogs.
+
+Generation, rigging, readiness checks and batch work remain asynchronous. An action result means the control was activated, **not** that the work succeeded. Poll `studio_get_state` and re-inspect visible progress/errors; use the existing **Cancel**/**Cancel design** controls when needed. Existing local ComfyUI, model, GPU, Blender and input-asset prerequisites still apply.
+
+### Trust and limits
+
+Enable this only for agents you trust with **all of the app's local user privileges**: importing local assets, changing backend paths, starting app-owned work, exporting/overwriting selected files, opening the app's fixed external help/download links, and viewing assets/paths in snapshots and screenshots. Loopback is not a sandbox or a per-tool permission system. The bearer file is owner-only on POSIX; on Windows it inherits the data folder's ACL, so keep that folder private. Never publish the connection file or token, forward its port, or expose it through a proxy. Requests require the exact loopback Host and bearer token; browser Origin headers are rejected. Tool arguments are schema-validated. No arbitrary JavaScript, shell, private IPC or general filesystem tools are exposed; Electron context isolation and sandboxing remain enabled.
+
+The server controls **Studio's window only**, not the OS, external browser pages, authentication prompts, ComfyUI's separate UI, or other desktop applications. Model access, downloads and third-party authentication remain subject to the existing manual setup guidance. The user can continue interacting with the same window; coordinate edits to avoid conflicting selections. Turn off **Enable MCP control** to revoke access immediately, including when launched with `--mcp`. A stale connection file after a crash is not a running server; restart Studio rather than reusing its token.
+
+`npm run test:mcp` builds and exercises the real stdio-to-HTTP-to-Electron path in an isolated workspace under ignored `artifacts\mcp-smoke`: visible Designer fields and cancellation, graph edits and dragging, save/import/export with overwrite checks, backend settings and folder selection, stale refs, keyboard/scrolling, screenshots, in-app disable/re-enable with revoked credentials, saved-toggle restoration, cleanup and a default-off launch. It needs no model weights, Blender or third-party character. It does not establish successful learned generation, rigging, motion quality, or cross-platform GUI compatibility.
 
 ## Designer workflow
 
@@ -340,6 +420,7 @@ The actual supplied `Bruiser_base.fbx` has 198,581 vertices and no existing rig.
 npm test
 npm run typecheck
 npm run test:desktop
+npm run test:mcp
 node scripts\designer-smoke.mjs
 node scripts\designer-smoke.mjs --generate
 node scripts\designer-smoke.mjs --textured --input artifacts\designer-smoke\tpose-cutout.png

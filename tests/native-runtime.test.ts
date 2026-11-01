@@ -37,11 +37,12 @@ test('ComfyUI defaults and all Python callers use native paths', () => {
 test('packages include only app files and the target runtime, retaining its licenses', () => {
   const runtime = blenderDistribution('win32', 'arm64').directory
   for (const path of ['', '/out/main/index.js', '/backend/character.py', '/package.json', '/node_modules/react/index.js',
-    '/.tools', `/.tools/${runtime}`, `/.tools/${runtime}/blender.exe`, `/.tools/${runtime}/license/GPL-3.0.txt`])
+    '/scripts', '/scripts/mcp-client.mjs', '/.tools', `/.tools/${runtime}`, `/.tools/${runtime}/blender.exe`, `/.tools/${runtime}/license/GPL-3.0.txt`])
     assert.equal(ignorePackagePath(path, runtime), false, path)
   for (const path of ['/src/main/index.ts', '/tests/fixture.fbx', '/artifacts/private.fbx', '/scripts/setup-blender.ts',
     '/.github/workflows/release.yml', '/release/app.exe', '/.git/config', '/.env', '/.env.local', '/backend/.env',
     '/backend/__pycache__/character.pyc', '/backend/private.log', '/node_modules/.cache/data', '/node_modules/.bin/tsx',
+    '/backend/mcp-connection.json', '/backend/mcp-settings.json', '/node_modules/.mcp-a123.tmp',
     '/.tools/blender-install-temp', `/.tools/${runtime}.zip`, '/.tools/blender-4.5.15-windows-x64/blender.exe'])
     assert.equal(ignorePackagePath(path, runtime), true, path)
   assert.equal(ignorePackagePath(`\\.tools\\${runtime}\\blender.exe`, runtime), false)
