@@ -1,5 +1,6 @@
 export type Vec3 = [number, number, number]
 export type Landmarks = Record<string, Vec3>
+export type SkinningMode = 'automatic' | 'fallback'
 export interface RigSetup {
   rotation: Vec3
   landmarks: Landmarks
@@ -22,6 +23,7 @@ export interface Character {
   setup: RigSetup
   rigged: boolean
   rigPreviewUrl?: string
+  rigWarnings?: string[]
 }
 export type Stage = 'importing' | 'rigging' | 'preflight' | 'queued' | 'generating' | 'retargeting' | 'complete' | 'failed' | 'cancelled'
 export interface Job {
@@ -42,6 +44,7 @@ export interface Job {
   previewUrl?: string
   outputFiles?: string[]
   warnings?: string[]
+  rigFailure?: 'unweighted'
   parentJobId?: string
   label?: string
   batchId?: string
@@ -162,7 +165,7 @@ export interface StudioApi {
   importCharacter(): Promise<Character | null>
   importCollection(): Promise<Character[]>
   saveSetup(id: string, setup: RigSetup): Promise<Character>
-  rig(id: string): Promise<void>
+  rig(id: string, skinning?: SkinningMode): Promise<void>
   generate(request: GenerateRequest): Promise<void>
   cancel(): Promise<void>
   check(): Promise<Check[]>

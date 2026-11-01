@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ArrowDownToLine, ArrowRight, Check as CheckIcon, ChevronDown, CircleAlert, FolderOpen, Layers3, LoaderCircle, Plus, Settings2, ShieldCheck, Sparkles, X, Zap, Box, Bone, SlidersHorizontal, RefreshCw, WandSparkles } from 'lucide-react'
-import type { Character, Check, Job, RigSetup, Settings, Snapshot, Vec3 } from '../shared/types'
+import type { Character, Check, Job, RigSetup, SkinningMode, Settings, Snapshot, Vec3 } from '../shared/types'
 import { Viewport } from './Viewport'
 import { LibraryPanel } from './LibraryPanel'
 import { ModelSetupGuide } from './ModelSetupGuide'
@@ -41,6 +41,8 @@ export function App() {
   const [libraryNew, setLibraryNew] = useState(false)
   const [parentJobId, setParentJobId] = useState('')
   const character = snapshot?.characters.find(c => c.id === characterId)
+  const latestRig = snapshot?.jobs.find(j => j.characterId === characterId && j.kind === 'rig')
+  const skinningFailed = latestRig?.stage === 'failed' && (latestRig.rigFailure === 'unweighted' || latestRig.message.includes('vertices unweighted'))
   const jobs = snapshot?.jobs.filter(j => j.characterId === characterId && j.kind === 'generate') ?? []
   const completed = jobs.filter(j => j.stage === 'complete')
   const output = completed.find(j => j.id === jobId)
@@ -97,12 +99,14 @@ export function App() {
     const updated = await window.studio.saveSetup(character.id, setup)
     setSetup(updated.setup); setDirty(false)
   }
-  async function createRig() {
+  async function createRig(skinning: SkinningMode = 'automatic') {
     if (!character) return
     await perform(async () => {
       if (dirty) await saveFit()
-      await window.studio.rig(character.id)
-      setMode('rig'); setFit(false); setNotice('Skin weights validated. Your character is ready for motion instructions.')
+      await window.studio.rig(character.id, skinning)
+      const updated = await window.studio.snapshot()
+      setSnapshot(updated)
+      setMode('rig'); setFit(false); setNotice('Skin weights validated. Review the rig notes and inspect joint bending before using or exporting motion.')
     })
   }
   async function generate() {
@@ -196,8 +200,10 @@ export function App() {
           <div className="fit-instructions"><strong>Fit in two views</strong><p>Front: hips, knees, shoulders, elbows.<br />Side: joint depth, spine, toes.<br />White joint = selected. Drag its axis handles.</p></div>
           <button className="secondary full" disabled={locked} onClick={() => { setSetup({ ...setup, landmarks: defaultLandmarks() }); setDirty(true) }}><RotateIcon /> Reset landmark template</button>
           {dirty && <button className="text-button full" disabled={locked} onClick={() => void perform(async () => { await saveFit(); setNotice('Fit saved. Rebuild the rig to apply these changes.') })}><CheckIcon size={14} /> Save fit without rigging</button>}
-          <button className="primary full" disabled={locked} onClick={createRig}><Bone size={17} /> {character.rigged && !dirty ? 'Rebuild skin + rig' : 'Build skin + rig'}<ArrowRight size={17} /></button>
-          <p className="fine-print">Real Blender bone-heat weights, not a skeleton overlay. Body rig only; fingers and face are not auto-rigged.</p>
+          {skinningFailed && <div className="fit-instructions" role="status"><strong>Some vertices could not be attached</strong><p>Your fitted points are saved. Adjust them and rebuild, or accept them below to try approximate fallback weights. No incomplete rig is accepted.</p></div>}
+          <button className="primary full" disabled={locked} onClick={() => void createRig()}><Bone size={17} /> {character.rigged && !dirty ? 'Rebuild skin + rig' : 'Build skin + rig'}<ArrowRight size={17} /></button>
+          <button className="secondary full" disabled={locked} onClick={() => void createRig('fallback')}><CheckIcon size={17} /> Accept points + fallback skinning</button>
+          <p className="fine-print">Both actions keep your joint positions. Build automatically repairs missing weights along connected surfaces. Fallback also attaches remaining vertices to nearby fitted bones; touching limbs or separate pieces may bend incorrectly. Complete weights are still required. Body only, not fingers or face.</p>
         </> : <>
           <div className="section-kicker">03 / DIRECT THE MOTION</div><h2>What’s the move?</h2><p className="panel-description">Describe a movement. Kimodo generates the motion; Blender applies it to your character.</p>
           <label htmlFor="motion-prompt" className="field-label">Motion instructions <Sparkles size={13} /></label>
@@ -214,6 +220,7 @@ export function App() {
           {character?.rigged && !dirty && <button className="text-button full" disabled={locked} onClick={() => { setFit(true); setMode('input') }}><Bone size={14} /> Adjust rig fit</button>}
           {!!blocked.length && <button className="setup-warning" onClick={() => setSettingsOpen(true)}><CircleAlert size={16} /><span>{blocked.some(c => c.name.includes('text encoder')) ? 'Set up the local text encoder' : `${blocked.length} backend check${blocked.length > 1 ? 's' : ''} need attention`}<small>Review setup before generation <ArrowRight size={11} /></small></span></button>}
         </>}
+        {!!character?.rigWarnings?.length && <details className="warnings" open><summary>Rig notes <ChevronDown size={13} /></summary>{character.rigWarnings.map(w => <p key={w}>{w}</p>)}</details>}
         {!!character?.warnings.length && <details className="warnings"><summary>Import notes <ChevronDown size={13} /></summary>{character.warnings.map(w => <p key={w}>{w}</p>)}</details>}
         <div className="output-section">
           <div className="section-kicker">EXPORT CHARACTER</div>

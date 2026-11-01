@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test tests/*.test.ts",
     "test:desktop": "node scripts/desktop-smoke.mjs",
+    "test:rigging": "node --import tsx scripts/test-rigging.ts",
     "setup:blender": "node --import tsx scripts/setup-blender.ts",
     "package": "npm run build && node --import tsx scripts/package.ts",
     "package:app": "node --import tsx scripts/package.ts"
