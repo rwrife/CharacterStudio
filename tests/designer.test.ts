@@ -5,15 +5,17 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
+import { crc32, deflateSync } from 'node:zlib'
 import { Studio } from '../src/main/studio'
-import { designConfigSchema, designRequestSchema, checkDesignBudget, designOutputPath, runDesignWorkflow } from '../src/main/designer'
-import { imageWorkflow, meshWorkflow } from '../src/main/design-workflows'
+import { designConfigSchema, designRequestSchema, designImportSchema, checkDesignBudget, designOutputPath, runDesignWorkflow } from '../src/main/designer'
+import { imageWorkflow, meshWorkflow, tposeWorkflow } from '../src/main/design-workflows'
 import type { DesignerConfig, DesignRequest, DesignerReadiness } from '../src/shared/designer'
+import { meshTextureProfile, tposeEditPrompt } from '../src/shared/designer'
 import { validateCutout } from '../src/main/image-validation'
 
-const config: DesignerConfig = { imageProfile: 'sd15', checkpoint: 'DreamShaper_8.safetensors', controlnet: 'control_sd15_openpose.safetensors', meshProfile: 'mini', meshCheckpoint: 'hunyuan3d-dit-v2-mini.safetensors', titleModel: '', backgroundModel: 'birefnet.safetensors' }
+const config: DesignerConfig = { imageProfile: 'sd15', checkpoint: 'DreamShaper_8.safetensors', controlnet: 'control_sd15_openpose.safetensors', meshProfile: 'mini', meshCheckpoint: 'hunyuan3d-dit-v2-mini.safetensors', titleModel: '', backgroundModel: 'birefnet.safetensors', editModel: 'flux-2-klein-4b-fp8.safetensors', editTextEncoder: 'qwen_3_4b.safetensors', editVae: 'flux2-vae.safetensors' }
 const request: DesignRequest = { title: 'Jungle Champion', description: 'A Brazilian MMA fighter raised in the jungles of Brazil', style: 'A 90s video game character with vibrant colors and exaggerated upper-body muscles', seed: 42, steps: 20, referenceStrength: 0.3 }
-const readiness: DesignerReadiness = { devices: [{ name: 'Test GPU', freeGB: 12, totalGB: 16 }], checkpoints: [config.checkpoint, config.meshCheckpoint], controlnets: [config.controlnet], titleModels: [], ipadapters: [], clipVision: [], backgroundModels: ['birefnet.safetensors'] }
+const readiness: DesignerReadiness = { devices: [{ name: 'Test GPU', freeGB: 12, totalGB: 16 }], checkpoints: [config.checkpoint, config.meshCheckpoint], controlnets: [config.controlnet], titleModels: [], ipadapters: [], clipVision: [meshTextureProfile.vision], backgroundModels: ['birefnet.safetensors'], diffusionModels: [config.editModel!, meshTextureProfile.model], textEncoders: [config.editTextEncoder!], vaes: [config.editVae!, meshTextureProfile.shapeVae, meshTextureProfile.textureVae] }
 
 test('scene workflow carries both descriptions and an optional actual image input', () => {
   const text = imageWorkflow(config, request, 'concept')
@@ -28,31 +30,42 @@ test('scene workflow carries both descriptions and an optional actual image inpu
   assert.equal(image['5'].inputs.denoise, 0.7)
 })
 
-test('T-pose workflow consumes the completed scene and pose ControlNet, preserving model family', () => {
-  const graph = imageWorkflow({ ...config, imageProfile: 'sdxl' }, request, 'pose', 'scene.png', 'pose-map.png')
-  assert.equal(graph['9'].inputs.width, 1024)
-  assert.equal(graph['8'].inputs.image, 'scene.png')
-  assert.equal(graph['10'].inputs.image, 'pose-map.png')
-  assert.equal(graph['11'].inputs.control_net_name, config.controlnet)
-  assert.deepEqual(graph['5'].inputs.positive, ['12', 0])
-  assert.deepEqual(graph['5'].inputs.negative, ['12', 1])
-  assert.match(String(graph['2'].inputs.text), /plain pure white background/)
-  assert.match(String(graph['2'].inputs.text), /straight horizontal arms/)
+test('T-pose uses actual scene latents and an edit-only instruction, never the character/style brief', () => {
+  const graph = tposeWorkflow(config, request, 'pose', 'scene.png')
+  assert.equal(graph['4'].inputs.image, 'scene.png')
+  assert.deepEqual(graph['6'].inputs.pixels, ['5', 0])
+  assert.deepEqual(graph['10'].inputs.latent, ['6', 0])
+  assert.deepEqual(graph['11'].inputs.latent, ['6', 0])
+  assert.deepEqual(graph['12'].inputs.positive, ['10', 0])
+  assert.deepEqual(graph['12'].inputs.negative, ['11', 0])
+  assert.equal(graph['8'].inputs.text, tposeEditPrompt)
+  assert.match(tposeEditPrompt, /^Put this character in a T-pose, remove the background, only show the character\./)
+  assert.match(String(graph['8'].inputs.text), /Both hands flat with palms facing down, fingers straight and held together side by side/)
+  assert.match(String(graph['8'].inputs.text), /thumbs resting naturally alongside/)
+  assert.match(String(graph['8'].inputs.text), /No splayed or curled fingers and no fists/)
+  assert.equal(JSON.stringify(graph).includes(request.description), false)
+  assert.equal(JSON.stringify(graph).includes(request.style), false)
+  assert.equal(graph['14'].inputs.steps, 4)
+  assert.equal(graph['12'].inputs.cfg, 1)
+  assert.equal(graph['2'].inputs.type, 'flux2')
+  assert.equal(graph['21'].inputs.noise_seed, request.seed)
+  assert.ok(Object.values(graph).every(node => !/ControlNet|IPAdapter|CheckpointLoaderSimple/.test(node.class_type)))
   assert.equal(graph['16'].class_type, 'LoadBackgroundRemovalModel')
   assert.equal(graph['17'].class_type, 'RemoveBackground')
   assert.equal(graph['18'].class_type, 'InvertMask')
   assert.deepEqual(graph['19'].inputs.alpha, ['18', 0])
   assert.deepEqual(graph['7'].inputs.images, ['19', 0])
-  assert.throws(() => imageWorkflow({ ...config, backgroundModel: '' }, request, 'pose', 'scene.png', 'pose.png'), /background-removal weights/)
+  assert.throws(() => tposeWorkflow({ ...config, backgroundModel: '' }, request, 'pose', 'scene.png'), /background-removal weights/)
+  assert.throws(() => tposeWorkflow({ ...config, editModel: '' }, request, 'pose', 'scene.png'), /editing requires/)
 })
 
 test('identity adapter consumes the actual reference without reusing its scene latent', () => {
-  const graph = imageWorkflow({ ...config, ipadapter: 'plus_sd15.safetensors', clipVision: 'vision.safetensors' }, request, 'pose', 'scene.png', 'pose-map.png')
+  const graph = imageWorkflow({ ...config, ipadapter: 'plus_sd15.safetensors', clipVision: 'vision.safetensors' }, request, 'scene', 'reference.png')
   assert.equal(graph['4'].class_type, 'EmptyLatentImage')
   assert.equal(graph['5'].inputs.denoise, 1)
   assert.deepEqual(graph['5'].inputs.model, ['15', 0])
   assert.deepEqual(graph['15'].inputs.image, ['9', 0])
-  assert.equal(graph['8'].inputs.image, 'scene.png')
+  assert.equal(graph['8'].inputs.image, 'reference.png')
   assert.equal(graph['15'].inputs.weight, 0.6)
 })
 
@@ -85,6 +98,31 @@ test('cutout validation rejects opaque backgrounds, empty masks and cropped fore
   assert.throws(() => validateCutout(bitmap, 100, 100), /touches the image border/)
 })
 
+test('textured generation conditions on foreground and shares shape, UV mesh and texture maps', () => {
+  const graph = meshWorkflow(designConfigSchema.parse({ ...config, meshProfile: 'textured' }), request, 'textured', 'pose.png')
+  assert.equal(graph['2'].inputs.image, 'pose.png')
+  assert.deepEqual(graph['6'].inputs.mask, ['2', 1])
+  assert.deepEqual(graph['7'].inputs.masks, ['6', 0])
+  assert.equal(graph['7'].inputs.background, '#000000')
+  assert.equal(graph['7'].inputs.pad_factor, 1)
+  assert.deepEqual(graph['21'].inputs.shape_latent, ['19', 0])
+  assert.deepEqual(graph['23'].inputs.shape_subdivides, ['20', 1])
+  assert.equal(graph['25'].class_type, 'UnwrapMesh')
+  assert.deepEqual(graph['26'].inputs.mesh, graph['27'].inputs.mesh)
+  assert.deepEqual(graph['27'].inputs.base_color, ['26', 0])
+  assert.deepEqual(graph['27'].inputs.metallic, ['26', 1])
+  assert.deepEqual(graph['27'].inputs.roughness, ['26', 2])
+  assert.equal(graph['26'].inputs.texture_size, 1024)
+  assert.equal(graph['24'].inputs.target_face_count, 50000)
+  assert.deepEqual(graph['24'].inputs.mesh, ['29', 0])
+  assert.equal(graph['29'].class_type, 'RemeshMesh')
+  assert.deepEqual(graph['29'].inputs.mesh, ['20', 0])
+  assert.equal(graph['29'].inputs.sign_mode, 'solid')
+  assert.equal(graph['29'].inputs.resolution, 512)
+  assert.deepEqual(graph['9'].inputs.mesh, ['28', 0])
+  assert.ok(Object.values(graph).every(node => !/Api|Hunyuan|Download/.test(node.class_type)))
+})
+
 test('design IPC schemas reject invalid values, arbitrary keys and missing descriptions', () => {
   assert.deepEqual(designRequestSchema.parse(request), request)
   assert.throws(() => designRequestSchema.parse({ ...request, description: '' }))
@@ -93,6 +131,10 @@ test('design IPC schemas reject invalid values, arbitrary keys and missing descr
   assert.throws(() => designRequestSchema.parse({ ...request, seed: -1 }))
   assert.throws(() => designRequestSchema.parse({ ...request, referenceStrength: 0.99 }))
   assert.throws(() => designConfigSchema.parse({ ...config, inferenceUrl: 'https://example.com' }))
+  const migrated = designConfigSchema.parse({ ...config, editModel: undefined, editTextEncoder: undefined, editVae: undefined })
+  assert.equal(migrated.editModel, 'flux-2-klein-4b-fp8.safetensors')
+  assert.equal(migrated.editTextEncoder, 'qwen_3_4b.safetensors')
+  assert.equal(designConfigSchema.parse({ ...config, editModel: '' }).editModel, '')
 })
 
 test('VRAM budgets use free memory on one GPU, not aggregate or total capacity', () => {
@@ -122,12 +164,16 @@ async function fixture(t: TestContext) {
   const output = join(root, 'comfy-output')
   await mkdir(output)
   await writeFile(join(output, 'image.png'), 'TEST-ONLY image bytes')
-  let promptId = '', cancelled = '', pending = false, failed = false, missingOutput = false
+  let promptId = '', cancelled = '', pending = false, failed = false, missingOutput = false, textured = false
   let filename = ''
   const submissions: Record<string, unknown>[] = []
+  const uploads: { name: string; body: string }[] = []
+  const decoded: { file: string; cutout?: boolean; squareSize?: number }[] = []
   const catalog = Object.fromEntries([
     ...Object.values(imageWorkflow(config, request, 'test')),
-    ...Object.values(imageWorkflow(config, request, 'test', 'ref.png', 'pose.png'))
+    ...Object.values(tposeWorkflow(config, request, 'test', 'ref.png')),
+    ...Object.values(meshWorkflow(config, request, 'test', 'pose.png')),
+    ...Object.values(meshWorkflow(designConfigSchema.parse({ ...config, meshProfile: 'textured' }), request, 'test', 'pose.png'))
   ].map(n => [n.class_type, { input: {} }]))
   const server = createServer(async (req, res) => {
     res.setHeader('Content-Type', 'application/json')
@@ -137,11 +183,19 @@ async function fixture(t: TestContext) {
     if (req.url === '/prompt') {
       const body = JSON.parse(raw)
       promptId = body.prompt_id; submissions.push(body)
-      filename = body.prompt['7'].inputs.filename_prefix + '_00001_.png'
-      await copyFile(join(output, 'image.png'), join(output, filename))
+      const model = !!body.prompt['9'] && body.prompt['9'].class_type === 'SaveGLB'
+      filename = body.prompt[model ? '9' : '7'].inputs.filename_prefix + (model ? '_00001_.glb' : '_00001_.png')
+      if (model) await writeFile(join(output, filename), meshFixture(textured))
+      else await copyFile(join(output, 'image.png'), join(output, filename))
       res.end(JSON.stringify({ prompt_id: promptId }))
     } else if (req.url === `/history/${promptId}`) {
-      res.end(JSON.stringify(pending ? {} : { [promptId]: { status: { completed: !failed, status_str: failed ? 'error' : 'success', messages: failed ? [['execution_error', { node_type: 'KSampler', exception_message: 'Test GPU OOM' }]] : [] }, outputs: missingOutput ? {} : { '7': { images: [{ filename, subfolder: '', type: 'output' }] } } } }))
+      const model = filename.endsWith('.glb')
+      res.end(JSON.stringify(pending ? {} : { [promptId]: { status: { completed: !failed, status_str: failed ? 'error' : 'success', messages: failed ? [['execution_error', { node_type: 'KSampler', exception_message: 'Test GPU OOM' }]] : [] }, outputs: missingOutput ? {} : { [model ? '9' : '7']: { [model ? '3d' : 'images']: [{ filename, subfolder: '', type: 'output' }] } } } }))
+    } else if (req.url === '/upload/image') {
+      const name = /filename="([^"]+)"/.exec(raw)?.[1]
+      assert.ok(name)
+      uploads.push({ name, body: raw })
+      res.end(JSON.stringify({ name, subfolder: '', type: 'input' }))
     } else if (req.url === `/api/jobs/${promptId}/cancel`) { cancelled = promptId; res.end('{}') }
     else { res.statusCode = 404; res.end('{}') }
   })
@@ -151,13 +205,184 @@ async function fixture(t: TestContext) {
   const address = server.address()
   assert.ok(address && typeof address !== 'string')
   const base = `http://127.0.0.1:${address.port}`
-  const studio = new Studio(root, resolve('.'), async () => Buffer.from('decoded TEST-ONLY image'))
-  studio.saveSettings({ ...studio.snapshot().settings, comfyUrl: base, comfyOutput: output })
+  const studio = new Studio(root, resolve('.'), async (file, cutout, squareSize) => {
+    decoded.push({ file, cutout, squareSize })
+    return Buffer.from(squareSize ? 'square-padded TEST-ONLY image' : 'decoded TEST-ONLY image')
+  })
+  studio.saveSettings({ ...studio.snapshot().settings, comfyUrl: base, comfyOutput: output, comfyRoot: root })
   studio.designer.saveSettings(config)
-  studio.designer.readiness = async () => readiness
-  return { root, base, studio, submissions, catalog, cancelled: () => cancelled, promptId: () => promptId,
-    setPending: () => { pending = true }, setFailed: () => { failed = true }, setMissing: () => { missingOutput = true } }
+  studio.designer.readiness = async () => ({ ...readiness, devices: [{ name: 'Test GPU', freeGB: 24, totalGB: 32 }] })
+  return { root, base, studio, submissions, catalog, uploads, decoded, cancelled: () => cancelled, promptId: () => promptId,
+    setPending: () => { pending = true }, setFailed: () => { failed = true }, setMissing: () => { missingOutput = true },
+    setTextured: () => { textured = true } }
 }
+
+function meshFixture(textured = false): Buffer {
+  const pngChunk = (type: string, data: Buffer) => {
+    const bytes = Buffer.alloc(data.length + 12)
+    bytes.writeUInt32BE(data.length); bytes.write(type, 4); data.copy(bytes, 8)
+    bytes.writeUInt32BE(crc32(bytes.subarray(4, -4)), bytes.length - 4)
+    return bytes
+  }
+  const header = Buffer.alloc(13)
+  header.writeUInt32BE(1024); header.writeUInt32BE(1024, 4); header[8] = 8; header[9] = 2
+  const png = textured ? Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), pngChunk('IHDR', header),
+    pngChunk('IDAT', deflateSync(Buffer.alloc(1024 * (1024 * 3 + 1)))), pngChunk('IEND', Buffer.alloc(0))]) : Buffer.alloc(0)
+  const binaryLength = textured ? Math.ceil((60 + png.length) / 4) * 4 : 36
+  const json = JSON.stringify({
+    asset: { version: '2.0' }, buffers: [{ byteLength: binaryLength }],
+    bufferViews: [{ buffer: 0, byteLength: 36 }, ...(textured ? [{ buffer: 0, byteOffset: 36, byteLength: 24 }, { buffer: 0, byteOffset: 60, byteLength: png.length }] : [])],
+    accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: 'VEC3' }, ...(textured ? [{ bufferView: 1, componentType: 5126, count: 3, type: 'VEC2' }] : [])],
+    nodes: [{ mesh: 0 }], meshes: [{ primitives: [{ attributes: { POSITION: 0, ...(textured ? { TEXCOORD_0: 1 } : {}) }, ...(textured ? { material: 0 } : {}) }] }],
+    ...(textured ? { materials: [{ pbrMetallicRoughness: { baseColorTexture: { index: 0 }, metallicRoughnessTexture: { index: 0 } } }],
+      textures: [{ source: 0 }], images: [{ bufferView: 2, mimeType: 'image/png' }] } : {})
+  })
+  const chunk = Buffer.from(json.padEnd(Math.ceil(json.length / 4) * 4))
+  const bytes = Buffer.alloc(28 + chunk.length + binaryLength)
+  bytes.writeUInt32LE(0x46546c67, 0); bytes.writeUInt32LE(2, 4); bytes.writeUInt32LE(bytes.length, 8)
+  bytes.writeUInt32LE(chunk.length, 12); bytes.writeUInt32LE(0x4e4f534a, 16); chunk.copy(bytes, 20)
+  bytes.writeUInt32LE(binaryLength, 20 + chunk.length); bytes.writeUInt32LE(0x004e4942, 24 + chunk.length)
+  if (textured) png.copy(bytes, 28 + chunk.length + 60)
+  return bytes
+}
+
+test('completed textured models retain material metadata, provenance and bytes across restart and import', async t => {
+  const { root, studio, setTextured } = await fixture(t)
+  setTextured()
+  studio.designer.saveSettings({ ...config, meshProfile: 'textured' })
+  const file = join(root, 'pose.png')
+  await writeFile(file, 'TEST-ONLY cutout')
+  const id = await studio.designer.importStage(file, { stage: 'tpose', brief: request, isolated: true })
+  await studio.designer.run(id, 'model')
+  const generated = studio.designer.snapshot().designs[0]
+  assert.equal(generated.status, 'idle')
+  assert.equal(generated.modelTextured, true)
+  assert.deepEqual(generated.sources?.model, { kind: 'generated', input: 'tpose' })
+  assert.deepEqual(await readFile(studio.designer.output(id, 'model')), meshFixture(true))
+  const restarted = new Studio(root, resolve('.')).designer
+  assert.equal(restarted.snapshot().designs[0].modelTextured, true)
+  assert.ok(restarted.snapshot().designs[0].modelUrl)
+  await assert.rejects(restarted.run(id, 'model'), /already complete/)
+  const imported = await restarted.importStage(restarted.output(id, 'model'), { stage: 'model', brief: request, isolated: false })
+  assert.notEqual(imported, id)
+  assert.equal(restarted.snapshot().designs[0].modelTextured, true)
+  assert.equal(restarted.snapshot().designs[0].sources?.model?.kind, 'imported')
+  assert.deepEqual(await readFile(restarted.output(imported, 'model')), meshFixture(true))
+})
+
+test('textured stages fail without matching weights or actual textures, preserving their T-pose', async t => {
+  const { root, studio, submissions } = await fixture(t)
+  const file = join(root, 'pose.png')
+  await writeFile(file, 'TEST-ONLY cutout')
+  const id = await studio.designer.importStage(file, { stage: 'tpose', brief: request, isolated: true })
+  studio.designer.saveSettings({ ...config, meshProfile: 'textured', meshTextureModel: 'missing.safetensors' })
+  await assert.rejects(studio.designer.run(id, 'model'), /Textured generation requires installed/)
+  assert.equal(submissions.length, 0)
+  studio.designer.saveSettings({ ...config, meshProfile: 'textured' })
+  await assert.rejects(studio.designer.run(id, 'model'), /without base-color textures/)
+  const design = studio.designer.snapshot().designs[0]
+  assert.equal(design.status, 'failed')
+  assert.equal(design.modelUrl, undefined)
+  assert.equal(design.modelTextured, undefined)
+  assert.ok(design.tposeUrl)
+})
+
+test('stage import schemas allow absent descriptions without weakening generated concept validation', () => {
+  const brief = { ...request, title: '', description: '', style: '' }
+  for (const stage of ['scene', 'tpose', 'model']) assert.ok(designImportSchema.parse({ stage, brief, isolated: false }))
+  assert.throws(() => designRequestSchema.parse(brief))
+  assert.throws(() => designImportSchema.parse({ stage: 'scene', brief, isolated: true }))
+  assert.throws(() => designImportSchema.parse({ stage: 'invalid', brief, isolated: false }))
+  assert.throws(() => designImportSchema.parse({ stage: 'tpose', brief, isolated: true, file: '..\\secret' }))
+})
+
+test('external scene imports preserve originals, start new designs and use current edit settings', async t => {
+  const { root, studio, submissions, uploads } = await fixture(t)
+  const original = join(root, 'external-scene.png')
+  await writeFile(original, 'external source image')
+  studio.designer.saveSettings({ ...config, checkpoint: '', editModel: '' })
+  const id = await studio.designer.importStage(original, { stage: 'scene', brief: { ...request, title: '', description: '', style: '' }, isolated: false })
+  assert.equal(studio.designer.title(id), 'external-scene')
+  assert.equal(await readFile(join(root, 'designs', id, 'original-scene.png'), 'utf8'), 'external source image')
+  assert.equal(submissions.length, 0)
+  studio.designer.saveSettings(config)
+  await studio.designer.run(id, 'tpose')
+  assert.equal(studio.designer.snapshot().designs[0].config.editModel, config.editModel)
+  assert.ok(studio.designer.snapshot().designs[0].tposeUrl)
+  const edit = JSON.parse(await readFile(join(root, 'designs', id, 'tpose-workflow.json'), 'utf8'))
+  assert.equal(edit.workflow['4'].inputs.image, uploads[0].name)
+  assert.ok(uploads[0].body.includes(await readFile(studio.designer.output(id, 'scene'), 'utf8')))
+  assert.equal(edit.input.file, 'scene.png')
+  const duplicate = await studio.designer.importStage(original, { stage: 'scene', brief: request, isolated: false })
+  assert.notEqual(duplicate, id)
+  await assert.rejects(studio.designer.run(id, 'scene'), /already complete/)
+  const restarted = new Studio(root, resolve('.')).designer.snapshot()
+  assert.equal(restarted.designs.find(d => d.id === id)?.sources?.scene?.kind, 'imported')
+})
+
+test('missing editing weights never silently fall back to an SD redraw', async t => {
+  const { root, studio, submissions } = await fixture(t)
+  const file = join(root, 'scene.png')
+  await writeFile(file, 'TEST-ONLY scene')
+  const id = await studio.designer.importStage(file, { stage: 'scene', brief: request, isolated: false })
+  studio.designer.saveSettings({ ...config, editModel: '' })
+  await assert.rejects(studio.designer.run(id, 'tpose'), /does not fall back/)
+  assert.equal(submissions.length, 0)
+  assert.ok(studio.designer.snapshot().designs[0].sceneUrl)
+  assert.equal(studio.designer.snapshot().designs[0].tposeUrl, undefined)
+})
+
+test('imported opaque T-pose skips scene and pose generation, then passes its actual cutout to 3D', async t => {
+  const { root, studio, uploads, decoded } = await fixture(t)
+  const file = join(root, 'external-pose.png')
+  await writeFile(file, 'external opaque T-pose')
+  studio.designer.saveSettings({ ...config, checkpoint: '', controlnet: '' })
+  const id = await studio.designer.importStage(file, { stage: 'tpose', brief: { ...request, description: '', style: '' }, isolated: false })
+  await assert.rejects(studio.designer.run(id, 'model'), /isolated transparent/)
+  await studio.designer.run(id, 'tpose')
+  const cleanup = JSON.parse(await readFile(join(root, 'designs', id, 'tpose-workflow.json'), 'utf8'))
+  assert.ok(!Object.values(cleanup.workflow).some((node: unknown) => (node as { class_type: string }).class_type === 'KSampler'))
+  assert.equal(cleanup.input.file, 'tpose.png')
+  assert.equal(cleanup.workflow['1'].inputs.image, uploads[0].name)
+  assert.ok(uploads[0].body.includes(await readFile(join(root, 'designs', id, 'tpose.png'), 'utf8')))
+  await studio.designer.run(id, 'model')
+  const model = JSON.parse(await readFile(join(root, 'designs', id, 'model-workflow.json'), 'utf8'))
+  assert.equal(model.input.file, 'tpose-cutout.png')
+  assert.equal(model.workflow['2'].inputs.image, uploads[1].name)
+  assert.ok(uploads[1].body.includes(await readFile(join(root, 'designs', id, 'model-input.png'), 'utf8')))
+  assert.ok(decoded.some(d => d.file.endsWith('tpose-cutout.png') && d.cutout && d.squareSize === 512))
+  const design = studio.designer.snapshot().designs[0]
+  assert.equal(design.sceneUrl, undefined)
+  assert.ok(design.modelUrl)
+  assert.equal(design.sources?.tpose?.kind, 'imported')
+  assert.deepEqual(design.sources?.model, { kind: 'generated', input: 'tpose' })
+  assert.equal(await readFile(join(root, 'designs', id, 'original-tpose.png'), 'utf8'), 'external opaque T-pose')
+  await assert.rejects(studio.designer.run(id, 'scene'), /later stage/)
+  await assert.rejects(studio.designer.run(id, 'model'), /already complete/)
+})
+
+test('transparent T-pose and embedded GLB imports bypass irrelevant generation prerequisites', async t => {
+  const { root, studio, submissions, decoded } = await fixture(t)
+  const image = join(root, 'cutout.png'), mesh = join(root, 'external.glb')
+  await writeFile(image, 'TEST-ONLY transparent image')
+  await writeFile(mesh, meshFixture())
+  const blank = { ...request, title: '', description: '', style: '' }
+  const pose = await studio.designer.importStage(image, { stage: 'tpose', brief: blank, isolated: true })
+  assert.ok(decoded.some(d => d.file === join(root, 'designs', pose, 'original-tpose.png') && d.cutout))
+  await studio.designer.run(pose, 'model')
+  assert.equal(submissions.length, 1)
+  const id = await studio.designer.importStage(mesh, { stage: 'model', brief: blank, isolated: false })
+  assert.deepEqual(await readFile(studio.designer.output(id, 'model')), meshFixture())
+  assert.equal(studio.designer.snapshot().designs[0].tposeUrl, undefined)
+  assert.equal(submissions.length, 1)
+  await writeFile(mesh, 'not a GLB')
+  const count = studio.designer.snapshot().designs.length
+  await assert.rejects(studio.designer.importStage(mesh, { stage: 'model', brief: blank, isolated: false }), /complete binary glTF/)
+  assert.equal(studio.designer.snapshot().designs.length, count)
+  const rejecting = new Studio(join(root, 'rejecting'), resolve('.'), async () => { throw new Error('Invalid cutout') })
+  await assert.rejects(rejecting.designer.importStage(image, { stage: 'tpose', brief: blank, isolated: true }), /Invalid cutout/)
+  assert.equal(rejecting.designer.snapshot().designs.length, 0)
+})
 
 test('completed stages, briefs and settings persist without overwriting completed results', async t => {
   const { root, studio, submissions } = await fixture(t)

@@ -6,7 +6,8 @@ import { pathToFileURL } from 'node:url'
 import { Studio } from './studio'
 import { errorText } from './validation'
 import type { GenerateRequest, RigSetup, Settings, MotionPlan, BatchRequest } from '../shared/types'
-import type { DesignRequest, DesignerConfig, DesignStage } from '../shared/designer'
+import type { DesignRequest, DesignerConfig, DesignStage, DesignImportRequest } from '../shared/designer'
+import { designImportSchema } from './designer'
 import { validateCutout } from './image-validation'
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'studio', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }])
@@ -26,12 +27,21 @@ app.on('second-instance', () => {
 })
 
 if (ownsWorkspace) app.whenReady().then(async () => {
-  studio = new Studio(app.getPath('userData'), app.getAppPath(), async (file, cutout) => {
+  studio = new Studio(app.getPath('userData'), app.getAppPath(), async (file, cutout, squareSize) => {
     if ((await stat(file)).size > 20 * 1024 * 1024) throw new Error('Reference image exceeds 20 MB.')
     const image = nativeImage.createFromBuffer(await readFile(file))
     const { width, height } = image.getSize()
     if (image.isEmpty() || !width || !height || width * height > 32_000_000) throw new Error('Reference image is invalid or exceeds 32 megapixels.')
     if (cutout) validateCutout(image.toBitmap(), width, height)
+    if (squareSize) {
+      const inner = squareSize - Math.ceil(squareSize * 0.08)
+      const scaled = image.resize(width >= height ? { width: inner, quality: 'best' } : { height: inner, quality: 'best' })
+      const dimensions = scaled.getSize()
+      const source = scaled.toBitmap(), canvas = Buffer.alloc(squareSize * squareSize * 4)
+      const left = Math.floor((squareSize - dimensions.width) / 2), top = Math.floor((squareSize - dimensions.height) / 2)
+      for (let y = 0; y < dimensions.height; y++) source.copy(canvas, ((top + y) * squareSize + left) * 4, y * dimensions.width * 4, (y + 1) * dimensions.width * 4)
+      return nativeImage.createFromBitmap(canvas, { width: squareSize, height: squareSize }).toPNG()
+    }
     return image.toPNG()
   })
   protocol.handle('studio', async request => {
@@ -65,6 +75,15 @@ if (ownsWorkspace) app.whenReady().then(async () => {
   handle('designer:readiness', () => studio.designer.readiness())
   handle('designer:settings', (config: DesignerConfig) => studio.designer.saveSettings(config))
   handle('designer:create', (request: DesignRequest) => studio.designer.create(request))
+  handle('designer:import', async (value: DesignImportRequest) => {
+    const request = designImportSchema.parse(value)
+    const result = await dialog.showOpenDialog(window, {
+      title: request.stage === 'scene' ? 'Use an existing scene reference' : request.stage === 'tpose' ? 'Use an existing T-pose reference' : 'Use an existing 3D GLB mesh',
+      properties: ['openFile'],
+      filters: request.stage === 'model' ? [{ name: 'Embedded GLB mesh', extensions: ['glb'] }] : [{ name: 'Character image', extensions: ['png', 'jpg', 'jpeg', 'webp'] }]
+    })
+    return result.canceled ? null : studio.designer.importStage(result.filePaths[0], request)
+  })
   handle('designer:run', (id: string, stage: DesignStage) => studio.designer.run(id, stage))
   handle('designer:cancel', () => studio.designer.cancel())
   handle('designer:animate', (id: string) => studio.importDesign(id))

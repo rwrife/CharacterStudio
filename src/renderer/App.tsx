@@ -122,7 +122,7 @@ export function App() {
   ]
   return <div className="app">
     <header className="topbar">
-      <div className="brand"><span className="brand-mark"><svg viewBox="-44 -30 152 200" width="26" height="28" fill="none" stroke="currentColor" strokeWidth="8.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={humanOutline} transform="translate(-34 -22)" fill="var(--lime)" strokeOpacity={0.46} /><path d={humanOutline} transform="translate(-17 -11)" fill="var(--lime)" strokeOpacity={0.74} /><path d={humanOutline} fill="var(--lime)" /></svg></span><div className="brand-name"><strong>character<span>studio</span></strong><span className="version" title="Character inference runs locally through ComfyUI.">powered by ComfyUI</span></div></div>
+      <div className="brand"><span className="brand-mark"><svg viewBox="-44 -30 152 200" width="26" height="28" fill="none" stroke="currentColor" strokeWidth="8.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={humanOutline} transform="translate(-34 -22)" fill="var(--lime)" strokeOpacity={0.46} /><path d={humanOutline} transform="translate(-17 -11)" fill="var(--lime)" strokeOpacity={0.74} /><path d={humanOutline} fill="var(--lime)" /></svg></span><div className="brand-name"><strong>character<span>studio</span></strong></div></div>
       <nav className="workspace-tabs" role="tablist" aria-label="Character workspace" onKeyDown={event => {
         if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
         event.preventDefault()

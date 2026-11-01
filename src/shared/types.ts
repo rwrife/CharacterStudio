@@ -149,6 +149,7 @@ export interface StudioApi {
   designerSettings(config: import('./designer').DesignerConfig): Promise<void>
   designerReference(): Promise<import('./designer').DesignReference | null>
   designerCreate(request: import('./designer').DesignRequest): Promise<string>
+  designerImport(request: import('./designer').DesignImportRequest): Promise<string | null>
   designerRun(id: string, stage: import('./designer').DesignStage): Promise<void>
   designerCancel(): Promise<void>
   designerExport(id: string, stage: import('./designer').DesignStage): Promise<string | null>
