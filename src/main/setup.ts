@@ -6,8 +6,8 @@ import { z } from 'zod'
 import type { DesignerConfig } from '../shared/designer'
 import type { Settings } from '../shared/types'
 import {
-  formatBytes, modelUrl, setupLinks, setupModel, setupModels, summarizeSetup,
-  type SetupActionId, type SetupItem, type SetupItemId, type SetupModel, type SetupReport, type SetupState, type SetupTask
+  formatBytes, launchIssues, modelUrl, setupLinks, setupModel, setupModels, summarizeSetup,
+  type LaunchCheck, type SetupActionId, type SetupItem, type SetupItemId, type SetupModel, type SetupReport, type SetupState, type SetupTask
 } from '../shared/setup'
 import { api } from './comfy'
 import { downloadVerified, ensureSpace, freeBytes } from './download'
@@ -19,6 +19,8 @@ export interface SetupHost {
   root: string
   appRoot: string
   firstLaunch: boolean
+  /** Suppresses launch-time prompts (used by automated smoke checks). */
+  quietLaunch?: boolean
   settings(): Settings
   saveSettings(value: Settings): Settings
   startComfy(): Promise<void>
@@ -33,10 +35,15 @@ export interface SetupHost {
 interface StoredSetup {
   showOnLaunch: boolean
   completedAt?: string
+  checkOnLaunch?: boolean
+  ignoredAtLaunch?: SetupItemId[]
   llama?: { status: 'ready' | 'warning' | 'blocked'; detail: string; checkedAt: string }
 }
+const itemIdSchema = z.string().regex(/^(system|blender|comfy-install|comfy-output|comfy-running|kimodo-nodes|text-encoder|ollama|model:[a-z0-9-]{1,40})$/)
+  .transform(value => value as SetupItemId)
 const storedSchema = z.object({
   showOnLaunch: z.boolean(), completedAt: z.string().optional(),
+  checkOnLaunch: z.boolean().optional(), ignoredAtLaunch: z.array(itemIdSchema).max(32).optional(),
   llama: z.object({ status: z.enum(['ready', 'warning', 'blocked']), detail: z.string(), checkedAt: z.string() }).optional()
 })
 export const setupRunSchema = z.object({
@@ -45,7 +52,11 @@ export const setupRunSchema = z.object({
     'start-comfy', 'open-kimodo-nodes', 'install-lfm', 'verify-llama', 'open-llama-access', 'download-model', 'open-model-license', 'open-ollama']),
   model: z.string().max(64).optional()
 }).strict()
-export const setupPreferencesSchema = z.object({ showOnLaunch: z.boolean().optional(), completed: z.boolean().optional() }).strict()
+export const setupPreferencesSchema = z.object({
+  showOnLaunch: z.boolean().optional(), completed: z.boolean().optional(), checkOnLaunch: z.boolean().optional(),
+  ignoredAtLaunch: z.array(itemIdSchema).max(32).optional()
+}).strict()
+export type SetupPreferences = z.input<typeof setupPreferencesSchema>
 
 const kimodoNodes = ['Kimodo_TextEncode', 'Kimodo_Sampler', 'Kimodo_SaveNPZ', 'Kimodo_ExportBVH', 'Kimodo_Preview3D']
 // ComfyUI loader node and input that list each model folder.
@@ -114,6 +125,7 @@ export class SetupAssistant {
   private stored: StoredSetup
   private task?: SetupTask
   private controller?: AbortController
+  private launchController?: AbortController
   private result?: SetupState['result']
   private readonly file: string
 
@@ -126,7 +138,10 @@ export class SetupAssistant {
   }
 
   state(): SetupState {
-    return structuredClone({ firstLaunch: this.host.firstLaunch, showOnLaunch: this.stored.showOnLaunch, completedAt: this.stored.completedAt, task: this.task, result: this.result })
+    return structuredClone({
+      firstLaunch: this.host.firstLaunch, showOnLaunch: this.stored.showOnLaunch, completedAt: this.stored.completedAt,
+      checkOnLaunch: !this.host.quietLaunch && (this.stored.checkOnLaunch ?? true), ignoredAtLaunch: this.stored.ignoredAtLaunch ?? [], task: this.task, result: this.result
+    })
   }
 
   private async save() {
@@ -134,17 +149,44 @@ export class SetupAssistant {
     await rename(this.file + '.tmp', this.file)
   }
 
-  async preferences(value: { showOnLaunch?: boolean; completed?: boolean }): Promise<SetupState> {
+  async preferences(value: SetupPreferences): Promise<SetupState> {
     const update = setupPreferencesSchema.parse(value)
     if (update.showOnLaunch !== undefined) this.stored.showOnLaunch = update.showOnLaunch
+    if (update.checkOnLaunch !== undefined) this.stored.checkOnLaunch = update.checkOnLaunch
+    if (update.ignoredAtLaunch) this.stored.ignoredAtLaunch = [...new Set(update.ignoredAtLaunch)]
     if (update.completed) this.stored.completedAt = new Date().toISOString()
     await this.save()
     return this.state()
   }
 
-  async report(): Promise<SetupReport> {
+  /**
+   * Validates dependencies on a later launch. Cancelling resolves immediately with `cancelled` and stops pending probes.
+   * Ignored items that work again are forgotten, so a later failure is reported again.
+   */
+  async launchCheck(): Promise<LaunchCheck> {
+    this.launchController?.abort()
+    const controller = new AbortController()
+    this.launchController = controller
+    const cancelled = new Promise<LaunchCheck>(resolve => controller.signal.addEventListener('abort', () => resolve({ cancelled: true }), { once: true }))
+    try {
+      return await Promise.race([cancelled, this.report(controller.signal).then(async (report): Promise<LaunchCheck> => {
+        if (controller.signal.aborted) return { cancelled: true }
+        const ignored = this.stored.ignoredAtLaunch ?? []
+        const still = ignored.filter(id => report.items.find(item => item.id === id)?.status !== 'done')
+        if (still.length !== ignored.length) { this.stored.ignoredAtLaunch = still; await this.save() }
+        return { cancelled: false, report, issues: launchIssues(report.items, still) }
+      }, (error): LaunchCheck | Promise<never> => controller.signal.aborted ? { cancelled: true } : Promise.reject(error))])
+    } finally {
+      if (this.launchController === controller) this.launchController = undefined
+    }
+  }
+
+  cancelLaunchCheck() { this.launchController?.abort() }
+
+  async report(cancel?: AbortSignal): Promise<SetupReport> {
     const settings = this.host.settings()
-    const signal = this.host.signal
+    const signals = [this.host.signal, cancel].filter((s): s is AbortSignal => !!s)
+    const signal = signals.length ? AbortSignal.any(signals) : undefined
     const os = process.platform
     const comfyInstalled = isComfyInstall(settings.comfyRoot)
     const [blender, stats, nodes, ollama, outputExists] = await Promise.all([
@@ -152,7 +194,7 @@ export class SetupAssistant {
         .then(out => ({ ok: true, detail: out.split(/\r?\n/).find(s => s.startsWith('Blender')) ?? 'Blender is available' }), error => ({ ok: false, detail: errorText(error) })),
       api<{ devices: { name: string; type: string; vram_total: number; vram_free: number }[] }>(settings.comfyUrl, '/system_stats', undefined, signal).catch(() => undefined),
       api<NodeCatalog>(settings.comfyUrl, '/object_info', undefined, signal).catch(() => undefined),
-      fetch('http://127.0.0.1:11434/api/tags', { redirect: 'error', signal: AbortSignal.timeout(3000) })
+      fetch('http://127.0.0.1:11434/api/tags', { redirect: 'error', signal: AbortSignal.any([AbortSignal.timeout(3000), ...signals]) })
         .then(r => r.ok ? r.json() as Promise<{ models?: { name: string }[] }> : undefined).catch(() => undefined),
       access(settings.comfyOutput).then(() => true, () => false)
     ])

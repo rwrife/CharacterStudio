@@ -10,7 +10,7 @@ import type { GenerateRequest, RigSetup, Settings, MotionPlan, BatchRequest } fr
 import type { DesignRequest, DesignerConfig, DesignStage, DesignImportRequest } from '../shared/designer'
 import { designImportSchema } from './designer'
 import { validateCutout } from './image-validation'
-import { SetupAssistant } from './setup'
+import { SetupAssistant, type SetupPreferences } from './setup'
 import type { SetupActionId } from '../shared/setup'
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'studio', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }])
@@ -31,7 +31,8 @@ app.on('second-instance', () => {
 
 if (ownsWorkspace) app.whenReady().then(async () => {
   // Automation that drives other workflows can opt out of the first-launch checklist.
-  const firstLaunch = process.env.STUDIO_SKIP_SETUP_CHECKLIST !== '1' && !existsSync(join(app.getPath('userData'), 'studio.json'))
+  const quietLaunch = process.env.STUDIO_SKIP_SETUP_CHECKLIST === '1'
+  const firstLaunch = !quietLaunch && !existsSync(join(app.getPath('userData'), 'studio.json'))
   studio = new Studio(app.getPath('userData'), app.getAppPath(), async (file, cutout, squareSize) => {
     if ((await stat(file)).size > 20 * 1024 * 1024) throw new Error('Reference image exceeds 20 MB.')
     const image = nativeImage.createFromBuffer(await readFile(file))
@@ -89,7 +90,7 @@ if (ownsWorkspace) app.whenReady().then(async () => {
   const lifetime = new AbortController()
   app.once('before-quit', () => lifetime.abort())
   const setup = new SetupAssistant({
-    root: app.getPath('userData'), appRoot: app.getAppPath(), firstLaunch, signal: lifetime.signal,
+    root: app.getPath('userData'), appRoot: app.getAppPath(), firstLaunch, quietLaunch, signal: lifetime.signal,
     settings: () => studio.snapshot().settings,
     saveSettings: value => studio.saveSettings(value),
     startComfy: () => studio.startComfy(),
@@ -103,7 +104,9 @@ if (ownsWorkspace) app.whenReady().then(async () => {
   handle('setup:report', () => setup.report())
   handle('setup:run', (request: { item: string; action: SetupActionId; model?: string }) => setup.run(request))
   handle('setup:cancel', () => setup.cancel())
-  handle('setup:preferences', (value: { showOnLaunch?: boolean; completed?: boolean }) => setup.preferences(value))
+  handle('setup:preferences', (value: SetupPreferences) => setup.preferences(value))
+  handle('setup:launch-check', () => setup.launchCheck())
+  handle('setup:cancel-launch-check', () => setup.cancelLaunchCheck())
   handle('studio:snapshot', () => studio.snapshot())
   handle('designer:readiness', () => studio.designer.readiness())
   handle('designer:settings', (config: DesignerConfig) => studio.designer.saveSettings(config))

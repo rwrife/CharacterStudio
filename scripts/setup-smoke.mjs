@@ -44,12 +44,44 @@ try {
   assert.deepEqual(errors, [])
   await app.close()
 
-  // The user's choice persists: a relaunch does not open the checklist again.
+  // The user's choice persists: a relaunch validates dependencies instead of reopening the checklist, and can be cancelled.
   app = await launch()
   page = await app.firstWindow()
   await page.getByRole('heading', { name: 'Character lab' }).waitFor()
-  await page.waitForTimeout(1500)
+  const card = page.getByRole('status', { name: 'Dependency check' })
+  const prompt = page.getByRole('dialog', { name: 'Dependency check' })
+  await expect(card.or(prompt)).toBeVisible({ timeout: 20000 })
   await expect(page.getByRole('dialog', { name: 'Setup checklist' })).toHaveCount(0)
+  const cancel = card.getByRole('button', { name: 'Cancel' })
+  if (await cancel.isVisible()) {
+    await cancel.click()
+    await expect(card).toBeHidden()
+    await expect(prompt).toHaveCount(0)
+  }
+  await app.close()
+
+  // An uncancelled check finishes: problems open a prompt with one-click fixes; a healthy machine shows a brief notice.
+  app = await launch()
+  page = await app.firstWindow()
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  const launchPrompt = page.getByRole('dialog', { name: 'Dependency check' })
+  const ready = page.getByRole('status', { name: 'Dependency check' }).getByText('All required dependencies are working.')
+  await expect(launchPrompt.or(ready)).toBeVisible({ timeout: 60000 })
+  if (await launchPrompt.isVisible()) {
+    await expect(launchPrompt.locator('.setup-item').first()).toBeVisible()
+    await page.screenshot({ path: join(output, 'launch-check.png') })
+    await launchPrompt.getByRole('button', { name: 'Re-check' }).click()
+    const cancelCheck = launchPrompt.getByRole('button', { name: 'Cancel check' })
+    if (await cancelCheck.isVisible()) { await cancelCheck.click(); await expect(launchPrompt.getByText('Check cancelled')).toBeVisible() }
+    await expect(launchPrompt.getByRole('button', { name: 'Re-check' })).toBeVisible({ timeout: 60000 })
+    await launchPrompt.getByRole('button', { name: 'Open setup checklist' }).click()
+    await expect(launchPrompt).toBeHidden()
+    const checklist = page.getByRole('dialog', { name: 'Setup checklist' })
+    await expect(checklist).toBeVisible()
+    await checklist.getByRole('button', { name: 'Close setup checklist' }).click()
+    console.log(`Launch check prompt shown. Screenshot: ${join(output, 'launch-check.png')}`)
+  } else console.log('All required dependencies were ready; no launch prompt was needed.')
+  await expect(page.getByRole('dialog')).toHaveCount(0)
   console.log(`Setup checklist smoke passed. Screenshot: ${join(output, 'setup-checklist.png')}`)
 } finally {
   await app.close().catch(() => {})
