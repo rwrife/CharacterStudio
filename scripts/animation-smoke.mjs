@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 
 const output = resolve('artifacts', 'desktop-smoke')
 await mkdir(output, { recursive: true })
-const app = await electron.launch({ args: ['.'], env: { ...process.env, STUDIO_DATA_DIR: resolve('artifacts', 'validation-state') }, timeout: 60000 })
+const app = await electron.launch({ args: ['.'], env: { ...process.env, STUDIO_SKIP_SETUP_CHECKLIST: '1', STUDIO_DATA_DIR: resolve('artifacts', 'validation-state') }, timeout: 60000 })
 try {
   const page = await app.firstWindow()
   const errors = []

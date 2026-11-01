@@ -16,7 +16,7 @@ const info = await fetch(base + '/object_info').then(response => {
 assert.ok(info.Studio_Kimodo_LoadLFM, 'Restart ComfyUI after installing the LFM custom node.')
 await mkdir(resolve('artifacts'), { recursive: true })
 const root = await mkdtemp(resolve('artifacts', 'lfm-desktop-'))
-const app = await electron.launch({ args: ['.'], env: { ...process.env, STUDIO_DATA_DIR: root }, timeout: 60000 })
+const app = await electron.launch({ args: ['.'], env: { ...process.env, STUDIO_SKIP_SETUP_CHECKLIST: '1', STUDIO_DATA_DIR: root }, timeout: 60000 })
 try {
   const page = await app.firstWindow()
   const errors = []

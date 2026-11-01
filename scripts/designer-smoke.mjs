@@ -17,7 +17,7 @@ const native = process.argv.includes('--generate') || textured
 const packaged = process.argv.includes('--packaged')
 const app = await electron.launch({
   ...(packaged ? { executablePath: resolve('release', 'CharacterStudio-win32-arm64', 'CharacterStudio.exe'), args: [] } : { args: ['.'] }),
-  env: { ...process.env, STUDIO_DATA_DIR: data }, timeout: 60000
+  env: { ...process.env, STUDIO_SKIP_SETUP_CHECKLIST: '1', STUDIO_DATA_DIR: data }, timeout: 60000
 })
 try {
   const page = await app.firstWindow()

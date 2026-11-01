@@ -7,7 +7,7 @@ const artifact = resolve('artifacts', 'desktop-smoke')
 await mkdir(artifact, { recursive: true })
 const errors = []
 const app = await electron.launch({
-  args: ['.'], env: { ...process.env, STUDIO_DATA_DIR: resolve('artifacts', 'desktop-state') },
+  args: ['.'], env: { ...process.env, STUDIO_SKIP_SETUP_CHECKLIST: '1', STUDIO_DATA_DIR: resolve('artifacts', 'desktop-state') },
   timeout: 60000
 })
 try {

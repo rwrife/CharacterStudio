@@ -14,7 +14,7 @@ const output = resolve('artifacts', 'desktop-smoke')
 await mkdir(output, { recursive: true })
 for (const excluded of ['artifacts', 'tests', 'scripts', 'src'])
   await assert.rejects(access(join(appRoot, excluded)), { code: 'ENOENT' })
-const env = { ...process.env, STUDIO_DATA_DIR: data }
+const env = { ...process.env, STUDIO_SKIP_SETUP_CHECKLIST: '1', STUDIO_DATA_DIR: data }
 const app = await electron.launch({ executablePath, args: [], env, timeout: 60000 })
 try {
   const runtime = await app.evaluate(({ app }) => ({ packaged: app.isPackaged, root: app.getAppPath(), arch: process.arch }))

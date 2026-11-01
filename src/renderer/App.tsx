@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
-import { ArrowDownToLine, ArrowRight, Check as CheckIcon, ChevronDown, CircleAlert, FolderOpen, Layers3, LoaderCircle, Plus, Settings2, ShieldCheck, Sparkles, X, Zap, Box, Bone, SlidersHorizontal, RefreshCw, WandSparkles } from 'lucide-react'
+import { ArrowDownToLine, ArrowRight, Check as CheckIcon, ChevronDown, CircleAlert, FolderOpen, Layers3, ListChecks, LoaderCircle, Plus, Settings2, ShieldCheck, Sparkles, X, Zap, Box, Bone, SlidersHorizontal, RefreshCw, WandSparkles } from 'lucide-react'
 import type { Character, Check, Job, RigSetup, Settings, Snapshot, Vec3 } from '../shared/types'
 import { Viewport } from './Viewport'
 import { LibraryPanel } from './LibraryPanel'
 import { ModelSetupGuide } from './ModelSetupGuide'
 import { DesignerPanel } from './DesignerPanel'
+import { SetupWizard } from './SetupWizard'
 import { defaultLandmarks } from '../shared/rig'
 import { recommendTextEncoder } from '../shared/text-encoder'
 
@@ -40,6 +41,7 @@ export function App() {
   const [libraryOpen, setLibraryOpen] = useState(false)
   const [libraryNew, setLibraryNew] = useState(false)
   const [parentJobId, setParentJobId] = useState('')
+  const [setupOpen, setSetupOpen] = useState(false)
   const character = snapshot?.characters.find(c => c.id === characterId)
   const jobs = snapshot?.jobs.filter(j => j.characterId === characterId && j.kind === 'generate') ?? []
   const completed = jobs.filter(j => j.stage === 'complete')
@@ -65,9 +67,15 @@ export function App() {
       if (s.characters.length) selectCharacter(s.characters[0])
     }).catch(e => setError(explain(e)))
     const remove = window.studio.onUpdate(setSnapshot)
+    window.studio.setupState().then(state => { if (state.firstLaunch || state.showOnLaunch) setSetupOpen(true) }).catch(e => setError(explain(e)))
     void refreshChecks()
     return remove
   }, [])
+  function closeSetup() {
+    setSetupOpen(false)
+    window.studio.snapshot().then(s => { setSnapshot(s); setSettings(s.settings) }).catch(e => setError(explain(e)))
+    void refreshChecks()
+  }
 
   function selectCharacter(c: Character) {
     setCharacterId(c.id); setSetup(structuredClone(c.setup)); setDirty(false)
@@ -134,7 +142,8 @@ export function App() {
         <span className="module-divider" aria-hidden="true">|</span>
         <button id="animator-tab" role="tab" tabIndex={workspace === 'animator' ? 0 : -1} aria-selected={workspace === 'animator'} aria-controls="animator-panel" className={workspace === 'animator' ? 'active' : ''} onClick={() => setWorkspace('animator')}>Animator</button>
       </nav>
-      <button aria-label="Backend connections" className={`connection ${blocked.length ? 'warning' : ''}`} onClick={() => setSettingsOpen(true)}><span className="tiny-dot" />{checking ? 'Checking backends' : blocked.length ? 'Setup needs attention' : checks.length ? 'Local backends ready' : 'Backend settings'}<Settings2 size={14} /></button>
+      <div className="topbar-actions"><button aria-label="Setup checklist" className="connection" onClick={() => setSetupOpen(true)}><ListChecks size={14} />Setup checklist</button>
+      <button aria-label="Backend connections" className={`connection ${blocked.length ? 'warning' : ''}`} onClick={() => setSettingsOpen(true)}><span className="tiny-dot" />{checking ? 'Checking backends' : blocked.length ? 'Setup needs attention' : checks.length ? 'Local backends ready' : 'Backend settings'}<Settings2 size={14} /></button></div>
     </header>
     {snapshot && <DesignerPanel snapshot={snapshot} visible={workspace === 'designer'} animatorBusy={busy || !!active || !!activeBatch} onSettings={() => setSettingsOpen(true)} onAnimate={c => { selectCharacter(c); setFit(true); setWorkspace('animator') }} />}
     <div id="animator-panel" role="tabpanel" aria-labelledby="animator-tab" hidden={workspace !== 'animator'} className="studio-layout">
@@ -258,6 +267,7 @@ export function App() {
       {error && <p className="modal-error" role="alert">{error}</p>}
       <p className="fine-print">Both encoders run locally inside ComfyUI. LFM uses an explicit experimental Kimodo loader; it never falls back to Llama or remote inference. The original Llama loader uses TEXT_ENCODER_MODE=local when Studio starts ComfyUI; use that setting for an externally started backend. Hugging Face supplies downloads only. Closing Studio stops only the ComfyUI process it started.</p>
     </section></div>}
+    {setupOpen && window.studio && <SetupWizard onClose={closeSetup} />}
   </div>
 }
 

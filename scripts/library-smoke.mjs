@@ -8,7 +8,7 @@ import { once } from 'node:events'
 
 const output = resolve('artifacts', 'desktop-smoke')
 await mkdir(output, { recursive: true })
-const app = await electron.launch({ args: ['.'], env: { ...process.env, STUDIO_DATA_DIR: resolve('artifacts', 'validation-state') }, timeout: 60000 })
+const app = await electron.launch({ args: ['.'], env: { ...process.env, STUDIO_SKIP_SETUP_CHECKLIST: '1', STUDIO_DATA_DIR: resolve('artifacts', 'validation-state') }, timeout: 60000 })
 const unavailableBackend = createServer((_req, res) => { res.setHeader('Content-Type', 'application/json'); res.end('{}') })
 unavailableBackend.listen(0, '127.0.0.1'); await once(unavailableBackend, 'listening')
 let originalSettings

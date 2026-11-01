@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, net, protocol, shell } from 'electron'
 import { copyFile, readFile, writeFile, stat } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { join, extname } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -9,6 +10,8 @@ import type { GenerateRequest, RigSetup, Settings, MotionPlan, BatchRequest } fr
 import type { DesignRequest, DesignerConfig, DesignStage, DesignImportRequest } from '../shared/designer'
 import { designImportSchema } from './designer'
 import { validateCutout } from './image-validation'
+import { SetupAssistant } from './setup'
+import type { SetupActionId } from '../shared/setup'
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'studio', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }])
 let window: BrowserWindow
@@ -27,6 +30,8 @@ app.on('second-instance', () => {
 })
 
 if (ownsWorkspace) app.whenReady().then(async () => {
+  // Automation that drives other workflows can opt out of the first-launch checklist.
+  const firstLaunch = process.env.STUDIO_SKIP_SETUP_CHECKLIST !== '1' && !existsSync(join(app.getPath('userData'), 'studio.json'))
   studio = new Studio(app.getPath('userData'), app.getAppPath(), async (file, cutout, squareSize) => {
     if ((await stat(file)).size > 20 * 1024 * 1024) throw new Error('Reference image exceeds 20 MB.')
     const image = nativeImage.createFromBuffer(await readFile(file))
@@ -72,6 +77,33 @@ if (ownsWorkspace) app.whenReady().then(async () => {
     })
   }
   studio.onUpdate = snapshot => { if (!window.isDestroyed()) window.webContents.send('studio:update', snapshot) }
+  const browse = async (kind: string) => {
+    if (!['blender', 'comfy', 'output'].includes(kind)) throw new Error('Invalid path selector')
+    const result = await dialog.showOpenDialog(window, {
+      title: kind === 'blender' ? 'Choose native Blender executable' : kind === 'comfy' ? 'Choose ComfyUI backend folder (contains main.py)' : 'Choose ComfyUI output folder',
+      properties: kind === 'blender' ? ['openFile'] : ['openDirectory'],
+      ...(kind === 'blender' && process.platform === 'win32' ? { filters: [{ name: 'Blender', extensions: ['exe'] }] } : {})
+    })
+    return result.canceled ? null : result.filePaths[0]
+  }
+  const lifetime = new AbortController()
+  app.once('before-quit', () => lifetime.abort())
+  const setup = new SetupAssistant({
+    root: app.getPath('userData'), appRoot: app.getAppPath(), firstLaunch, signal: lifetime.signal,
+    settings: () => studio.snapshot().settings,
+    saveSettings: value => studio.saveSettings(value),
+    startComfy: () => studio.startComfy(),
+    designerConfig: () => studio.designer.snapshot().config,
+    saveDesignerConfig: value => studio.designer.saveSettings(value),
+    choose: kind => browse(kind),
+    openExternal: url => shell.openExternal(url),
+    notify: state => { if (!window.isDestroyed()) window.webContents.send('setup:update', state) }
+  })
+  handle('setup:state', () => setup.state())
+  handle('setup:report', () => setup.report())
+  handle('setup:run', (request: { item: string; action: SetupActionId; model?: string }) => setup.run(request))
+  handle('setup:cancel', () => setup.cancel())
+  handle('setup:preferences', (value: { showOnLaunch?: boolean; completed?: boolean }) => setup.preferences(value))
   handle('studio:snapshot', () => studio.snapshot())
   handle('designer:readiness', () => studio.designer.readiness())
   handle('designer:settings', (config: DesignerConfig) => studio.designer.saveSettings(config))
@@ -101,15 +133,7 @@ if (ownsWorkspace) app.whenReady().then(async () => {
     return choice.filePath
   })
   handle('studio:settings', (settings: Settings) => studio.saveSettings(settings))
-  handle('studio:browse', async (kind: string) => {
-    if (!['blender', 'comfy', 'output'].includes(kind)) throw new Error('Invalid path selector')
-    const result = await dialog.showOpenDialog(window, {
-      title: kind === 'blender' ? 'Choose native Blender executable' : kind === 'comfy' ? 'Choose ComfyUI backend folder (contains main.py)' : 'Choose ComfyUI output folder',
-      properties: kind === 'blender' ? ['openFile'] : ['openDirectory'],
-      ...(kind === 'blender' && process.platform === 'win32' ? { filters: [{ name: 'Blender', extensions: ['exe'] }] } : {})
-    })
-    return result.canceled ? null : result.filePaths[0]
-  })
+  handle('studio:browse', browse)
   handle('studio:import', async () => {
     const result = await dialog.showOpenDialog(window, { title: 'Import humanoid FBX', properties: ['openFile'], filters: [{ name: 'FBX character', extensions: ['fbx'] }] })
     return result.canceled ? null : studio.importCharacter(result.filePaths[0])
