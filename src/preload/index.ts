@@ -1,0 +1,32 @@
+import { contextBridge, ipcRenderer } from 'electron'
+import type { StudioApi, Snapshot } from '../shared/types'
+
+const api: StudioApi = {
+  snapshot: () => ipcRenderer.invoke('studio:snapshot'),
+  settings: settings => ipcRenderer.invoke('studio:settings', settings),
+  browse: kind => ipcRenderer.invoke('studio:browse', kind),
+  importCharacter: () => ipcRenderer.invoke('studio:import'),
+  importCollection: () => ipcRenderer.invoke('studio:import-collection'),
+  saveSetup: (id, setup) => ipcRenderer.invoke('studio:setup', id, setup),
+  rig: id => ipcRenderer.invoke('studio:rig', id),
+  generate: request => ipcRenderer.invoke('studio:generate', request),
+  cancel: () => ipcRenderer.invoke('studio:cancel'),
+  check: () => ipcRenderer.invoke('studio:check'),
+  startComfy: () => ipcRenderer.invoke('studio:start-comfy'),
+  saveOutput: (job, file) => ipcRenderer.invoke('studio:save-output', job, file),
+  openAccessPage: () => ipcRenderer.invoke('studio:access-page'),
+  openTokenSettings: () => ipcRenderer.invoke('studio:token-settings'),
+  revealData: () => ipcRenderer.invoke('studio:reveal-data'),
+  savePlan: plan => ipcRenderer.invoke('studio:save-plan', plan),
+  importPlan: () => ipcRenderer.invoke('studio:import-plan'),
+  exportPlan: id => ipcRenderer.invoke('studio:export-plan', id),
+  runBatch: request => ipcRenderer.invoke('studio:run-batch', request),
+  rerunBatch: id => ipcRenderer.invoke('studio:rerun-batch', id),
+  exportBatch: id => ipcRenderer.invoke('studio:export-batch', id),
+  onUpdate: callback => {
+    const listener = (_: Electron.IpcRendererEvent, snapshot: Snapshot) => callback(snapshot)
+    ipcRenderer.on('studio:update', listener)
+    return () => ipcRenderer.removeListener('studio:update', listener)
+  }
+}
+contextBridge.exposeInMainWorld('studio', api)

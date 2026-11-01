@@ -1,0 +1,126 @@
+import { app, BrowserWindow, dialog, ipcMain, net, protocol, shell } from 'electron'
+import { copyFile, readFile, writeFile, stat } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { join, extname } from 'node:path'
+import { pathToFileURL } from 'node:url'
+import { Studio } from './studio'
+import { errorText } from './validation'
+import type { GenerateRequest, RigSetup, Settings, MotionPlan, BatchRequest } from '../shared/types'
+
+protocol.registerSchemesAsPrivileged([{ scheme: 'studio', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }])
+let window: BrowserWindow
+let studio: Studio
+let quitting = false
+app.setName('KimodoStudio')
+app.setPath('userData', process.env.STUDIO_DATA_DIR ?? join(app.getPath('appData'), 'KimodoStudio'))
+const ownsWorkspace = app.requestSingleInstanceLock()
+if (!ownsWorkspace) app.quit()
+app.on('second-instance', () => {
+  if (window && !window.isDestroyed()) {
+    if (window.isMinimized()) window.restore()
+    window.focus()
+  }
+})
+
+if (ownsWorkspace) app.whenReady().then(async () => {
+  studio = new Studio(app.getPath('userData'), app.getAppPath())
+  protocol.handle('studio', async request => {
+    const url = new URL(request.url)
+    const file = url.hostname === 'asset' && !url.search ? studio.assets.get(url.pathname.slice(1)) : undefined
+    if (!file) return new Response('Unknown local asset', { status: 404 })
+    return net.fetch(pathToFileURL(file).toString())
+  })
+  window = new BrowserWindow({
+    title: 'KimodoStudio', width: 1440, height: 960, minWidth: 1100, minHeight: 760,
+    backgroundColor: '#111313', autoHideMenuBar: true,
+    webPreferences: { preload: join(import.meta.dirname, '../preload/index.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true }
+  })
+  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  window.webContents.on('will-navigate', (event, url) => {
+    if (url !== window.webContents.getURL()) event.preventDefault()
+  })
+  window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
+  const allowedRenderer = process.env.ELECTRON_RENDERER_URL
+  function handle(channel: string, callback: (...args: never[]) => unknown) {
+    ipcMain.handle(channel, (event, ...args) => {
+      const url = event.senderFrame?.url
+      if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame ||
+          !(allowedRenderer ? url?.startsWith(allowedRenderer + '/') || url === allowedRenderer : url === pathToFileURL(join(import.meta.dirname, '../renderer/index.html')).toString()))
+        throw new Error('Untrusted desktop IPC caller.')
+      return callback(...args as never[])
+    })
+  }
+  studio.onUpdate = snapshot => { if (!window.isDestroyed()) window.webContents.send('studio:update', snapshot) }
+  handle('studio:snapshot', () => studio.snapshot())
+  handle('studio:settings', (settings: Settings) => studio.saveSettings(settings))
+  handle('studio:browse', async (kind: string) => {
+    if (!['blender', 'comfy', 'output'].includes(kind)) throw new Error('Invalid path selector')
+    const result = await dialog.showOpenDialog(window, {
+      title: kind === 'blender' ? 'Choose native Blender executable' : kind === 'comfy' ? 'Choose ComfyUI backend folder (contains main.py)' : 'Choose ComfyUI output folder',
+      properties: kind === 'blender' ? ['openFile'] : ['openDirectory'],
+      ...(kind === 'blender' ? { filters: [{ name: 'Blender', extensions: ['exe'] }] } : {})
+    })
+    return result.canceled ? null : result.filePaths[0]
+  })
+  handle('studio:import', async () => {
+    const result = await dialog.showOpenDialog(window, { title: 'Import humanoid FBX', properties: ['openFile'], filters: [{ name: 'FBX character', extensions: ['fbx'] }] })
+    return result.canceled ? null : studio.importCharacter(result.filePaths[0])
+  })
+  handle('studio:import-collection', async () => {
+    const result = await dialog.showOpenDialog(window, { title: 'Import FBX collection', properties: ['openFile', 'multiSelections'], filters: [{ name: 'FBX characters', extensions: ['fbx'] }] })
+    if (result.canceled) return []
+    if (result.filePaths.length > 32) throw new Error('Import up to 32 FBXs per collection.')
+    const characters = []
+    for (const file of result.filePaths) characters.push(await studio.importCharacter(file))
+    return characters
+  })
+  handle('studio:setup', (id: string, setup: RigSetup) => studio.saveSetup(id, setup))
+  handle('studio:rig', (id: string) => studio.rig(id))
+  handle('studio:generate', (request: GenerateRequest) => studio.generate(request))
+  handle('studio:cancel', () => studio.cancel())
+  handle('studio:check', () => studio.check())
+  handle('studio:start-comfy', () => studio.startComfy())
+  handle('studio:save-output', async (jobId: string, file: string) => {
+    const source = studio.output(jobId, file)
+    const result = await dialog.showSaveDialog(window, { defaultPath: file, filters: [{ name: extname(file).slice(1).toUpperCase(), extensions: [extname(file).slice(1)] }] })
+    if (result.canceled || !result.filePath) return null
+    await copyFile(source, result.filePath)
+    return result.filePath
+  })
+  handle('studio:access-page', () => shell.openExternal('https://huggingface.co/meta-llama/Meta-Llama-3-8B-Instruct'))
+  handle('studio:token-settings', () => shell.openExternal('https://huggingface.co/settings/tokens'))
+  handle('studio:reveal-data', () => shell.openPath(studio.root).then(error => { if (error) throw new Error(error) }))
+  handle('studio:save-plan', (plan: MotionPlan) => studio.savePlan(plan))
+  handle('studio:run-batch', (request: BatchRequest) => studio.runBatch(request))
+  handle('studio:rerun-batch', (id: string) => studio.rerunBatch(id))
+  handle('studio:export-batch', async (id: string) => {
+    const choice = await dialog.showOpenDialog(window, { title: 'Save completed batch outputs into a new subfolder', properties: ['openDirectory', 'createDirectory'] })
+    return choice.canceled ? null : studio.exportBatch(id, choice.filePaths[0])
+  })
+  handle('studio:export-plan', async (id: string) => {
+    const plan = studio.plan(id)
+    const choice = await dialog.showSaveDialog(window, { defaultPath: plan.name.replace(/[^a-zA-Z0-9 _-]/g, '_') + '.json', filters: [{ name: 'Motion configuration', extensions: ['json'] }] })
+    if (choice.canceled || !choice.filePath) return null
+    await writeFile(choice.filePath, JSON.stringify({ schemaVersion: 2, plan }, null, 2))
+    return choice.filePath
+  })
+  handle('studio:import-plan', async () => {
+    const choice = await dialog.showOpenDialog(window, { title: 'Import saved motion configuration', properties: ['openFile'], filters: [{ name: 'Motion configuration', extensions: ['json'] }] })
+    if (choice.canceled) return null
+    if ((await stat(choice.filePaths[0])).size > 1024 * 1024) throw new Error('Configuration JSON exceeds 1 MB.')
+    const data = JSON.parse(await readFile(choice.filePaths[0], 'utf8'))
+    if (![1, 2].includes(data.schemaVersion)) throw new Error('Unsupported motion configuration version.')
+    return studio.savePlan({ ...data.plan, id: randomUUID() })
+  })
+  if (allowedRenderer) await window.loadURL(allowedRenderer)
+  else await window.loadFile(join(import.meta.dirname, '../renderer/index.html'))
+}).catch(error => { dialog.showErrorBox('KimodoStudio could not start', errorText(error)); app.exit(1) })
+
+app.on('before-quit', event => {
+  if (!quitting && studio) {
+    event.preventDefault()
+    quitting = true
+    studio.dispose().catch(error => dialog.showErrorBox('Backend shutdown needs attention', errorText(error))).finally(() => app.quit())
+  }
+})
+app.on('window-all-closed', () => app.quit())

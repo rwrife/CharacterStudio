@@ -1,0 +1,12 @@
+node_modules/
+out/
+release/
+.tools/
+artifacts/
+*.log
+__pycache__/
+.env
+.env.*
+!.env.example
+.venv/
+venv/
