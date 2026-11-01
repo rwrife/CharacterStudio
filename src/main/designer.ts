@@ -33,7 +33,7 @@ export const designRequestSchema = z.object({
   referenceStrength: z.number().finite().min(0.1).max(0.6)
 }).strict()
 export const designImportSchema = z.object({
-  stage: z.enum(['scene', 'tpose', 'model']),
+  stage: z.enum(['tpose', 'model']),
   brief: designRequestSchema.extend({ description: z.string().trim().max(2000), style: z.string().trim().max(1000) }),
   isolated: z.boolean()
 }).strict().refine(request => !request.isolated || request.stage === 'tpose', 'Only a T-pose input can be marked as an isolated cutout.')
@@ -203,8 +203,7 @@ export class Designer {
         config: structuredClone(this.state.config), status: 'idle', modelTextured,
         tposeIsolated: request.stage === 'tpose' ? request.isolated : undefined,
         sources: { [request.stage]: { kind: 'imported', name: basename(file) } },
-        message: request.stage === 'scene' ? 'External scene reference imported. Continue with T-pose generation; the scene will not be regenerated.' :
-          request.stage === 'tpose' ? request.isolated ? 'External transparent T-pose validated. Ready for 3D; earlier image stages are skipped.' :
+        message: request.stage === 'tpose' ? request.isolated ? 'External transparent T-pose validated. Ready for 3D; earlier image stages are skipped.' :
             'External T-pose imported. Remove its background without redrawing the character, then continue to 3D.' :
             'External GLB mesh validated. Send it directly to Animator; image and 3D generation are skipped.'
       }

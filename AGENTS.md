@@ -4,7 +4,7 @@
 
 KimodoStudio is an AI-assisted video game character creation studio. Help game developers prepare character assets, fit and skin humanoid rigs, generate motion from natural-language instructions, organize reusable animation graphs, and export animated characters for downstream game development.
 
-The current product is a local Windows ARM64 desktop application with Designer and Animator workspaces. Designer uses local ComfyUI to turn a text brief or reference image into a scene, transparent T-pose, and untextured Hunyuan3D geometry; it can also start from imported scenes, T-poses, or embedded GLB meshes. Animator prepares imported humanoid FBX assets or Designer meshes with Blender and generates Kimodo motion through ComfyUI. Generated geometry is not a finished game asset. Treat broader character-creation capabilities as goals, not shipped features.
+The current product is a local Windows ARM64 desktop application with Designer and Animator workspaces. Designer uses local ComfyUI to turn a text brief or reference image into a scene, transparent T-pose, and untextured Hunyuan3D geometry; scenes are always generated, but it can skip ahead from imported T-poses or embedded GLB meshes. Animator prepares imported humanoid FBX assets or Designer meshes with Blender and generates Kimodo motion through ComfyUI. Generated geometry is not a finished game asset. Treat broader character-creation capabilities as goals, not shipped features.
 
 ## Repository layout
 

@@ -79,7 +79,7 @@ if (ownsWorkspace) app.whenReady().then(async () => {
   handle('designer:import', async (value: DesignImportRequest) => {
     const request = designImportSchema.parse(value)
     const result = await dialog.showOpenDialog(window, {
-      title: request.stage === 'scene' ? 'Use an existing scene reference' : request.stage === 'tpose' ? 'Use an existing T-pose reference' : 'Use an existing 3D GLB mesh',
+      title: request.stage === 'tpose' ? 'Use an existing T-pose reference' : 'Use an existing 3D GLB mesh',
       properties: ['openFile'],
       filters: request.stage === 'model' ? [{ name: 'Embedded GLB mesh', extensions: ['glb'] }] : [{ name: 'Character image', extensions: ['png', 'jpg', 'jpeg', 'webp'] }]
     })

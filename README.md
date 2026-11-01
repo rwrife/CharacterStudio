@@ -12,7 +12,7 @@ Local Windows ARM64 desktop app with **Designer** and **Animator** workspaces. D
 |---|---|
 | [Staged character design](#designer-workflow) | Describe a character, scenario, and art style, or condition a concept with a local reference image. Review each scene, transparent T-pose, and GLB before continuing. |
 | [Textured models](#local-textured-models) | Select native TRELLIS.2 to generate geometry and embedded base-color/metallic/roughness textures together from the T-pose. Hunyuan remains the lower-memory geometry-only option. |
-| [External inputs](#start-from-external-inputs) | Start from an existing scene image, T-pose, or embedded GLB instead of regenerating earlier stages. Preserve originals and distinguish imported artifacts from generated results. |
+| [External inputs](#start-from-external-inputs) | Skip ahead with an existing T-pose or embedded GLB instead of regenerating earlier stages. Scenes are always generated from a description or a reference photo plus description. Preserve originals and distinguish imported artifacts from generated results. |
 | [Local model profiles](#offline-models-and-memory-profiles) | Choose installed SD 1.5/SDXL scene weights, FLUX.2 klein image editing, BiRefNet, optional scene IP-Adapter, Hunyuan3D geometry or TRELLIS.2 textured generation, with GPU-memory readiness checks. Optional local Ollama naming is separate from motion generation. |
 | [Guided humanoid rigging](#animator-workflow) | Import FBX assets or send Designer meshes to Animator. Inspect the character in 3D, adjust mirrored joint landmarks and orientation, and build a Blender-skinned body rig. |
 | [Natural-language animation](#animator-workflow) | Generate motion takes with duration, seed, denoising steps, and in-place controls. Branch from a completed take's actual endpoint; preview with playback, scrubbing, orbit, zoom, and wireframe. |
@@ -30,7 +30,7 @@ Local Windows ARM64 desktop app with **Designer** and **Animator** workspaces. D
 
 ![Designer showing a locally generated fighter concept in a jungle scene](docs/screenshots/designer-scene.png)
 
-Review the character-and-scene concept before generating the next reference.
+Review the character-and-scene concept before generating the next reference. This capture predates moving file imports to the T-pose and 3D steps; step 1 no longer shows **Continue from an existing file**.
 
 ![Designer showing the T-pose reference as a transparent character cutout](docs/screenshots/designer-tpose.png)
 
@@ -103,7 +103,7 @@ Local packaging uses `npm run setup:blender` followed by `npm run package`; `npm
 Switch to **Designer** in the top bar. The existing character lab remains in **Animator**; switching tabs preserves in-progress briefs, rig edits, and motion settings. These are two workspaces in one desktop app, not two competing inference services. Designer and Animator share one job slot to avoid GPU contention.
 
 1. Open **Backend connections** and connect the existing local ComfyUI. In Designer, refresh **Local model profiles**, choose installed weights, and **Save model choices**. Designer does not require Kimodo's Llama encoder. The shared backend dialog still reports Animator-specific readiness separately.
-2. Choose **Text description** or **Reference image** (local PNG/JPEG/WebP, up to 20 MB and 32 megapixels). Supply **Character & scenario** and **Art style** separately. For example: a Brazilian MMA fighter raised in the jungles of Brazil, rendered as a vibrant 90s game character with exaggerated upper-body muscles.
+2. Choose **Text description** to describe the character, or **Reference image** (local PNG/JPEG/WebP, up to 20 MB and 32 megapixels) to supply a photo and describe what to use from it in **What to use from this photo**. Either way, Designer generates a new scene; a reference photo is conditioning, not a finished scene. Supply **Art style** separately. For example: a Brazilian MMA fighter raised in the jungles of Brazil, rendered as a vibrant 90s game character with exaggerated upper-body muscles.
 3. Enter an optional title, or select an already-installed local Ollama instruction model for automatic naming. Ollama is restricted to `http://127.0.0.1:11434`, runs the naming model on CPU, and unloads it afterward. Cloud-backed models are rejected. Without a title or an available local naming model, generation stops with instructions rather than inventing a placeholder title.
 4. **Create character concept** generates a character-and-scene image using both descriptions. Image input is actual reference conditioning, not an ignored attachment. Select an installed **IP-Adapter Plus** and its matching **CLIP Vision** model to carry visual identity without copying scene pixels; otherwise the workflow uses basic img2img. **Reference influence** controls conditioning strength.
 5. Review the scene, then **Use scene & generate T-pose**. The native **FLUX.2 klein 4B image-editing workflow** encodes the actual completed scene as its reference, with the instruction **"Put this character in a T-pose, remove the background, only show the character."** Additional constraints request the same face, hair, outfit, colors, body proportions and art style, horizontal arms and visible hands/feet. The character/scenario and art-style descriptions are **not repeated**; this step edits the reference rather than recreating its brief. The distilled profile uses four steps, independently of the scene/3D step setting and scene reference-influence slider. Missing editing weights block the stage rather than silently falling back to SD/OpenPose regeneration. **Local BiRefNet background removal follows the edit**, preserving character colors and saving a validated transparent cutout. Review identity, pose, hands/feet and any attached scenery before continuing; image editing is not a guarantee of perfect preservation or anatomy. Older opaque T-poses have a **Remove T-pose background** action that masks the existing image without redrawing it.
@@ -132,16 +132,15 @@ Review the model cards and upstream/third-party licenses before distribution. A 
 
 ### Start from external inputs
 
-Use **Continue from an existing file** above the canvas to enter the pipeline at any stage. These imports are distinct from the brief's **Reference image** option, which conditions generation of a new scene.
+Select the **T-pose reference** or **3D model** step above the canvas, then use **Skip ahead with an existing T-pose/GLB mesh** to enter the pipeline later. The **Character & scene** step has no file import: scenes are always generated from a description, or from a **Reference image** plus a description of what to use from it.
 
 | Existing input | Next action | Skipped work |
 |---|---|---|
-| Scene/concept image (PNG, JPEG, WebP) | **Use scene & generate T-pose** | Scene generation and automatic naming |
 | T-pose with a white/colored background | **Remove T-pose background**, then **Use T-pose & generate 3D** | Scene and pose generation; cleanup masks the supplied image without redrawing it |
 | Already-isolated transparent T-pose PNG | Check **Already isolated transparent PNG**, import, then generate 3D | Both image stages and background removal; the supplied cutout must pass validation |
 | Embedded GLB mesh (up to 500 MB) | **Send to Animator** | All Designer generation stages; FBX files can instead be imported directly in Animator |
 
-Descriptions and style are optional for imports. The visible brief is copied into the new design; a supplied title is retained, or the source filename becomes its title without invoking AI naming. Importing a scene lets you choose editing weights afterward. To edit an existing scene again without replacing completed work, save its reference PNG and import it as the new design's scene. Direct T-pose-to-3D and GLB-to-Animator paths do not require scene/editing checkpoints or naming models.
+Descriptions and style are optional for imports. The visible brief is copied into the new design; a supplied title is retained, or the source filename becomes its title without invoking AI naming. Designs created by earlier versions from imported scenes remain usable. Direct T-pose-to-3D and GLB-to-Animator paths do not require scene/editing checkpoints or naming models.
 
 Each import creates a **new design**, preserves a byte-for-byte original, and records its source filename and imported/generated provenance. Existing stages and downstream meshes are never replaced. Each generated stage consumes the preceding artifact from that same design and saves its input filename in the workflow manifest. Skipped stages remain empty, rather than being represented as generated results. Original images may be non-square; 3D input preparation preserves their aspect ratio.
 

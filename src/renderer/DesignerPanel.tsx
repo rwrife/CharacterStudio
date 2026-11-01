@@ -23,7 +23,6 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [preview, setPreview] = useState<DesignStage>('scene')
-  const [entry, setEntry] = useState<DesignStage>('scene')
   const [isolated, setIsolated] = useState(false)
   const design = data?.designs.find(d => d.id === id)
   const active = data?.designs.find(d => d.status === 'running')
@@ -71,12 +70,12 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
           const image = await window.studio.designerReference()
           if (image) setRequest(old => ({ ...old, referenceId: image.id }))
         })}><ImagePlus size={16} /> {reference ? 'Replace local image' : 'Choose local image'}</button>
-        <p className="fine-print">PNG, JPEG or WebP, up to 20 MB. Copied locally; sent only to your loopback ComfyUI.</p>
+        <p className="fine-print">PNG, JPEG or WebP, up to 20 MB. Copied locally; sent only to your loopback ComfyUI. The photo guides a newly generated scene; it is not used as the scene itself.</p>
       </div>}
       <label className="field-label" htmlFor="design-title">Character title <span>optional</span></label>
       <input id="design-title" disabled={locked} maxLength={100} placeholder="Leave blank for local AI naming" value={request.title} onChange={e => setRequest({ ...request, title: e.target.value })} />
-      <label className="field-label" htmlFor="design-description">Character & scenario</label>
-      <textarea id="design-description" disabled={locked} maxLength={2000} rows={5} placeholder="A Brazilian MMA fighter raised in the jungles of Brazil..." value={request.description} onChange={e => setRequest({ ...request, description: e.target.value })} />
+      <label className="field-label" htmlFor="design-description">{input === 'image' ? 'What to use from this photo' : 'Character & scenario'}</label>
+      <textarea id="design-description" disabled={locked} maxLength={2000} rows={5} placeholder={input === 'image' ? 'Use the person in this photo as a heavyweight boxer in a neon-lit arena...' : 'A Brazilian MMA fighter raised in the jungles of Brazil...'} value={request.description} onChange={e => setRequest({ ...request, description: e.target.value })} />
       <label className="field-label" htmlFor="design-style">Art style</label>
       <textarea id="design-style" disabled={locked} maxLength={1000} rows={4} placeholder="A 90s video game character, bright vibrant colors, exaggerated muscles and upper body features..." value={request.style} onChange={e => setRequest({ ...request, style: e.target.value })} />
       <div className="two-fields design-sampling">
@@ -111,22 +110,18 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
           </button>
         })}
       </div>
-      <div className="design-entry">
-        <label htmlFor="design-entry">Continue from an existing file</label>
+      {preview !== 'scene' && <div className="design-entry">
+        <span className="design-entry-label">Skip ahead with an existing {preview === 'model' ? 'GLB mesh' : 'T-pose'}</span>
         <div className="design-entry-controls">
-          <select id="design-entry" disabled={locked} value={entry} onChange={e => setEntry(e.target.value as DesignStage)}>
-            <option value="scene">Scene reference - skip scene generation</option>
-            <option value="tpose">T-pose reference - skip image generation</option>
-            <option value="model">GLB mesh - go directly to Animator</option>
-          </select>
           <button className="secondary" disabled={locked} onClick={() => void perform(async () => {
-            const imported = await window.studio.designerImport({ stage: entry, brief: request, isolated: entry === 'tpose' && isolated })
-            if (imported) { setId(imported); setPreview(entry) }
-          })}><ImagePlus size={15} /> Import {entry === 'model' ? 'GLB mesh' : entry === 'tpose' ? 'T-pose' : 'scene'}</button>
+            const stage = preview
+            const imported = await window.studio.designerImport({ stage, brief: request, isolated: stage === 'tpose' && isolated })
+            if (imported) { setId(imported); setPreview(stage) }
+          })}><ImagePlus size={15} /> Import {preview === 'model' ? 'GLB mesh' : 'T-pose'}</button>
         </div>
-        {entry === 'tpose' && <label className="design-cutout-choice"><input type="checkbox" checked={isolated} disabled={locked} onChange={e => setIsolated(e.target.checked)} /> Already isolated transparent PNG - skip background removal</label>}
-        <p className="fine-print">Creates a new design and preserves the original file. Descriptions are optional for imported inputs. {entry === 'tpose' ? 'Use a full-body T-pose with clear margins; otherwise remove its background before 3D.' : entry === 'model' ? 'GLB must embed its resources. Import FBX directly in Animator.' : 'This uses the image as the completed scene, rather than generating another scene.'}</p>
-      </div>
+        {preview === 'tpose' && <label className="design-cutout-choice"><input type="checkbox" checked={isolated} disabled={locked} onChange={e => setIsolated(e.target.checked)} /> Already isolated transparent PNG - skip background removal</label>}
+        <p className="fine-print">Creates a new design and preserves the original file. Descriptions are optional for imported inputs. {preview === 'tpose' ? 'Use a full-body T-pose with clear margins; otherwise remove its background before 3D.' : 'GLB must embed its resources. Import FBX directly in Animator.'}</p>
+      </div>}
       {url && <p className="design-source">{source?.kind === 'imported' ? `Imported: ${source.name}` : source?.input ? `Generated from this design's ${source.input === 'tpose' ? 'validated T-pose' : 'scene reference'}.` : `Saved ${preview === 'scene' ? 'scene reference' : preview === 'tpose' ? 'T-pose reference' : '3D geometry'}.`}</p>}
       {preview === 'tpose' && <details className="design-edit-instruction"><summary>T-pose edit instruction</summary><p>{tposeEditPrompt}</p><p>The scene image is the edit source. Character/scenario and art-style descriptions are not sent again.</p></details>}
       <div className={`design-canvas ${preview === 'model' ? 'mesh' : preview === 'tpose' && design?.tposeIsolated ? 'cutout' : ''}`}>

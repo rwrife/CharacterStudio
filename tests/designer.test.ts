@@ -289,45 +289,45 @@ test('textured stages fail without matching weights or actual textures, preservi
 
 test('stage import schemas allow absent descriptions without weakening generated concept validation', () => {
   const brief = { ...request, title: '', description: '', style: '' }
-  for (const stage of ['scene', 'tpose', 'model']) assert.ok(designImportSchema.parse({ stage, brief, isolated: false }))
+  for (const stage of ['tpose', 'model']) assert.ok(designImportSchema.parse({ stage, brief, isolated: false }))
   assert.throws(() => designRequestSchema.parse(brief))
-  assert.throws(() => designImportSchema.parse({ stage: 'scene', brief, isolated: true }))
+  assert.throws(() => designImportSchema.parse({ stage: 'model', brief, isolated: true }))
   assert.throws(() => designImportSchema.parse({ stage: 'invalid', brief, isolated: false }))
   assert.throws(() => designImportSchema.parse({ stage: 'tpose', brief, isolated: true, file: '..\\secret' }))
 })
 
-test('external scene imports preserve originals, start new designs and use current edit settings', async t => {
-  const { root, studio, submissions, uploads } = await fixture(t)
+test('scenes are always generated from a brief, never imported as completed files', async t => {
+  const { root, studio, submissions } = await fixture(t)
   const original = join(root, 'external-scene.png')
   await writeFile(original, 'external source image')
-  studio.designer.saveSettings({ ...config, checkpoint: '', editModel: '' })
-  const id = await studio.designer.importStage(original, { stage: 'scene', brief: { ...request, title: '', description: '', style: '' }, isolated: false })
-  assert.equal(studio.designer.title(id), 'external-scene')
-  assert.equal(await readFile(join(root, 'designs', id, 'original-scene.png'), 'utf8'), 'external source image')
+  assert.throws(() => designImportSchema.parse({ stage: 'scene', brief: request, isolated: false }))
+  await assert.rejects(studio.designer.importStage(original, { stage: 'scene', brief: request, isolated: false } as never))
+  assert.equal(studio.designer.snapshot().designs.length, 0)
   assert.equal(submissions.length, 0)
-  studio.designer.saveSettings(config)
+})
+
+test('T-pose edits use the generated scene and current edit settings', async t => {
+  const { root, studio, uploads } = await fixture(t)
+  const id = studio.designer.create(request)
+  await studio.designer.run(id, 'scene')
+  const before = uploads.length
   await studio.designer.run(id, 'tpose')
   assert.equal(studio.designer.snapshot().designs[0].config.editModel, config.editModel)
   assert.ok(studio.designer.snapshot().designs[0].tposeUrl)
   const edit = JSON.parse(await readFile(join(root, 'designs', id, 'tpose-workflow.json'), 'utf8'))
-  assert.equal(edit.workflow['4'].inputs.image, uploads[0].name)
-  assert.ok(uploads[0].body.includes(await readFile(studio.designer.output(id, 'scene'), 'utf8')))
+  assert.equal(edit.workflow['4'].inputs.image, uploads[before].name)
+  assert.ok(uploads[before].body.includes(await readFile(studio.designer.output(id, 'scene'), 'utf8')))
   assert.equal(edit.input.file, 'scene.png')
-  const duplicate = await studio.designer.importStage(original, { stage: 'scene', brief: request, isolated: false })
-  assert.notEqual(duplicate, id)
-  await assert.rejects(studio.designer.run(id, 'scene'), /already complete/)
-  const restarted = new Studio(root, resolve('.')).designer.snapshot()
-  assert.equal(restarted.designs.find(d => d.id === id)?.sources?.scene?.kind, 'imported')
 })
 
 test('missing editing weights never silently fall back to an SD redraw', async t => {
-  const { root, studio, submissions } = await fixture(t)
-  const file = join(root, 'scene.png')
-  await writeFile(file, 'TEST-ONLY scene')
-  const id = await studio.designer.importStage(file, { stage: 'scene', brief: request, isolated: false })
+  const { studio, submissions } = await fixture(t)
+  const id = studio.designer.create(request)
+  await studio.designer.run(id, 'scene')
+  const before = submissions.length
   studio.designer.saveSettings({ ...config, editModel: '' })
   await assert.rejects(studio.designer.run(id, 'tpose'), /does not fall back/)
-  assert.equal(submissions.length, 0)
+  assert.equal(submissions.length, before)
   assert.ok(studio.designer.snapshot().designs[0].sceneUrl)
   assert.equal(studio.designer.snapshot().designs[0].tposeUrl, undefined)
 })
