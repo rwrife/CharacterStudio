@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { ArrowDownToLine, ArrowRight, Box, Check, CircleAlert, ImagePlus, LoaderCircle, Palette, Plus, RefreshCw, ShieldCheck, Sparkles } from 'lucide-react'
 import type { Character, Snapshot } from '../shared/types'
 import type { DesignRequest, DesignerConfig, DesignerReadiness, DesignStage } from '../shared/designer'
-import { imageProfiles, meshProfiles } from '../shared/designer'
+import { imageProfiles, meshProfiles, meshTextureProfile, tposeEditProfile, tposeEditPrompt } from '../shared/designer'
 import { Viewport } from './Viewport'
 import './designer.css'
 
@@ -23,14 +23,17 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [preview, setPreview] = useState<DesignStage>('scene')
+  const [entry, setEntry] = useState<DesignStage>('scene')
+  const [isolated, setIsolated] = useState(false)
   const design = data?.designs.find(d => d.id === id)
   const active = data?.designs.find(d => d.status === 'running')
   const locked = busy || !!active || animatorBusy
-  const settingsDirty = (['imageProfile', 'checkpoint', 'controlnet', 'meshProfile', 'meshCheckpoint', 'titleModel', 'ipadapter', 'clipVision', 'backgroundModel'] as const)
+  const settingsDirty = (['imageProfile', 'checkpoint', 'controlnet', 'meshProfile', 'meshCheckpoint', 'titleModel', 'ipadapter', 'clipVision', 'backgroundModel', 'editModel', 'editTextEncoder', 'editVae', 'meshTextureModel', 'meshVision', 'meshShapeVae', 'meshTextureVae'] as const)
     .some(key => (config?.[key] ?? '') !== (data?.config[key] ?? ''))
   const reference = data?.references.find(r => r.id === request.referenceId)
   const free = Math.max(0, ...(ready?.devices.map(d => d.freeGB) ?? []))
   const url = design?.[`${preview}Url`]
+  const source = design?.sources?.[preview]
 
   async function perform(action: () => Promise<void>) {
     setBusy(true); setError(''); setNotice('')
@@ -46,7 +49,7 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
   const stages: { key: DesignStage; label: string; detail: string }[] = [
     { key: 'scene', label: 'Character & scene', detail: 'Identity, story and art direction' },
     { key: 'tpose', label: 'T-pose reference', detail: 'Transparent character cutout' },
-    { key: 'model', label: '3D geometry', detail: 'Local image-to-mesh generation' }
+    { key: 'model', label: '3D model', detail: 'Geometry or textured GLB' }
   ]
   async function run(stage: DesignStage) {
     if (!design) return
@@ -78,11 +81,11 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
       <textarea id="design-style" disabled={locked} maxLength={1000} rows={4} placeholder="A 90s video game character, bright vibrant colors, exaggerated muscles and upper body features..." value={request.style} onChange={e => setRequest({ ...request, style: e.target.value })} />
       <div className="two-fields design-sampling">
         <label>Seed<input aria-label="Design seed" disabled={locked} type="number" min={0} max={4294967295} value={request.seed} onChange={e => setRequest({ ...request, seed: Number(e.target.value) })} /></label>
-        <label>Steps<input aria-label="Design steps" disabled={locked} type="number" min={10} max={100} value={request.steps} onChange={e => setRequest({ ...request, steps: Number(e.target.value) })} /></label>
+        <label>Scene / Hunyuan steps<input aria-label="Design steps" disabled={locked} type="number" min={10} max={100} value={request.steps} onChange={e => setRequest({ ...request, steps: Number(e.target.value) })} /></label>
       </div>
       <label className="field-label" htmlFor="design-strength">Reference influence <span>{Math.round(request.referenceStrength * 100)}%</span></label>
       <input id="design-strength" type="range" min={0.1} max={0.6} step={0.05} disabled={locked} value={request.referenceStrength} onChange={e => setRequest({ ...request, referenceStrength: Number(e.target.value) })} />
-      <p className="fine-print">Lower influence allows larger changes; higher influence retains more of the source. IP-Adapter carries visual identity without copying scene pixels. Without it, basic img2img also retains some composition.</p>
+      <p className="fine-print">For creating a scene from an optional reference image. T-pose editing instead uses the completed scene directly, with its own fixed four-step edit workflow.</p>
       <button className="primary full" disabled={locked || settingsDirty || request.description.trim().length < 3 || request.style.trim().length < 3 || input === 'image' && !reference} onClick={() => void perform(async () => {
         const created = await window.studio.designerCreate({ ...request, referenceId: input === 'image' ? request.referenceId : undefined })
         setId(created); setPreview('scene')
@@ -93,7 +96,7 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
       <div className="section-heading"><span className="section-kicker">SAVED DESIGNS</span><span className="count">{data?.designs.length ?? 0}</span></div>
       <div className="design-list">
         {data?.designs.map(item => <button key={item.id} className={`asset ${item.id === id ? 'active' : ''}`} disabled={locked} onClick={() => { setId(item.id); setPreview(item.modelUrl ? 'model' : item.tposeUrl ? 'tpose' : 'scene'); setError('') }}>
-          <Palette size={16} /><span><strong>{item.title || 'Untitled concept'}</strong><small>{item.status === 'failed' || item.status === 'cancelled' ? item.status : item.modelUrl ? '3D geometry ready' : item.tposeUrl ? 'T-pose ready' : item.sceneUrl ? 'Scene ready' : 'Not generated'}</small></span>
+          <Palette size={16} /><span><strong>{item.title || 'Untitled concept'}</strong><small>{item.status === 'failed' || item.status === 'cancelled' ? item.status : item.modelUrl ? item.modelTextured ? 'Textured model ready' : '3D geometry ready' : item.tposeUrl ? item.tposeIsolated ? 'T-pose ready' : 'T-pose needs cleanup' : item.sceneUrl ? 'Scene ready' : 'Not generated'}</small></span>
         </button>)}
         {!data?.designs.length && <p className="fine-print">Your character concepts will appear here.</p>}
       </div>
@@ -101,13 +104,34 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
     <main className="design-workspace">
       <div className="scene-heading"><div><span className="section-kicker">DESIGN CANVAS</span><h2>{design?.title || 'A character waiting to happen'}</h2></div><Palette size={21} /></div>
       <div className="design-stages">
-        {stages.map((stage, index) => <button key={stage.key} className={`${preview === stage.key ? 'selected' : ''} ${design?.[`${stage.key}Url`] ? 'ready' : ''}`} onClick={() => setPreview(stage.key)} aria-pressed={preview === stage.key}>
-          <span className="step-number">{design?.[`${stage.key}Url`] ? <Check size={13} /> : index + 1}</span><span><strong>{stage.label}</strong><small>{stage.detail}</small></span>
-        </button>)}
+        {stages.map((stage, index) => {
+          const complete = !!design?.[`${stage.key}Url`] && (stage.key !== 'tpose' || design.tposeIsolated)
+          return <button key={stage.key} className={`${preview === stage.key ? 'selected' : ''} ${complete ? 'ready' : ''}`} onClick={() => setPreview(stage.key)} aria-pressed={preview === stage.key}>
+            <span className="step-number">{complete ? <Check size={13} /> : index + 1}</span><span><strong>{stage.label}</strong><small>{stage.detail}</small></span>
+          </button>
+        })}
       </div>
+      <div className="design-entry">
+        <label htmlFor="design-entry">Continue from an existing file</label>
+        <div className="design-entry-controls">
+          <select id="design-entry" disabled={locked} value={entry} onChange={e => setEntry(e.target.value as DesignStage)}>
+            <option value="scene">Scene reference - skip scene generation</option>
+            <option value="tpose">T-pose reference - skip image generation</option>
+            <option value="model">GLB mesh - go directly to Animator</option>
+          </select>
+          <button className="secondary" disabled={locked} onClick={() => void perform(async () => {
+            const imported = await window.studio.designerImport({ stage: entry, brief: request, isolated: entry === 'tpose' && isolated })
+            if (imported) { setId(imported); setPreview(entry) }
+          })}><ImagePlus size={15} /> Import {entry === 'model' ? 'GLB mesh' : entry === 'tpose' ? 'T-pose' : 'scene'}</button>
+        </div>
+        {entry === 'tpose' && <label className="design-cutout-choice"><input type="checkbox" checked={isolated} disabled={locked} onChange={e => setIsolated(e.target.checked)} /> Already isolated transparent PNG - skip background removal</label>}
+        <p className="fine-print">Creates a new design and preserves the original file. Descriptions are optional for imported inputs. {entry === 'tpose' ? 'Use a full-body T-pose with clear margins; otherwise remove its background before 3D.' : entry === 'model' ? 'GLB must embed its resources. Import FBX directly in Animator.' : 'This uses the image as the completed scene, rather than generating another scene.'}</p>
+      </div>
+      {url && <p className="design-source">{source?.kind === 'imported' ? `Imported: ${source.name}` : source?.input ? `Generated from this design's ${source.input === 'tpose' ? 'validated T-pose' : 'scene reference'}.` : `Saved ${preview === 'scene' ? 'scene reference' : preview === 'tpose' ? 'T-pose reference' : '3D geometry'}.`}</p>}
+      {preview === 'tpose' && <details className="design-edit-instruction"><summary>T-pose edit instruction</summary><p>{tposeEditPrompt}</p><p>The scene image is the edit source. Character/scenario and art-style descriptions are not sent again.</p></details>}
       <div className={`design-canvas ${preview === 'model' ? 'mesh' : preview === 'tpose' && design?.tposeIsolated ? 'cutout' : ''}`}>
         {url && preview === 'model' && visible ? <Viewport url={url} fit={false} selected="" kind="input" onSelect={() => {}} onMove={() => {}} /> :
-          url && preview !== 'model' ? <img src={url} alt={preview === 'scene' ? 'Generated character and scene in the requested art style' : 'Generated T-pose reference for review'} /> :
+          url && preview !== 'model' ? <img src={url} alt={preview === 'scene' ? 'Character and scene reference for review' : 'T-pose reference for review'} /> :
           <div className="design-empty"><div className="design-empty-icon">{preview === 'model' ? <Box size={42} strokeWidth={1} /> : <Palette size={42} strokeWidth={1} />}</div>
             <h2>{preview === 'scene' ? 'Start with a little imagination.' : preview === 'tpose' ? 'Same character. A clean silhouette.' : 'From reference to dimension.'}</h2>
             <p>{preview === 'scene' ? 'Your character, their world, your art direction.' : preview === 'tpose' ? 'Review the scene, then generate a front-facing T-pose.' : 'Approve the isolated T-pose before building geometry.'}</p>
@@ -120,15 +144,15 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
       {notice && <div className="banner success" role="status"><Check size={17} /><span>{notice}</span></div>}
       {design && design.status !== 'running' && <p className={`design-status ${design.status === 'failed' ? 'failure' : ''}`}>{design.message}</p>}
       {design && <div className="design-actions">
-        {!design.sceneUrl && <button className="primary" disabled={locked || settingsDirty} onClick={() => void run('scene')}><RefreshCw size={15} /> Generate scene</button>}
-        {design.sceneUrl && !design.tposeUrl && <button className="primary" disabled={locked || settingsDirty} onClick={() => void run('tpose')}><Check size={15} /> Use scene & generate T-pose <ArrowRight size={15} /></button>}
+        {!design.sceneUrl && !design.tposeUrl && !design.modelUrl && <button className="primary" disabled={locked || settingsDirty} onClick={() => void run('scene')}><RefreshCw size={15} /> Generate scene</button>}
+        {design.sceneUrl && !design.tposeUrl && !design.modelUrl && <button className="primary" disabled={locked || settingsDirty} onClick={() => void run('tpose')}><Check size={15} /> Use scene & generate T-pose <ArrowRight size={15} /></button>}
         {design.tposeUrl && !design.tposeIsolated && !design.modelUrl && <button className="primary" disabled={locked || settingsDirty} onClick={() => void run('tpose')}><RefreshCw size={15} /> Remove T-pose background</button>}
         {design.tposeIsolated && !design.modelUrl && <button className="primary" disabled={locked || settingsDirty} onClick={() => void run('model')}><Box size={15} /> Use T-pose & generate 3D <ArrowRight size={15} /></button>}
         {design.modelUrl && <button className="primary" disabled={locked} onClick={() => void perform(async () => onAnimate(await window.studio.designerAnimate(design.id)))}><ArrowRight size={15} /> {design.characterId ? 'Open in Animator' : 'Send to Animator'}</button>}
-        {url && <button className="secondary" disabled={locked} onClick={() => void perform(async () => { const path = await window.studio.designerExport(design.id, preview); if (path) setNotice(`Saved ${path}`) })}><ArrowDownToLine size={15} /> Save {preview === 'model' ? 'GLB geometry' : 'reference PNG'}</button>}
+        {url && <button className="secondary" disabled={locked} onClick={() => void perform(async () => { const path = await window.studio.designerExport(design.id, preview); if (path) setNotice(`Saved ${path}`) })}><ArrowDownToLine size={15} /> Save {preview === 'model' ? design.modelTextured ? 'textured GLB' : 'GLB geometry' : 'reference PNG'}</button>}
         <button className="text-button" disabled={locked} onClick={() => { setRequest({ ...design.request, title: design.title }); setInput(design.request.referenceId ? 'image' : 'text'); setId(''); setNotice('Brief copied. Change the seed or descriptions, then create a new concept.'); setError('') }}><Plus size={14} /> Use brief for variation</button>
       </div>}
-      <div className="design-limits"><ShieldCheck size={17} /><p>Review each stage before continuing. T-poses require local background removal and a validated transparent margin; confirm no scenery remains attached to the character. The checkerboard is preview-only. 3D receives the cutout on pure white, never the original scene. Native Hunyuan3D produces <strong>untextured, unrigged geometry</strong>; pose, identity and anatomy still need review.</p></div>
+      <div className="design-limits"><ShieldCheck size={17} /><p>Review each stage before continuing. 3D uses only the validated T-pose foreground, not the original scene. Hunyuan3D produces geometry only; TRELLIS.2 generates new geometry plus embedded textures from the same reference. It does not repaint an existing Hunyuan mesh. Both are <strong>unrigged</strong>. Review unseen surfaces, texture seams, anatomy and hands before Animator.</p></div>
     </main>
     <aside className="design-models">
       <div className="section-heading"><span className="section-kicker">LOCAL MODEL PROFILES</span><button aria-label="Refresh designer models" disabled={checking || locked} onClick={() => void refresh()}><RefreshCw size={14} className={checking ? 'spin' : ''} /></button></div>
@@ -143,19 +167,28 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
         <select id="image-profile" disabled={locked} value={config.imageProfile} onChange={e => setConfig({ ...config, imageProfile: e.target.value as DesignerConfig['imageProfile'], checkpoint: '', controlnet: '', ipadapter: '', clipVision: '' })}>
           {Object.entries(imageProfiles).map(([key, profile]) => <option key={key} value={key}>{profile.label} / ~{profile.gb} GB{ready && free < profile.gb ? ' / low memory' : ''}</option>)}
         </select>
-        <p className="fine-print">{imageProfiles[config.imageProfile].size}px references. {config.imageProfile === 'sd15' ? 'Lower-memory option; use an SD 1.5 checkpoint such as DreamShaper 8.' : 'Higher-resolution option; requires an SDXL checkpoint and SDXL OpenPose.'}</p>
+        <p className="fine-print">{imageProfiles[config.imageProfile].size}px scene references. {config.imageProfile === 'sd15' ? 'Lower-memory option; use an SD 1.5 checkpoint such as DreamShaper 8.' : 'Higher-resolution option; requires an SDXL checkpoint.'}</p>
         <label className="field-label" htmlFor="image-checkpoint">Installed image checkpoint</label>
         <select id="image-checkpoint" disabled={locked} value={config.checkpoint} onChange={e => setConfig({ ...config, checkpoint: e.target.value })}>
           <option value="">Select compatible local weights</option>
           {config.checkpoint && !ready?.checkpoints.includes(config.checkpoint) && <option value={config.checkpoint}>{config.checkpoint} (unavailable)</option>}
           {ready?.checkpoints.filter(name => !/hunyuan|flux|sd3/i.test(name)).map(name => <option key={name}>{name}</option>)}
         </select>
-        <label className="field-label" htmlFor="design-controlnet">T-pose OpenPose ControlNet</label>
-        <select id="design-controlnet" disabled={locked} value={config.controlnet} onChange={e => setConfig({ ...config, controlnet: e.target.value })}>
-          <option value="">Select matching pose weights</option>
-          {config.controlnet && !ready?.controlnets.includes(config.controlnet) && <option value={config.controlnet}>{config.controlnet} (unavailable)</option>}
-          {ready?.controlnets.filter(name => /pose/i.test(name)).map(name => <option key={name}>{name}</option>)}
-        </select>
+        <div className="panel-rule" />
+        <h2>T-pose image editing</h2>
+        <p className="fine-print">{tposeEditProfile.label}. Edits the scene character instead of re-generating the brief. About {tposeEditProfile.gb + 2} GB available GPU memory including background removal; {tposeEditProfile.steps} distilled steps. No SD/OpenPose fallback.</p>
+        {([
+          { key: 'editModel', label: 'T-pose edit model', names: ready?.diffusionModels ?? [] },
+          { key: 'editTextEncoder', label: 'Edit text encoder', names: ready?.textEncoders ?? [] },
+          { key: 'editVae', label: 'Edit autoencoder', names: ready?.vaes ?? [] }
+        ] as const).map(({ key, label, names }) => <div key={key}>
+          <label className="field-label" htmlFor={`design-${key}`}>{label}</label>
+          <select id={`design-${key}`} disabled={locked} value={config[key] ?? ''} onChange={e => setConfig({ ...config, [key]: e.target.value })}>
+            <option value="">Select installed local weights</option>
+            {config[key] && !names.includes(config[key]) && <option value={config[key]}>{config[key]} (unavailable)</option>}
+            {names.map(name => <option key={name}>{name}</option>)}
+          </select>
+        </div>)}
         <label className="field-label" htmlFor="design-background">Background removal <span>required for T-pose</span></label>
         <select id="design-background" disabled={locked} value={config.backgroundModel ?? ''} onChange={e => setConfig({ ...config, backgroundModel: e.target.value })}>
           <option value="">Select local BiRefNet weights</option>
@@ -163,7 +196,8 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
           {ready?.backgroundModels.map(name => <option key={name}>{name}</option>)}
         </select>
         <p className="fine-print">Removes all background while retaining character colors. Produces a transparent PNG; opaque or border-touching masks cannot feed 3D. Budget about 2 GB extra for segmentation.</p>
-        <label className="field-label" htmlFor="design-ipadapter">Reference identity adapter <span>recommended</span></label>
+        <div className="panel-rule" />
+        <label className="field-label" htmlFor="design-ipadapter">Scene reference adapter <span>optional</span></label>
         <select id="design-ipadapter" disabled={locked} value={config.ipadapter ?? ''} onChange={e => setConfig({ ...config, ipadapter: e.target.value, ...(e.target.value ? {} : { clipVision: '' }) })}>
           <option value="">Basic img2img (no adapter)</option>
           {config.ipadapter && !ready?.ipadapters.includes(config.ipadapter) && <option value={config.ipadapter}>{config.ipadapter} (unavailable)</option>}
@@ -175,18 +209,33 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
             {config.clipVision && !ready?.clipVision.includes(config.clipVision) && <option value={config.clipVision}>{config.clipVision} (unavailable)</option>}
             {ready?.clipVision.map(name => <option key={name}>{name}</option>)}
           </select></>}
-        <p className="fine-print">IP-Adapter Plus helps retain the character while changing pose and removing the scene layout. Requires matching SD 1.5/SDXL adapter and CLIP Vision weights; budget about 2 GB extra GPU memory.</p>
+        <p className="fine-print">Optional for scene generation from an image, not used for T-pose editing. Requires an SD 1.5/SDXL adapter matching the scene model and compatible CLIP Vision weights; budget about 2 GB extra GPU memory.</p>
         <div className="panel-rule" />
         <label className="field-label" htmlFor="mesh-profile">3D model profile</label>
         <select id="mesh-profile" disabled={locked} value={config.meshProfile} onChange={e => setConfig({ ...config, meshProfile: e.target.value as DesignerConfig['meshProfile'], meshCheckpoint: '' })}>
           {Object.entries(meshProfiles).map(([key, profile]) => <option key={key} value={key}>{profile.label} / ~{profile.gb} GB{ready && free < profile.gb ? ' / low memory' : ''}</option>)}
         </select>
-        <label className="field-label" htmlFor="mesh-checkpoint">Installed 3D checkpoint</label>
+        {config.meshProfile === 'textured' ? <>
+          <p className="fine-print">Generates a new textured model from the T-pose: 512 shape resolution, {meshTextureProfile.textureSize}px base-color/metallic/roughness atlas, target {meshTextureProfile.faceCount.toLocaleString()} faces. Fixed 12/20/12 structure/shape/texture steps. Experimental native backend support; missing weights or textures are errors, not geometry-only fallbacks.</p>
+          {([
+            { key: 'meshTextureModel', label: 'Textured 3D model', names: ready?.diffusionModels ?? [] },
+            { key: 'meshVision', label: '3D vision encoder', names: ready?.clipVision ?? [] },
+            { key: 'meshShapeVae', label: '3D shape decoder', names: ready?.vaes ?? [] },
+            { key: 'meshTextureVae', label: '3D texture decoder', names: ready?.vaes ?? [] }
+          ] as const).map(({ key, label, names }) => <div key={key}>
+            <label className="field-label" htmlFor={`design-${key}`}>{label}</label>
+            <select id={`design-${key}`} disabled={locked} value={config[key] ?? ''} onChange={e => setConfig({ ...config, [key]: e.target.value })}>
+              <option value="">Select installed local weights</option>
+              {config[key] && !names.includes(config[key]) && <option value={config[key]}>{config[key]} (unavailable)</option>}
+              {names.map(name => <option key={name}>{name}</option>)}
+            </select>
+          </div>)}
+        </> : <><label className="field-label" htmlFor="mesh-checkpoint">Installed 3D checkpoint</label>
         <select id="mesh-checkpoint" disabled={locked} value={config.meshCheckpoint} onChange={e => setConfig({ ...config, meshCheckpoint: e.target.value })}>
           <option value="">Select single-view Hunyuan3D 2 weights</option>
           {config.meshCheckpoint && !ready?.checkpoints.includes(config.meshCheckpoint) && <option value={config.meshCheckpoint}>{config.meshCheckpoint} (unavailable)</option>}
           {ready?.checkpoints.filter(name => /hunyuan/i.test(name)).map(name => <option key={name}>{name}</option>)}
-        </select>
+        </select></>}
         <div className="panel-rule" />
         <label className="field-label" htmlFor="title-model">Automatic title model <span>CPU</span></label>
         <select id="title-model" disabled={locked} value={config.titleModel} onChange={e => setConfig({ ...config, titleModel: e.target.value })}>
@@ -199,7 +248,7 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
         <button className="secondary full" disabled={locked || !settingsDirty} onClick={() => void perform(async () => { await window.studio.designerSettings(config); setNotice('Local model choices saved.') })}><Check size={15} /> Save model choices</button>
         {settingsDirty && <p className="fine-print">Save model choices before generating. Completed image stages keep their original model family.</p>}
       </>}
-      <details className="design-setup"><summary>Model setup & offline requirements</summary><p>Place licensed weights in ComfyUI's models\checkpoints and OpenPose weights in models\controlnet, then refresh. Install/download models separately before going offline. No downloads or package changes occur here.</p><p>Use native single-view Hunyuan3D 2 / 2mini safetensors with names identifying the model and mini variant. Turbo, multiview and 2.1 checkpoints are not supported by these profiles.</p><p>Memory budgets are conservative estimates, not compatibility guarantees. GPU architecture, free system RAM, drivers and checkpoint precision also matter. Stages and Animator jobs run sequentially.</p></details>
+      <details className="design-setup"><summary>Model setup & offline requirements</summary><p>Scene/Hunyuan checkpoints go in models\checkpoints. T-pose edits use flux-2-klein-4b-fp8.safetensors in models\diffusion_models, qwen_3_4b.safetensors in models\text_encoders, and flux2-vae.safetensors in models\vae. Refresh and select them after installing separately. No downloads or package changes occur during generation.</p><p>Use native single-view Hunyuan3D 2 / 2mini safetensors with names identifying the model and mini variant. Turbo, multiview and 2.1 checkpoints are not supported by these profiles.</p><p>Textured generation uses {meshTextureProfile.model} in models\diffusion_models, {meshTextureProfile.vision} in models\clip_vision, and {meshTextureProfile.shapeVae} plus {meshTextureProfile.textureVae} in models\vae. These total about 8.5 GB. ComfyUI must include native TRELLIS.2, remeshing, UV unwrapping and texture-baking nodes.</p><p>Memory budgets are conservative estimates, not compatibility guarantees. GPU architecture, free system RAM, drivers and checkpoint precision also matter. Stages and Animator jobs run sequentially.</p></details>
       <button className="text-button full" onClick={onSettings}>Backend connections</button>
     </aside>
   </div>

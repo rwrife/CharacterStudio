@@ -2,17 +2,18 @@
 
 **An AI-assisted video game character creation studio.** The goal is to help game developers turn character assets into animated, reusable characters through a local workflow for preparation, rigging, natural-language motion generation, visual animation graphs, and export.
 
-The implementation combines **staged character design and existing humanoid FBX assets with AI-generated body motion**. Artists retain control over reference review, rig fitting, motion instructions, and the final exported character. Generated meshes are untextured geometry, not finished game assets.
+The implementation combines **staged character design and existing humanoid FBX assets with AI-generated body motion**. Artists retain control over reference review, rig fitting, motion instructions, and the final exported character. Designer supports geometry-only and textured generation; neither produces a finished, rigged game asset.
 
-Local Windows ARM64 desktop app with **Designer** and **Animator** workspaces. Designer turns a character brief or local reference image into a scene concept, a T-pose reference, and untextured 3D geometry. Animator imports humanoid meshes, fits and skins a body rig, generates Kimodo motion through ComfyUI, and exports the **animated character mesh**.
+Local Windows ARM64 desktop app with **Designer** and **Animator** workspaces. Designer turns a character brief or local reference image into a scene concept, a T-pose reference, and a GLB model, with optional locally generated textures. Animator imports humanoid meshes, fits and skins a body rig, generates Kimodo motion through ComfyUI, and exports the **animated character mesh**.
 
 ## Features at a glance
 
 | Feature | What you can do |
 |---|---|
-| [Staged character design](#designer-workflow) | Describe a character, scenario, and art style, or condition a concept with a local reference image. Review each scene, transparent T-pose, and untextured GLB before continuing. |
+| [Staged character design](#designer-workflow) | Describe a character, scenario, and art style, or condition a concept with a local reference image. Review each scene, transparent T-pose, and GLB before continuing. |
+| [Textured models](#local-textured-models) | Select native TRELLIS.2 to generate geometry and embedded base-color/metallic/roughness textures together from the T-pose. Hunyuan remains the lower-memory geometry-only option. |
 | [External inputs](#start-from-external-inputs) | Start from an existing scene image, T-pose, or embedded GLB instead of regenerating earlier stages. Preserve originals and distinguish imported artifacts from generated results. |
-| [Local model profiles](#offline-models-and-memory-profiles) | Choose installed SD 1.5/SDXL image weights, OpenPose, BiRefNet, optional IP-Adapter, and native Hunyuan3D 2/2mini geometry models, with GPU-memory readiness checks. Optional local Ollama naming is separate from motion generation. |
+| [Local model profiles](#offline-models-and-memory-profiles) | Choose installed SD 1.5/SDXL scene weights, FLUX.2 klein image editing, BiRefNet, optional scene IP-Adapter, Hunyuan3D geometry or TRELLIS.2 textured generation, with GPU-memory readiness checks. Optional local Ollama naming is separate from motion generation. |
 | [Guided humanoid rigging](#animator-workflow) | Import FBX assets or send Designer meshes to Animator. Inspect the character in 3D, adjust mirrored joint landmarks and orientation, and build a Blender-skinned body rig. |
 | [Natural-language animation](#animator-workflow) | Generate motion takes with duration, seed, denoising steps, and in-place controls. Branch from a completed take's actual endpoint; preview with playback, scrubbing, orbit, zoom, and wireframe. |
 | [Motion encoder choice](#experimental-lfm-setup-no-llama-approval) | Use the original local Llama/LLM2Vec encoder or explicitly select the experimental ungated LFM bridge. Readiness checks and GPU guidance surface setup requirements without silently switching models. |
@@ -21,7 +22,7 @@ Local Windows ARM64 desktop app with **Designer** and **Animator** workspaces. D
 | [Character exports](#animator-workflow) | Save animated skinned GLB, FBX, and editable Blender scenes, plus separately labeled motion-only BVH/NPZ. Export completed batch results with manifests; failed outputs are not presented as completed characters. |
 | [Local workspace persistence](#data-and-reproducibility) | Keep original assets, designs, rig fits, settings, jobs, and outputs on this PC. Cancel app-owned work and retain completed results across restarts. |
 
-**Current boundaries:** Designer geometry is untextured and unrigged until prepared in Animator. Rigging is guided and body-only, not universal auto-rigging. Motion and graph joins require review; endpoint checks do not guarantee seamless animation or game-engine readiness. Models and local backend setup are prerequisites, not bundled capabilities.
+**Current boundaries:** Designer outputs are unrigged until prepared in Animator. Hunyuan outputs are untextured; TRELLIS.2 can infer textures but cannot guarantee accurate unseen surfaces or seam-free UVs. Rigging is guided and body-only, not universal auto-rigging. Motion and graph joins require review; endpoint checks do not guarantee seamless animation or game-engine readiness. Models and local backend setup are prerequisites, not bundled capabilities.
 
 ## Screenshots
 
@@ -33,7 +34,7 @@ Review the character-and-scene concept before generating the next reference.
 
 ![Designer showing the T-pose reference as a transparent character cutout](docs/screenshots/designer-tpose.png)
 
-The T-pose stage uses pose conditioning and local background removal. The checkerboard is a preview of transparency, not part of the saved reference. This example also shows clothing drift from the scene; review identity and anatomy rather than assuming exact preservation.
+This real FLUX.2 klein edit retained the scene's green shorts, wrist wraps, ankle wraps and sandals, followed by BiRefNet isolation. The checkerboard previews transparency and is not saved into the image. These captures predate the additional flat-hand/fingers-together instruction and the latest header styling. The arms are below a strict horizontal T-pose; review pose and anatomy rather than assuming exact preservation.
 
 ### Designer: untextured 3D geometry
 
@@ -41,11 +42,17 @@ The T-pose stage uses pose conditioning and local background removal. The checke
 
 The saved local run produced a Hunyuan3D mesh from the isolated T-pose. Preview or save the GLB, then send it to Animator for fitting and skinning. This is geometry, not a textured, rigged, production-ready character.
 
+### Designer: locally generated textured model
+
+![Designer showing a TRELLIS.2-generated fighter with green shorts, wrist wraps and embedded textures](docs/screenshots/designer-textured.png)
+
+Actual local TRELLIS.2 generation from the edited cutout above, imported as the starting T-pose for this run. The mesh was remeshed and UV-unwrapped before baking 1K color and metallic/roughness maps. Color and material maps survived GLB export and Blender/Animator import. This is still an unrigged character; inferred surfaces and anatomy need review.
+
 ### Character lab and guided rig fitting
 
 ![Animator showing the Designer mesh imported into Character lab with humanoid landmarks and rig-fitting controls](docs/screenshots/character-lab.png)
 
-The generated mesh has been handed off to Animator through Blender. Adjust humanoid joint landmarks before building the skin and rig; this screenshot shows fitting, not a completed rig.
+The textured Designer mesh has been handed off to Animator through Blender, retaining its material maps. Adjust humanoid joint landmarks before building the skin and rig; this screenshot shows fitting, not a completed rig or generated animation.
 
 ### Animator: learned motion preview
 
@@ -99,8 +106,29 @@ Switch to **Designer** in the top bar. The existing character lab remains in **A
 2. Choose **Text description** or **Reference image** (local PNG/JPEG/WebP, up to 20 MB and 32 megapixels). Supply **Character & scenario** and **Art style** separately. For example: a Brazilian MMA fighter raised in the jungles of Brazil, rendered as a vibrant 90s game character with exaggerated upper-body muscles.
 3. Enter an optional title, or select an already-installed local Ollama instruction model for automatic naming. Ollama is restricted to `http://127.0.0.1:11434`, runs the naming model on CPU, and unloads it afterward. Cloud-backed models are rejected. Without a title or an available local naming model, generation stops with instructions rather than inventing a placeholder title.
 4. **Create character concept** generates a character-and-scene image using both descriptions. Image input is actual reference conditioning, not an ignored attachment. Select an installed **IP-Adapter Plus** and its matching **CLIP Vision** model to carry visual identity without copying scene pixels; otherwise the workflow uses basic img2img. **Reference influence** controls conditioning strength.
-5. Review the scene, then **Use scene & generate T-pose**. A separate workflow consumes the completed scene and a generated OpenPose T-pose guide. **Local BiRefNet background removal is mandatory**, preserving character colors and saving a transparent cutout. Opaque/empty masks, excessive foreground coverage and cutouts touching the image border are rejected. The checkerboard is preview-only. Review identity, straight horizontal arms, hands/feet, and any scenery accidentally attached to the character before continuing. Img2img and pose conditioning do not guarantee identity or anatomical correctness; use **Use brief for variation** when a stage needs revision. Older opaque T-poses have a **Remove T-pose background** action that preserves the original image.
-6. **Use T-pose & generate 3D** revalidates the transparent cutout, scales it proportionally into a square with clear margins (without cropping or stretching), and composites only its foreground onto pure white before native, local Hunyuan3D image-to-geometry conditioning. Original scenery and hidden RGB under transparent pixels are not used as background. Preview or save the GLB, then **Send to Animator** to import the generated mesh through Blender and fit/skin it using the existing character lab. This preserves the original generated GLB. Reopening the same design selects its existing Animator character instead of duplicating it.
+5. Review the scene, then **Use scene & generate T-pose**. The native **FLUX.2 klein 4B image-editing workflow** encodes the actual completed scene as its reference, with the instruction **"Put this character in a T-pose, remove the background, only show the character."** Additional constraints request the same face, hair, outfit, colors, body proportions and art style, horizontal arms and visible hands/feet. The character/scenario and art-style descriptions are **not repeated**; this step edits the reference rather than recreating its brief. The distilled profile uses four steps, independently of the scene/3D step setting and scene reference-influence slider. Missing editing weights block the stage rather than silently falling back to SD/OpenPose regeneration. **Local BiRefNet background removal follows the edit**, preserving character colors and saving a validated transparent cutout. Review identity, pose, hands/feet and any attached scenery before continuing; image editing is not a guarantee of perfect preservation or anatomy. Older opaque T-poses have a **Remove T-pose background** action that masks the existing image without redrawing it.
+6. **Use T-pose & generate 3D** revalidates the transparent cutout and scales it proportionally into a square with clear margins, without cropping or stretching. Hunyuan profiles composite only its foreground onto pure white for local image-to-geometry conditioning; the [textured profile](#local-textured-models) uses TRELLIS.2 instead. Original scenery and hidden RGB under transparent pixels are not used as background. Preview or save the GLB, then **Send to Animator** to import the generated mesh through Blender and fit/skin it using the existing character lab. This preserves the original generated GLB. Reopening the same design selects its existing Animator character instead of duplicating it.
+
+The T-pose edit also explicitly requests **flat hands, palms down, straight fingers held together side by side, and thumbs resting naturally alongside**, with no splayed/curled fingers or fists. This is prompt guidance, not an anatomical validator; inspect hands before generating the mesh.
+
+### Local textured models
+
+Before generating 3D, choose **TRELLIS.2 (textured)** in **3D model profile**, select the four installed weights below, and **Save model choices**. Use **Use T-pose & generate 3D** as usual. This alternative generates both geometry and textures from the same validated T-pose. It does **not** paint an existing Hunyuan mesh: to try it on an already-completed design, save and import that design's T-pose as a new design, preserving the original mesh.
+
+The native ComfyUI graph generates structure, shape and texture latents in sequence, remeshes the decoded surface before simplification and UV unwrapping, then bakes a **1024 x 1024 base-color atlas plus metallic/roughness maps**. Remeshing avoids the fragmented UV islands and faceted appearance observed when simplifying the raw decoder output directly. Sampling uses fixed 12/20/12 steps and a 512 shape/remesh profile, independently of the scene/Hunyuan step field. Mesh simplification targets 50,000 faces; this is not game-ready retopology. TRELLIS conditioning uses only the alpha-masked foreground on black, as required by its native workflow; Hunyuan's foreground remains on white. Neither sees the hidden original scenery.
+
+**Save textured GLB** exports one self-contained file with UVs and embedded textures. **Send to Animator** preserves the original GLB and checks that generated texture maps survive Blender import. Missing weights, unsupported native nodes, absent textures, incomplete UVs, corrupt PNGs or wrong-sized generated atlases fail explicitly; they are not published as completed textured models. Review all sides: back surfaces are inferred from one image, and clothing details, fingers, texture seams and lighting baked into color maps may need manual repair.
+
+This profile uses the TRELLIS.2 branch of the [official native texture workflow](https://github.com/Comfy-Org/workflow_templates/blob/main/templates/3d_pixal3d_trellis2_image_to_model.json), without Pixal3D or cloud/API nodes. Install these approximately **8.5 GB** of weights separately:
+
+| Selector | Required file | ComfyUI folder |
+|---|---|---|
+| Textured 3D model | [`trellis_2_int8_convrot.safetensors`](https://huggingface.co/Comfy-Org/TRELLIS.2/tree/main/diffusion_models) | `models\diffusion_models` |
+| 3D vision encoder | [`dino_v3_L_naf_fp32.safetensors`](https://huggingface.co/Comfy-Org/Pixal3D/tree/main/clip_vision) | `models\clip_vision` |
+| 3D shape decoder | [`trellis_2_shape_vae_bf16.safetensors`](https://huggingface.co/Comfy-Org/TRELLIS.2/tree/main/vae) | `models\vae` |
+| 3D texture decoder | [`trellis_2_texture_vae_bf16.safetensors`](https://huggingface.co/Comfy-Org/TRELLIS.2/tree/main/vae) | `models\vae` |
+
+Review the model cards and upstream/third-party licenses before distribution. A conservative **24 GB of currently free GPU memory** is required by this profile; this is not a measured minimum or a guarantee on every architecture. Use a ComfyUI version with the native TRELLIS.2, mesh unwrapping and texture-baking nodes. The app does not install backend packages, choose a remote service or silently change to geometry-only output.
 
 ### Start from external inputs
 
@@ -113,24 +141,36 @@ Use **Continue from an existing file** above the canvas to enter the pipeline at
 | Already-isolated transparent T-pose PNG | Check **Already isolated transparent PNG**, import, then generate 3D | Both image stages and background removal; the supplied cutout must pass validation |
 | Embedded GLB mesh (up to 500 MB) | **Send to Animator** | All Designer generation stages; FBX files can instead be imported directly in Animator |
 
-Descriptions and style are optional for imports. The visible brief is copied into the new design; a supplied title is retained, or the source filename becomes its title without invoking AI naming. Importing a scene lets you choose image weights afterward. Direct T-pose-to-3D and GLB-to-Animator paths do not require image checkpoints, OpenPose or naming models.
+Descriptions and style are optional for imports. The visible brief is copied into the new design; a supplied title is retained, or the source filename becomes its title without invoking AI naming. Importing a scene lets you choose editing weights afterward. To edit an existing scene again without replacing completed work, save its reference PNG and import it as the new design's scene. Direct T-pose-to-3D and GLB-to-Animator paths do not require scene/editing checkpoints or naming models.
 
 Each import creates a **new design**, preserves a byte-for-byte original, and records its source filename and imported/generated provenance. Existing stages and downstream meshes are never replaced. Each generated stage consumes the preceding artifact from that same design and saves its input filename in the workflow manifest. Skipped stages remain empty, rather than being represented as generated results. Original images may be non-square; 3D input preparation preserves their aspect ratio.
 
 ### Offline models and memory profiles
 
-Models must already be installed before going offline. Studio neither downloads models nor installs custom nodes/packages while generating. Checkpoint and ControlNet selectors come from the connected ComfyUI, not a fictitious installed-model list. Model licenses, GPU architecture, drivers, precision, and available system RAM still matter.
+Models must already be installed before going offline. Studio neither downloads models nor installs custom nodes/packages while generating. Weight selectors come from the connected ComfyUI, not a fictitious installed-model list. Model licenses, GPU architecture, drivers, precision, and available system RAM still matter.
 
 | Stage | Supported profile | Estimated available GPU budget | Setup |
 |---|---|---|---|
-| Scene and T-pose | SD 1.5 / DreamShaper 8, 512px | 4 GB | Complete checkpoint in `ComfyUI\models\checkpoints`; matching SD 1.5 OpenPose in `models\controlnet` |
-| Scene and T-pose | SDXL, 1024px | 8 GB | Complete SDXL checkpoint; matching SDXL OpenPose ControlNet |
-| Required T-pose cleanup | Native BiRefNet foreground segmentation | Add 2 GB to image-stage budget | `birefnet.safetensors` in `models\background_removal` |
+| Scene | SD 1.5 / DreamShaper 8, 512px | 4 GB | Complete checkpoint in `ComfyUI\models\checkpoints` |
+| Scene | SDXL, 1024px | 8 GB | Complete SDXL checkpoint |
+| Scene-to-T-pose edit | Distilled FLUX.2 klein 4B, ~1 megapixel | 14 GB plus 2 GB cleanup | Native editing model, Qwen 3 4B encoder and FLUX.2 VAE (below) |
+| Required T-pose cleanup | Native BiRefNet foreground segmentation | 2 GB alone; add 2 GB to edit-stage budget | `birefnet.safetensors` in `models\background_removal` |
 | 3D geometry | Hunyuan3D 2mini, 128 decode resolution | 6 GB | Native single-view 2mini safetensors checkpoint |
 | 3D geometry | Hunyuan3D 2, 256 decode resolution | 10 GB | Native single-view 2 safetensors checkpoint |
+| Textured 3D | TRELLIS.2 INT8, 512 shape / 1K textures | 24 GB | Native TRELLIS.2, DINO vision, shape and texture decoder weights; see [textured models](#local-textured-models) |
 | Optional title | Small local instruction model, e.g. Qwen 2.5 3B | CPU / system RAM | Already installed in local Ollama; not Kimodo's trained motion encoder |
 
-These are conservative working budgets, not guaranteed minimum requirements or benchmarks. IP-Adapter conditioning adds an estimated 2 GB to image-stage budgets; it requires separately installed compatible `ComfyUI_IPAdapter_plus` nodes, weights in `models\ipadapter`, and vision weights in `models\clip_vision`. Each stage checks **currently free memory on one GPU**, not summed VRAM or nominal capacity. No CPU-only image/3D fallback is claimed. Lower-memory machines can create references even when the 3D stage is unavailable. Image and 3D models are selected independently. SD 1.5 and SDXL ControlNets and adapters are not interchangeable. Choose weights matching the selected family; filename lists alone cannot establish architecture compatibility.
+These are conservative working budgets, not guaranteed minimum requirements or benchmarks. Optional scene IP-Adapter conditioning adds an estimated 2 GB; it requires separately installed compatible `ComfyUI_IPAdapter_plus` nodes, weights in `models\ipadapter`, and vision weights in `models\clip_vision`. It is not used by the T-pose editor. Each stage checks **currently free memory on one GPU**, not summed VRAM or nominal capacity. No CPU-only image/3D fallback is claimed. Lower-memory machines can generate scenes and import external cutouts when editing is unavailable. Scene, editing and 3D weights are selected independently. SD 1.5 and SDXL adapters are not interchangeable.
+
+For T-pose editing, use the [official ComfyUI single-image FLUX.2 klein 4B distilled workflow components](https://github.com/Comfy-Org/workflow_templates/blob/main/templates/image_flux2_klein_image_edit_4b_distilled.json), approximately 12.5 GB total:
+
+| Selector | Weight file | ComfyUI folder |
+|---|---|---|
+| T-pose edit model | [`flux-2-klein-4b-fp8.safetensors`](https://huggingface.co/black-forest-labs/FLUX.2-klein-4b-fp8) | `models\diffusion_models` |
+| Edit text encoder | [`qwen_3_4b.safetensors`](https://huggingface.co/Comfy-Org/z_image_turbo/tree/main/split_files/text_encoders) | `models\text_encoders` |
+| Edit autoencoder | [`flux2-vae.safetensors`](https://huggingface.co/Comfy-Org/flux2-dev/tree/main/split_files/vae) | `models\vae` |
+
+The 4B model and Qwen encoder use Apache 2.0. The shared FLUX.2 autoencoder is also [explicitly Apache-licensed upstream](https://github.com/black-forest-labs/flux2#flux2-autoencoder), separately from FLUX.2-dev diffusion weights. This integration does **not** use FLUX.2-dev, 9B or base-model sampling profiles. An unquantized `flux-2-klein-4b.safetensors` is also accepted, but may need more memory than the FP8 option. Select the installed files and save model choices; OpenPose weights are no longer required for Designer.
 
 Use the [official native Hunyuan3D setup](https://docs.comfy.org/tutorials/3d/hunyuan3D-2). This integration supports single-view Hunyuan3D 2 and 2mini, **not** turbo, multiview or 2.1 sampling profiles. Keep descriptive checkpoint names containing `hunyuan3d` (and `mini` for 2mini), so incompatible profiles are not accidentally selected. Do not select cloud/API Tripo or Hunyuan image nodes.
 
@@ -138,9 +178,9 @@ The standard native checkpoint is [`hunyuan3d-dit-v2_fp16.safetensors`](https://
 
 Background removal uses [Comfy-Org's native BiRefNet weights](https://huggingface.co/Comfy-Org/BiRefNet), also listed in the official `utility_birefnet_remove_background` workflow. Download the approximately 424 MiB safetensors separately, select it after refreshing Designer models, and all subsequent cutout processing is local/offline. A missing segmentation model blocks T-pose completion, not scene generation.
 
-The saved Designer run has exercised local DreamShaper 8, SD 1.5 OpenPose, IP-Adapter Plus, BiRefNet, and the standard native Hunyuan3D 2 checkpoint. It produced a scene, transparent T-pose cutout, and GLB mesh, then imported that mesh into Animator for rig fitting, as shown above. This does not establish successful skinning or animation of the generated mesh, model compatibility on other machines, or production quality. Clothing and identity can drift from the scene reference. Automatic naming still requires a separately installed local Ollama model.
+Observed Designer runs have exercised DreamShaper 8 scene generation, FLUX.2 klein scene-image editing, BiRefNet isolation, and standard native Hunyuan3D 2 geometry with Blender/Animator handoff. A separate native TRELLIS.2 run started from that edited cutout and produced a textured GLB with embedded 1K material maps, which survived export and Blender/Animator import. The earlier SD/OpenPose T-pose path was replaced because it changed clothing and identity. These runs do not establish successful skinning or animation of the generated meshes, compatibility on other machines, or production quality. Automatic naming still requires a separately installed local Ollama model and has not been exercised with real naming weights.
 
-**Scope:** native Hunyuan3D produces **untextured, unrigged geometry**. The reference's colors are not baked onto the mesh. Texture synthesis, retopology, fingers/faces, guaranteed T-pose accuracy, and production-ready game assets are not claimed. Review and potentially repair the mesh before guided humanoid rigging.
+**Scope:** native Hunyuan3D produces **untextured, unrigged geometry**; it does not bake the reference's colors onto the mesh. TRELLIS.2 adds local texture synthesis, but its output is also unrigged. Neither profile guarantees retopology, fingers/faces, precise pose, faithful unseen surfaces or production-ready game assets. Review and potentially repair the mesh before guided humanoid rigging.
 
 Designs, reference copies, settings snapshots, and API workflow JSON live under `%APPDATA%\KimodoStudio\designs` with an independent `designer.json` index. Generated stages publish only a validated output from their own completed ComfyUI history entry; imports are labeled separately, and opaque T-poses remain blocked from 3D until cleanup. Cancellation targets only that prompt; restart marks interrupted stages failed while keeping earlier completed references. Failed stages can be retried after fixing setup, and completed stages cannot be overwritten. Model choices can be corrected for an unfinished stage; completed generated image stages retain their original image model family.
 
@@ -273,6 +313,7 @@ npm run typecheck
 npm run test:desktop
 node scripts\designer-smoke.mjs
 node scripts\designer-smoke.mjs --generate
+node scripts\designer-smoke.mjs --textured --input artifacts\designer-smoke\tpose-cutout.png
 node --import tsx scripts\validate-character.ts
 node scripts\animation-smoke.mjs
 node scripts\library-smoke.mjs
@@ -289,4 +330,6 @@ node --import tsx scripts\check-local-backends.ts
 
 The FBX integration scripts expect the user-supplied copy at `artifacts\Bruiser_base.fbx`; no character asset is fetched from third parties. Blender's redistribution/license files remain bundled with its runtime.
 
-The Designer smoke command without flags checks layout, the existing local model list, and external image entry points using explicitly test-only image fixtures. `--generate` starts a temporary app-owned ComfyUI on a free loopback port, uses installed DreamShaper/OpenPose/IP-Adapter/BiRefNet and standard native Hunyuan3D 2 weights, and runs the real scene-to-cutout-to-mesh pipeline without restarting the user's service. It requires actual GLB generation and Blender/Animator handoff, checks external GLB import, and preserves real references, `character.glb` and screenshots in `artifacts\designer-smoke`. It does not treat fixtures as learned output or populate the user's workspace with test records. `--packaged` runs the same check against the portable Character Studio executable.
+The Designer smoke command without flags checks layout, the existing local model list, and external image entry points using explicitly test-only image fixtures. `--generate` starts a temporary app-owned ComfyUI on a free loopback port, uses installed DreamShaper, FLUX.2 klein 4B/Qwen 3/FLUX.2 VAE, BiRefNet and standard native Hunyuan3D 2 weights, and runs the real scene-to-edited-cutout-to-mesh pipeline without restarting the user's service. It requires actual GLB generation and Blender/Animator handoff, checks external GLB import, and preserves real references, `character.glb` and screenshots in `artifacts\designer-smoke`. It does not treat fixtures as learned output or populate the user's workspace with test records. `--packaged` runs the same check against the portable Character Studio executable.
+
+`--textured` selects real TRELLIS.2 inference and additionally verifies embedded 1K base-color and metallic/roughness images, UVs, texture decoding, byte-preserving GLB export and textured Blender/Animator import. `--input` skips image generation by importing the specified valid transparent T-pose; omit it to generate a scene and edited T-pose first. Textured-run outputs are kept separately in `artifacts\designer-texture-smoke`. This does not rig or animate the generated model.

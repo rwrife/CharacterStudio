@@ -28,6 +28,16 @@
 .design-stages strong{display:block;font-size:11px;font-weight:500}
 .design-stages small{display:block;font-size:9px;line-height:1.5;margin-top:5px}
 .design-stages .step-number{flex-shrink:0}
+.design-entry{margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--line)}
+.design-entry>label{font-size:11px;color:#b3c6a1}
+.design-entry-controls{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
+.design-entry-controls select{flex:1;min-width:180px;font-size:11px}
+.design-cutout-choice{display:flex;align-items:center;gap:8px;margin-top:10px;line-height:1.6}
+.design-cutout-choice input{width:auto}
+.design-source{font-size:10px;color:#a9bf97;margin-bottom:9px;overflow-wrap:anywhere}
+.design-edit-instruction{font-size:11px;color:#b3c6a1;margin-bottom:14px;line-height:1.7}
+.design-edit-instruction summary{cursor:pointer}
+.design-edit-instruction p{margin-top:8px}
 .design-canvas{flex:1;min-height:360px;display:flex;align-items:center;justify-content:center;border:1px solid #354537;border-radius:12px;background:#131b16;overflow:hidden;position:relative}
 .design-canvas>img{position:absolute;width:100%;height:100%;object-fit:contain}
 .design-canvas.cutout{background-color:#d9ddd7;background-image:linear-gradient(45deg,#c1c7bd 25%,transparent 25%),linear-gradient(-45deg,#c1c7bd 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#c1c7bd 75%),linear-gradient(-45deg,transparent 75%,#c1c7bd 75%);background-size:24px 24px;background-position:0 0,0 12px,12px -12px,-12px 0}

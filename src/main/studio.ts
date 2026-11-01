@@ -10,7 +10,8 @@ import { createBatchItems } from '../shared/plans'
 import { errorText, generateSchema, settingsSchema, setupSchema, planSchema, batchSchema } from './validation'
 import { api, cancelMotion, generateMotion } from './comfy'
 import { runProcess } from './process'
-import { validateCharacterGlb } from './export-validation'
+import { validateCharacterGlb, validateDesignGlb } from './export-validation'
+import { meshTextureProfile } from '../shared/designer'
 import { Designer } from './designer'
 import { bundledBlenderPath, comfyPythonPath, defaultComfyRoot } from './native-runtime'
 
@@ -30,7 +31,7 @@ export class Studio {
   readonly assets = new Map<string, string>()
   onUpdate: (snapshot: Snapshot) => void = () => {}
 
-  constructor(readonly root: string, readonly appRoot: string, decodeImage: (file: string, cutout?: boolean) => Promise<Buffer> = async () => { throw new Error('Image decoding requires the desktop app.') }) {
+  constructor(readonly root: string, readonly appRoot: string, decodeImage: (file: string, cutout?: boolean, squareSize?: number) => Promise<Buffer> = async () => { throw new Error('Image decoding requires the desktop app.') }) {
     mkdirSync(root, { recursive: true })
     const comfyRoot = defaultComfyRoot()
     const statePath = join(root, 'studio.json')
@@ -167,7 +168,7 @@ export class Studio {
     })
   }
 
-  async importCharacter(input: string, name = basename(input)): Promise<Character> {
+  async importCharacter(input: string, name = basename(input), requiredTextureSize?: number): Promise<Character> {
     const extension = input.toLowerCase().endsWith('.glb') ? 'glb' : 'fbx'
     if (!input.toLowerCase().endsWith('.' + extension)) throw new Error('Select an FBX or generated GLB character file.')
     if ((await stat(input)).size > 500 * 1024 * 1024) throw new Error('Character exceeds the 500 MB import limit.')
@@ -177,6 +178,7 @@ export class Studio {
       mkdirSync(output, { recursive: true })
       await copyFile(input, join(output, 'original.' + extension))
       await this.blender(job, { command: 'import', input, output }, signal, settings)
+      if (requiredTextureSize) await validateDesignGlb(join(output, 'preview.glb'), requiredTextureSize)
       signal.throwIfAborted()
       const report = JSON.parse(readFileSync(join(output, 'import-report.json'), 'utf8'))
       this.state.characters.unshift({
@@ -195,7 +197,9 @@ export class Studio {
       if (!character) throw new Error('Previously imported design character is missing.')
       return character
     }
-    const character = await this.importCharacter(this.designer.output(id, 'model'), this.designer.title(id))
+    const design = this.designer.snapshot().designs.find(design => design.id === id)
+    const character = await this.importCharacter(this.designer.output(id, 'model'), this.designer.title(id),
+      design?.modelTextured && design.sources?.model?.kind === 'generated' && design.config.meshProfile === 'textured' ? meshTextureProfile.textureSize : undefined)
     this.designer.assign(id, character.id)
     return character
   }
