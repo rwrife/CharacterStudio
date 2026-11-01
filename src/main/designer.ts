@@ -249,6 +249,56 @@ export class Designer {
       return design.id
     } finally { release() }
   }
+  async variation(id: string, value: DesignStage, brief: DesignRequest) {
+    const stage = z.enum(['scene', 'tpose', 'model']).parse(value)
+    const request = stage === 'scene' ? designRequestSchema.parse(brief) :
+      designImportSchema.parse({ stage, brief, isolated: false }).brief
+    const release = this.acquire()
+    try {
+      const source = this.design(id)
+      const cleanupOnly = stage === 'tpose' && !!source.tposeUrl && !source.tposeIsolated
+      if (stage === 'tpose' && !cleanupOnly && !source.sceneUrl || stage === 'model' && !source.tposeUrl)
+        throw new Error('Complete and review the preceding reference stage first.')
+      if (stage === 'model' && !source.tposeIsolated)
+        throw new Error('3D generation requires an isolated transparent T-pose. Remove its background first.')
+      if (request.referenceId && !this.state.references.some(r => r.id === request.referenceId))
+        throw new Error('Selected reference image no longer exists.')
+      const next: Design = {
+        id: randomUUID(), title: stage === 'scene' ? request.title : request.title || source.title,
+        request, config: structuredClone(source.config),
+        createdAt: new Date().toISOString(), status: 'idle', message: 'Variation ready to generate.'
+      }
+      const directory = join(this.root, 'designs', next.id)
+      mkdirSync(directory, { recursive: true })
+      try {
+        for (const previous of ['scene', 'tpose'] as const) {
+          if (!source[`${previous}Url`] || stage === 'scene' ||
+              previous === 'tpose' && stage !== 'model' && !cleanupOnly) continue
+          const file = this.file(id, previous)
+          const target = join(directory, basename(file))
+          await copyFile(file, target)
+          next[`${previous}Url`] = this.asset(`${next.id}-${previous}`, target)
+          if (previous === 'tpose') next.tposeIsolated = source.tposeIsolated
+          if (source.sources?.[previous]) {
+            next.sources ??= {}
+            next.sources[previous] = structuredClone(source.sources[previous])
+          }
+          const workflow = join(this.root, 'designs', id, `${previous}-workflow.json`)
+          if (existsSync(workflow)) await copyFile(workflow, join(directory, `${previous}-workflow.json`))
+        }
+        for (const name of ['tpose.png', 'original-tpose.png', 'original-tpose.jpg', 'original-tpose.jpeg', 'original-tpose.webp', 'import.json']) {
+          const original = join(this.root, 'designs', id, name)
+          if (next.tposeUrl && existsSync(original) && !existsSync(join(directory, name)))
+            await copyFile(original, join(directory, name))
+        }
+      } catch (error) {
+        await rm(directory, { recursive: true, force: true })
+        throw error
+      }
+      this.state.designs.unshift(next); this.persist()
+      return next.id
+    } finally { release() }
+  }
   async importStage(file: string, value: DesignImportRequest): Promise<string> {
     const request = designImportSchema.parse(value)
     const release = this.acquire()

@@ -417,6 +417,114 @@ test('failed and missing output jobs never expose completed assets', async t => 
   assert.equal(cancelled(), design.promptId)
 })
 
+test('completed stages can generate repeated variations with current briefs and models without overwriting outputs', async t => {
+  const { root, studio } = await fixture(t)
+  const id = studio.designer.create(request)
+  for (const stage of ['scene', 'tpose', 'model'] as const) await studio.designer.run(id, stage)
+  studio.designer.assign(id, 'original-animator-character')
+  const original = studio.designer.snapshot().designs[0]
+  const files = await Promise.all(['scene.png', 'tpose-cutout.png', 'model.glb', 'scene-workflow.json', 'tpose-workflow.json', 'model-workflow.json']
+    .map(name => readFile(join(root, 'designs', id, name))))
+  const updated = { ...request, description: 'A new robot in a city', style: 'Watercolor concept art', seed: 123, steps: 35 }
+  studio.designer.saveSettings({ ...config, imageProfile: 'sdxl' })
+  for (const stage of ['scene', 'tpose', 'model'] as const) {
+    let source = id
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const next = await studio.designer.variation(source, stage, updated)
+      const prepared = studio.designer.snapshot().designs[0]
+      assert.equal(prepared[`${stage}Url`], undefined)
+      assert.equal(prepared.characterId, undefined)
+      assert.equal(prepared.modelTextured, undefined)
+      assert.equal(!!prepared.sceneUrl, stage !== 'scene')
+      assert.equal(!!prepared.tposeUrl, stage === 'model')
+      assert.equal(prepared.modelUrl, undefined)
+      if (stage !== 'scene') {
+        assert.deepEqual(await readFile(studio.designer.output(next, 'scene')), files[0])
+        assert.deepEqual(await readFile(join(root, 'designs', next, 'scene-workflow.json')), files[3])
+      }
+      if (stage === 'model') {
+        assert.deepEqual(await readFile(studio.designer.output(next, 'tpose')), files[1])
+        assert.deepEqual(await readFile(join(root, 'designs', next, 'tpose-workflow.json')), files[4])
+      }
+      await studio.designer.run(next, stage)
+      const workflow = JSON.parse(await readFile(join(root, 'designs', next, `${stage}-workflow.json`), 'utf8'))
+      assert.deepEqual(workflow.request, updated)
+      assert.equal(workflow.config.imageProfile, stage === 'scene' ? 'sdxl' : config.imageProfile)
+      assert.equal(studio.designer.snapshot().designs[0].status, 'idle')
+      source = next
+    }
+  }
+  assert.deepEqual(studio.designer.snapshot().designs.find(d => d.id === id), original)
+  assert.deepEqual(await Promise.all(['scene.png', 'tpose-cutout.png', 'model.glb', 'scene-workflow.json', 'tpose-workflow.json', 'model-workflow.json']
+    .map(name => readFile(join(root, 'designs', id, name)))), files)
+  const restarted = new Studio(root, resolve('.')).designer
+  assert.equal(restarted.snapshot().designs.length, 7)
+  assert.deepEqual(restarted.snapshot().designs.find(d => d.id === id)?.request, request)
+})
+
+test('a geometry variation can switch to textured generation while retaining its validated T-pose', async t => {
+  const { root, studio, setTextured } = await fixture(t)
+  const file = join(root, 'pose.png')
+  await writeFile(file, 'TEST-ONLY cutout')
+  const id = await studio.designer.importStage(file, { stage: 'tpose', brief: request, isolated: true })
+  await studio.designer.run(id, 'model')
+  studio.designer.saveSettings({ ...config, meshProfile: 'textured' })
+  setTextured()
+  const next = await studio.designer.variation(id, 'model', { ...request, seed: 84 })
+  await studio.designer.run(next, 'model')
+  const designs = studio.designer.snapshot().designs
+  assert.equal(designs[0].modelTextured, true)
+  assert.equal(designs[0].config.meshProfile, 'textured')
+  assert.equal(designs[1].modelTextured, false)
+  assert.equal(designs[1].config.meshProfile, 'mini')
+  assert.equal(await readFile(join(root, 'designs', next, 'original-tpose.png'), 'utf8'), 'TEST-ONLY cutout')
+  assert.deepEqual(designs[0].sources?.tpose, designs[1].sources?.tpose)
+  await assert.rejects(studio.designer.variation(next, 'tpose', request), /preceding reference/)
+})
+
+test('failed and cancelled variations leave their source design and downstream outputs unchanged', async t => {
+  const { studio, setFailed, setPending } = await fixture(t)
+  const id = studio.designer.create(request)
+  for (const stage of ['scene', 'tpose', 'model'] as const) await studio.designer.run(id, stage)
+  const original = studio.designer.snapshot().designs[0]
+  const failed = await studio.designer.variation(id, 'tpose', request)
+  setFailed()
+  await assert.rejects(studio.designer.run(failed, 'tpose'), /Test GPU OOM/)
+  assert.equal(studio.designer.snapshot().designs[0].tposeUrl, undefined)
+  const cancelled = await studio.designer.variation(id, 'model', request)
+  setPending()
+  const work = studio.designer.run(cancelled, 'model')
+  const rejected = assert.rejects(work, /cancelled/)
+  await assert.rejects(studio.designer.variation(id, 'scene', request), /share one local job slot/)
+  await studio.designer.cancel()
+  await rejected
+  const designs = studio.designer.snapshot().designs
+  assert.equal(designs[0].modelUrl, undefined)
+  assert.equal(designs[0].status, 'cancelled')
+  assert.deepEqual(designs.find(d => d.id === id), original)
+})
+
+test('variation requests enforce stage, brief, reference and cutout validation before creating designs', async t => {
+  const { root, studio } = await fixture(t)
+  const file = join(root, 'opaque.png')
+  await writeFile(file, 'TEST-ONLY opaque pose')
+  const id = await studio.designer.importStage(file, { stage: 'tpose', brief: request, isolated: false })
+  await assert.rejects(studio.designer.variation(id, 'model', request), /isolated transparent/)
+  await assert.rejects(studio.designer.variation(id, 'scene', { ...request, description: '' }))
+  await assert.rejects(studio.designer.variation(id, 'scene', { ...request, referenceId: '00000000-0000-4000-8000-000000000001' }), /no longer exists/)
+  await assert.rejects(studio.designer.variation(id, 'invalid' as never, request))
+  assert.equal(studio.designer.snapshot().designs.length, 1)
+  const cleanup = await studio.designer.variation(id, 'tpose', { ...request, seed: 99 })
+  await studio.designer.run(cleanup, 'tpose')
+  assert.equal(studio.designer.snapshot().designs[0].tposeIsolated, true)
+  assert.equal(studio.designer.snapshot().designs[1].tposeIsolated, false)
+  const model = await studio.designer.variation(cleanup, 'model', { ...request, title: '' })
+  assert.equal(studio.designer.title(model), request.title)
+  const workflow = JSON.parse(await readFile(join(root, 'designs', model, 'tpose-workflow.json'), 'utf8'))
+  assert.equal(workflow.input.file, 'tpose.png')
+  assert.deepEqual(await readFile(join(root, 'designs', model, workflow.input.file)), await readFile(join(root, 'designs', id, 'tpose.png')))
+})
+
 test('completed history without required image data is an actionable failure', async t => {
   const { studio, setMissing } = await fixture(t)
   setMissing()

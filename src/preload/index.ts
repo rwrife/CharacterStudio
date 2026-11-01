@@ -22,6 +22,7 @@ const api: StudioApi = {
   designerSettings: config => ipcRenderer.invoke('designer:settings', config),
   designerReference: () => ipcRenderer.invoke('designer:reference'),
   designerCreate: request => ipcRenderer.invoke('designer:create', request),
+  designerVariation: (id, stage, request) => ipcRenderer.invoke('designer:variation', id, stage, request),
   designerImport: request => ipcRenderer.invoke('designer:import', request),
   designerRun: (id, stage) => ipcRenderer.invoke('designer:run', id, stage),
   designerCancel: () => ipcRenderer.invoke('designer:cancel'),

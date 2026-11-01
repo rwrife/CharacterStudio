@@ -114,6 +114,7 @@ if (ownsWorkspace) app.whenReady().then(async () => {
   handle('designer:cancel-download', () => studio.designer.cancelDownload())
   handle('designer:settings', (config: DesignerConfig) => studio.designer.saveSettings(config))
   handle('designer:create', (request: DesignRequest) => studio.designer.create(request))
+  handle('designer:variation', (id: string, stage: DesignStage, request: DesignRequest) => studio.designer.variation(id, stage, request))
   handle('designer:import', async (value: DesignImportRequest) => {
     const request = designImportSchema.parse(value)
     const result = await fileDialogs.showOpenDialog(window, {
