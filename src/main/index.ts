@@ -86,7 +86,7 @@ if (ownsWorkspace) app.whenReady().then(async () => {
     const result = await dialog.showOpenDialog(window, {
       title: kind === 'blender' ? 'Choose native Blender executable' : kind === 'comfy' ? 'Choose ComfyUI backend folder (contains main.py)' : 'Choose ComfyUI output folder',
       properties: kind === 'blender' ? ['openFile'] : ['openDirectory'],
-      ...(kind === 'blender' ? { filters: [{ name: 'Blender', extensions: ['exe'] }] } : {})
+      ...(kind === 'blender' && process.platform === 'win32' ? { filters: [{ name: 'Blender', extensions: ['exe'] }] } : {})
     })
     return result.canceled ? null : result.filePaths[0]
   })

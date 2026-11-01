@@ -12,5 +12,5 @@
     "types": ["node", "vite/client"],
     "noEmit": true
   },
-  "include": ["src", "tests", "electron.vite.config.ts"]
+  "include": ["src", "tests", "electron.vite.config.ts", "scripts/package.ts", "scripts/setup-blender.ts"]
 }
