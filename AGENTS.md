@@ -4,7 +4,7 @@
 
 KimodoStudio is an AI-assisted video game character creation studio. Help game developers prepare character assets, fit and skin humanoid rigs, generate motion from natural-language instructions, organize reusable animation graphs, and export animated characters for downstream game development.
 
-The current product is a local Windows ARM64 desktop application built around imported humanoid FBX assets, Blender, and Kimodo motion generation through ComfyUI. It does not currently generate character meshes from text. Treat broader character-creation capabilities as goals, not shipped features.
+The current product is a local Windows ARM64 desktop application with Designer and Animator workspaces. Designer uses local ComfyUI to turn a text brief or reference image into a scene, transparent T-pose, and untextured Hunyuan3D geometry; it can also start from imported scenes, T-poses, or embedded GLB meshes. Animator prepares imported humanoid FBX assets or Designer meshes with Blender and generates Kimodo motion through ComfyUI. Generated geometry is not a finished game asset. Treat broader character-creation capabilities as goals, not shipped features.
 
 ## Repository layout
 
@@ -57,4 +57,11 @@ Use `npm run test:desktop` for FBX import and rig-control changes when the requi
 
 Native integration checks require the isolated Blender runtime and, for some checks, the existing ComfyUI Python environment. Character integration scripts expect a user-supplied `artifacts\Bruiser_base.fbx`; that asset is not versioned. Do not download substitute third-party assets or gated weights just to make a check pass.
 
-Update the README when changing setup, supported workflows, exports, or limitations. Keep screenshots representative of the actual UI, omit private paths and credentials, and label test-only motion honestly.
+## README maintenance
+
+- Update `README.md` in the same change whenever adding a major user-facing feature or materially changing an existing one. Also update it when changing setup, supported workflows, exports, model requirements, or limitations; documentation is part of completing the feature.
+- Keep the introduction and **Features at a glance** aligned with the implemented application. Add or revise the relevant workflow section with how to access the feature, required setup, supported inputs/outputs, and important limitations. Use actual UI labels and working commands.
+- Add or refresh screenshots for major UI features under `docs/screenshots` and embed them in the README with descriptive alt text and captions. Use actual app captures, not mockups; keep repository-owned copies rather than linking to ignored `artifacts` files, temporary paths, or private external locations.
+- Inspect screenshots before including them. Omit private paths, credentials, and personal data. Label historical UI, imported assets, analytic/test fixtures, and experimental outputs accurately; screenshots are not proof of motion quality or end-to-end success.
+- Verify feature claims against the implementation and observed results. Distinguish available functionality from prerequisites, unverified stages, experiments, and future goals. When evidence changes, update stale limitations without extrapolating success to other stages or models.
+- Before finishing, check that README links and screenshot paths resolve and that existing setup and compatibility guidance remains accurate. If a required capture or integration result is unavailable, state that limitation rather than inventing evidence.
