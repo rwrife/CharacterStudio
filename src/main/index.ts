@@ -162,7 +162,7 @@ if (ownsWorkspace) app.whenReady().then(async () => {
     return characters
   })
   handle('studio:setup', (id: string, setup: RigSetup) => studio.saveSetup(id, setup))
-  handle('studio:rig', (id: string) => studio.rig(id))
+  handle('studio:rig', (id: string, skinning?: import('../shared/types').SkinningMode) => studio.rig(id, false, skinning))
   handle('studio:generate', (request: GenerateRequest) => studio.generate(request))
   handle('studio:cancel', () => studio.cancel())
   handle('studio:check', () => studio.check())

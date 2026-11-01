@@ -14,7 +14,7 @@ Local Windows ARM64 desktop app with **Designer** and **Animator** workspaces. D
 | [Textured models](#local-textured-models) | Select native TRELLIS.2 to generate geometry and embedded base-color/metallic/roughness textures together from the T-pose. Hunyuan remains the lower-memory geometry-only option. |
 | [External inputs](#start-from-external-inputs) | Skip ahead with an existing T-pose or embedded GLB instead of regenerating earlier stages. Scenes are always generated from a description or a reference photo plus description. Preserve originals and distinguish imported artifacts from generated results. |
 | [Local model profiles](#offline-models-and-memory-profiles) | Choose installed weights or use **Download required models** on supported missing-model warnings. Approve the download, then Studio verifies and selects the files for local inference. GPU-memory checks still apply; optional IP-Adapter and Ollama naming need separate setup. |
-| [Guided humanoid rigging](#animator-workflow) | Import FBX assets or send Designer meshes to Animator. Inspect the character in 3D, adjust mirrored joint landmarks and orientation, and build a Blender-skinned body rig. |
+| [Guided humanoid rigging](#animator-workflow) | Import FBX assets or send Designer meshes to Animator. Adjust mirrored joint landmarks and orientation, build a Blender-skinned body rig with automatic missing-weight repair, or explicitly accept your points with approximate fallback skinning. |
 | [Natural-language animation](#animator-workflow) | Generate motion takes with duration, seed, denoising steps, and in-place controls. Branch from a completed take's actual endpoint; preview with playback, scrubbing, orbit, zoom, and wireframe. |
 | [Motion encoder choice](#experimental-lfm-setup-no-llama-approval) | Use the original local Llama/LLM2Vec encoder or explicitly select the experimental ungated LFM bridge. Readiness checks and GPU guidance surface setup requirements without silently switching models. |
 | [Visual animation graphs](#visual-animation-graphs) | Connect states, reusable actions, transitions, and pose-constrained loops. Inspect path-specific incoming context, save layouts, and preview node clips, transitions, or full paths. |
@@ -54,6 +54,10 @@ Actual local TRELLIS.2 generation from the edited cutout above, imported as the 
 ![Animator showing the Designer mesh imported into Character lab with humanoid landmarks and rig-fitting controls](docs/screenshots/character-lab.png)
 
 The textured Designer mesh has been handed off to Animator through Blender, retaining its material maps. Adjust humanoid joint landmarks before building the skin and rig; this screenshot shows fitting, not a completed rig or generated animation.
+
+![Animator rig-fitting panel with saved point controls, incomplete-skinning guidance, and Accept points plus fallback skinning](docs/screenshots/rigging-recovery.png)
+
+Actual desktop controls captured with a simulated skinning failure in an isolated UI test workspace. This illustrates point acceptance and recovery actions, not successful repair of a user character or motion quality.
 
 ### Animator: learned motion preview
 
@@ -287,6 +291,18 @@ Designs, reference copies, settings snapshots, and API workflow JSON live under 
 4. **Describe motion** and generate. Periods separate motion segments; duration applies to each segment. Jobs display progress and persist across restarts. Cancel targets only the app's prompt, never the global ComfyUI queue.
 5. **Preview and export.** Completed clips support play/pause, scrubbing, orbit, zoom, and wireframe. Download animated GLB, animated FBX, or editable Blender scene. BVH/NPZ are separately labeled **motion-only** data. Partial/failed jobs never expose completed-character downloads.
 
+### Recovering from incomplete skinning
+
+**Build skin + rig** uses your fitted points, runs Blender bone-heat weighting, and automatically attempts to fill unweighted vertices from the closest weighted vertex along connected mesh edges. Existing positive weights are retained before the usual four-influence limit and normalization. Repair does not move your points, remesh the character, alter materials, or overwrite the original import.
+
+If an entire disconnected piece has no weights, surface-based repair cannot attach it. Adjust the points in **Fit & skin**, or choose **Accept points + fallback skinning** to keep your current fit and try approximate weights based on distance to the two nearest fitted bone segments for the remaining vertices. This action saves unsaved point edits first, also tries normal bone-heat weighting and connected-surface repair, and is available without a prior failed attempt. Batches use automatic surface repair only; they never silently opt into proximity fallback.
+
+Both actions require every vertex to have usable weights, required body bones to influence the mesh, and the exported skinned GLB to pass validation. Failed/cancelled jobs do not publish a new completed rig. A failed retry keeps the fitted points and earlier completed jobs; editing points invalidates the character's current rig until rebuilding succeeds.
+
+**Rig notes** show repair counts and approximation warnings and persist across restarts. Recovery warnings also follow generated motion reports. Complete weights are not proof of good bending: inspect the result and review animation before production use, particularly shoulders, hips, touching limbs, clothing, and separate pieces. This is weight repair, not automatic topology cleanup; severe intersections or malformed geometry may still need Blender cleanup. Imported external armatures/weights are still replaced in the working copy.
+
+Run `npm run test:rigging` after `npm run setup:blender` for native recovery, coverage, fitted-bone preservation, and GLB round-trip regressions using procedural test geometry. `python -m unittest discover -s tests -p test_skin_weights.py` runs the pure repair tests without Blender. After `npm run build`, `node --import tsx scripts\rigging-smoke.mjs` exercises the desktop recovery controls with explicitly simulated backend responses and captures the panel. These fixtures do not establish repair quality on real generated characters.
+
 ## Local Llama, not remote inference
 
 Kimodo uses a trained **Llama 3 8B + LLM2Vec** text encoder with its MNTP and supervised adapters. Inference happens on this computer. Hugging Face supplies the initial model downloads; it is not an inference endpoint.
@@ -391,7 +407,7 @@ The branch constraint serialization, conversion to the real SOMA30 model skeleto
 - SOMA-77 global rotations are converted from Y-up into Blender coordinates, corrected for the fitted target rest pose, and baked onto the skinned character. Root trajectory is scaled to the character; optional in-place mode removes horizontal root displacement. Fine finger motion is not transferred to the body-only rig.
 - FBX export uses Blender, **not** the unavailable ARM64 Autodesk Python SDK.
 - Foot contact cleanup is not installed. Foot sliding, extreme joint bends, or imperfect automatic weights can require manual cleanup. Playback looping is not a promise of a seamless looping animation.
-- Skinning errors are actionable failures, not silent proximity-weight fallbacks. Repair intersecting/non-manifold meshes and refit joints if Blender cannot assign complete weights.
+- Missing weights trigger connected-surface repair. Proximity fallback requires **Accept points + fallback skinning**, retains fitted joints, and records approximation warnings. Complete vertex coverage and required-bone checks still apply; repair does not guarantee correct deformation or fix intersecting/non-manifold geometry.
 - The app's ComfyUI endpoint is restricted to loopback. No character upload service exists. Downloaded model files remain local. ComfyUI/custom nodes are trusted local software; separately started services remain responsible for their own configuration.
 
 ## Data and reproducibility
