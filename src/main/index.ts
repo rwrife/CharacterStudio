@@ -52,6 +52,7 @@ if (ownsWorkspace) app.whenReady().then(async () => {
   })
   window = new BrowserWindow({
     title: 'Character Studio', width: 1440, height: 960, minWidth: 1100, minHeight: 760,
+    icon: join(import.meta.dirname, '../renderer/icon.png'),
     backgroundColor: '#111313', autoHideMenuBar: true,
     webPreferences: { preload: join(import.meta.dirname, '../preload/index.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true }
   })

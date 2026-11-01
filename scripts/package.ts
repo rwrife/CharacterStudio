@@ -34,6 +34,7 @@ async function main() {
   const paths = await packager({
     dir: '.', name: 'CharacterStudio', platform, arch, out: options.get('out') ?? 'release', overwrite: true,
     asar: false, prune: true, appVersion: version, appBundleId: 'com.rwrife.characterstudio',
+    icon: resolve('build', 'icon'),
     win32metadata: { ProductName: 'Character Studio' },
     ignore: path => ignorePackagePath(path, distribution.directory)
   })
@@ -41,7 +42,7 @@ async function main() {
   const appRoot = platform === 'darwin'
     ? join(paths[0], 'CharacterStudio.app', 'Contents', 'Resources', 'app')
     : join(paths[0], 'resources', 'app')
-  for (const file of ['out/main/index.js', 'out/preload/index.cjs', 'out/renderer/index.html', 'backend/character.py'])
+  for (const file of ['out/main/index.js', 'out/preload/index.cjs', 'out/renderer/index.html', 'out/renderer/icon.png', 'backend/character.py'])
     await access(join(appRoot, ...file.split('/')))
   await access(bundledBlenderPath(appRoot, platform, arch))
   console.log(`Packaged application with native Blender: ${paths[0]}`)
