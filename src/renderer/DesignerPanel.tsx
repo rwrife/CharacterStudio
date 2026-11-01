@@ -56,7 +56,7 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
   }
 
   return <div id="designer-panel" role="tabpanel" aria-labelledby="designer-tab" hidden={!visible} className="designer-layout">
-    <aside className="design-brief">
+    <aside className="design-brief" aria-label="Designer brief">
       <div className="section-kicker">01 / IMAGINE A CHARACTER</div>
       <h1>Character designer</h1>
       <p className="panel-description">Start with a story or a reference. Shape the look, review the pose, then build a mesh.</p>
@@ -100,7 +100,7 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
         {!data?.designs.length && <p className="fine-print">Your character concepts will appear here.</p>}
       </div>
     </aside>
-    <main className="design-workspace">
+    <main className="design-workspace" aria-label="Designer canvas">
       <div className="scene-heading"><div><span className="section-kicker">DESIGN CANVAS</span><h2>{design?.title || 'A character waiting to happen'}</h2></div><Palette size={21} /></div>
       <div className="design-stages">
         {stages.map((stage, index) => {
@@ -149,7 +149,7 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
       </div>}
       <div className="design-limits"><ShieldCheck size={17} /><p>Review each stage before continuing. 3D uses only the validated T-pose foreground, not the original scene. Hunyuan3D produces geometry only; TRELLIS.2 generates new geometry plus embedded textures from the same reference. It does not repaint an existing Hunyuan mesh. Both are <strong>unrigged</strong>. Review unseen surfaces, texture seams, anatomy and hands before Animator.</p></div>
     </main>
-    <aside className="design-models">
+    <aside className="design-models" aria-label="Designer model profiles">
       <div className="section-heading"><span className="section-kicker">LOCAL MODEL PROFILES</span><button aria-label="Refresh designer models" disabled={checking || locked} onClick={() => void refresh()}><RefreshCw size={14} className={checking ? 'spin' : ''} /></button></div>
       <h2>Built around your GPU</h2>
       <div className="design-hardware">

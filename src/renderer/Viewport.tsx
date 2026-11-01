@@ -245,7 +245,7 @@ export function Viewport(props: Props) {
       <button title="Front view" aria-label="Front view" onClick={() => view('front')}><PersonStanding size={17} /></button>
       <button title="Side view" aria-label="Side view" onClick={() => view('side')}><Box size={17} /></button>
       <button title="Reset camera" aria-label="Reset camera" onClick={() => view('reset')}><Scan size={17} /></button>
-      <button title="Wireframe" aria-label="Toggle wireframe" className={wireframe ? 'selected' : ''} onClick={() => setWireframe(!wireframe)}><Crosshair size={17} /></button>
+      <button title="Wireframe" aria-label="Toggle wireframe" aria-pressed={wireframe} className={wireframe ? 'selected' : ''} onClick={() => setWireframe(!wireframe)}><Crosshair size={17} /></button>
     </div>
     {!props.url && <div className="empty-viewport"><div className="character-outline"><PersonStanding size={100} strokeWidth={0.65} /></div><h2>Your character. In motion.</h2><p>Import an FBX to start building<br />a locally rigged, animated character.</p><span>FBX → RIG → MOTION → ANIMATED MESH</span></div>}
     {loading && <div className="viewport-notice"><span className="spinner" /> Loading character geometry…</div>}

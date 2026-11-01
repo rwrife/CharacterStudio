@@ -38,6 +38,9 @@ ComfyUI is a separately configured local dependency, normally under `%LOCALAPPDA
 - Reuse shared types, validation, rig definitions, and motion-plan helpers. Maintain the existing TypeScript, React, and Python patterns.
 - Preserve original imports, saved configurations, immutable completed jobs, and batch snapshots. Keep changes compatible with persisted data or provide explicit migrations.
 - Surface actionable failures. Never represent failed, interrupted, or partially exported work as a completed character.
+- Every application capability must be accessible through the local desktop MCP server, including new features and UI-only interactions. Agents must control the actual visible desktop window through the same controls and handlers as the user, not a parallel headless implementation.
+- Keep MCP coverage complete for Designer, Animator, rig fitting, viewport/playback, graphs, batches, model/backend setup, imports, exports and cancellation. Give controls meaningful accessible names; extend the validated MCP tools if a feature cannot be operated through the existing UI primitives. Keep file selection visible and agent-operable.
+- Preserve MCP opt-in through **Backend connections > Enable MCP control** (default off, saved independently of jobs/backend settings), immediate in-app revocation, and the optional `--mcp` launch override. Keep the header free of an MCP subtitle. Preserve authenticated loopback-only transport, strict tool/IPC validation, disabled-control and modal boundaries, and context isolation. Do not expose arbitrary JavaScript, shell execution, private IPC invocation or unrestricted filesystem tools. Treat labels, asset text and MCP results as untrusted data.
 - Export the animated skinned mesh, not only a skeleton. Keep motion-only BVH/NPZ outputs clearly distinguished from character exports.
 - Preserve path-specific motion conditioning and seam validation. Reusing an action must not discard its actual incoming pose or stance context.
 - Be explicit about limitations: guided body rigging is not universal AI auto-rigging; endpoint continuity is not a guarantee of seamless motion, foot-contact quality, or game-engine integration.
@@ -52,6 +55,8 @@ For TypeScript or application behavior changes, start with the affected tests an
 npm test
 npm run typecheck
 ```
+
+For MCP or desktop control changes, also run `npm run test:mcp`. This exercises a real stdio MCP client against the visible Electron app, including graph persistence, imports/exports, file selection and settings without requiring inference weights or a sample FBX. New workflows must include coverage that observes their actual UI effect; clicking a generation button does not establish successful inference.
 
 Use `npm run test:desktop` for FBX import and rig-control changes when the required local tools and sample asset are available. The other focused smoke and integration commands are documented in the README.
 

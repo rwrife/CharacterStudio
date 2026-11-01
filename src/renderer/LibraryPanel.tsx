@@ -121,7 +121,7 @@ export function LibraryPanel(props: Props) {
       {error && <div className="banner error" role="alert">{error}</div>}
       {notice && <div className="banner success" role="status">{notice}</div>}
       {tab === 'plans' ? <div className="library-grid">
-        <aside className="preset-list">
+        <aside className="preset-list" aria-label="Saved animation graphs">
           <button className="secondary full" disabled={locked} onClick={() => choose(newPlan(), true)}><Plus size={15} /> New graph</button>
           {props.snapshot.plans.map(p => <button className={`preset ${p.id === plan.id ? 'active' : ''}`} key={p.id} disabled={locked} onClick={() => choose(p)}><Layers3 size={16} /><span><strong>{p.name}</strong><small>{p.nodes.length} nodes · {p.edges.length} connections</small></span></button>)}
           <button className="text-button full" disabled={locked} onClick={fightingTemplate}><GitBranch size={14} /> Fighting graph template</button>
@@ -131,7 +131,7 @@ export function LibraryPanel(props: Props) {
           <button className="text-button full" disabled={locked || !!expansion.error} onClick={() => void action(async () => { await save(); const path = await window.studio.exportPlan(plan.id); if (path) setNotice(`Configuration saved to ${path}`) })}><ArrowDownToLine size={14} /> Export configuration JSON</button>
           <p className="fine-print">Save the layout, shared actions, entry states, transitions, prompts, seeds and rig fit as one reusable graph. Older branch configurations are preserved as direct pose joins.</p>
         </aside>
-        <div className="plan-editor">
+        <div className="plan-editor" aria-label="Animation graph editor">
           <label className="field-label" htmlFor="plan-name">Graph name {dirty && <span>UNSAVED</span>}</label>
           <input id="plan-name" value={plan.name} disabled={locked} onChange={e => change({ ...plan, name: e.target.value })} />
           <div className="node-actions"><button className="secondary" disabled={locked || plan.nodes.length >= 32 || plan.edges.length >= 64} onClick={() => add('state')}><Plus size={13} /> Add state</button><button className="secondary" disabled={locked || plan.nodes.length >= 32 || plan.edges.length >= 64} onClick={() => add('action')}><Plus size={13} /> Add action</button><span className="fine-print">{expansion.contexts.length} path-specific clips / character</span></div>
@@ -159,7 +159,7 @@ export function LibraryPanel(props: Props) {
             </>}
           </section>
         </div>
-        <aside className="graph-inspector">
+        <aside className="graph-inspector" aria-label="Animation graph inspector">
           {selectedEdge ? <>
             <div className="section-kicker">CONNECTION</div><h3>{plan.nodes.find(n => n.id === selectedEdge.source)?.label} → {plan.nodes.find(n => n.id === selectedEdge.target)?.label}</h3>
             <label className="field-label" htmlFor="transition-duration">Transition seconds</label><input id="transition-duration" type="number" min="0" max="5" step="0.5" value={selectedEdge.seconds} disabled={locked} onChange={e => change({ ...plan, edges: plan.edges.map(edge => edge.id === edgeId ? { ...edge, seconds: Number(e.target.value) } : edge) })} />

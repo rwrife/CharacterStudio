@@ -9,11 +9,19 @@ import type { GenerateRequest, RigSetup, Settings, MotionPlan, BatchRequest } fr
 import type { DesignRequest, DesignerConfig, DesignStage, DesignImportRequest } from '../shared/designer'
 import { designImportSchema } from './designer'
 import { validateCutout } from './image-validation'
+import { z } from 'zod'
+import { FileDialogs } from './file-dialogs'
+import { startDesktopMcp } from './mcp-server'
+import { desktopAdapter } from './mcp-desktop'
+import { DesktopMcpControl } from './mcp-control'
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'studio', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }])
 let window: BrowserWindow
 let studio: Studio
 let quitting = false
+const mcpRequested = process.argv.includes('--mcp')
+let mcp: DesktopMcpControl | undefined
+let files: FileDialogs | undefined
 app.setName('Character Studio')
 // Keep the established data directory so the product rename does not hide existing work.
 app.setPath('userData', process.env.STUDIO_DATA_DIR ?? join(app.getPath('appData'), 'KimodoStudio'))
@@ -61,6 +69,17 @@ if (ownsWorkspace) app.whenReady().then(async () => {
     if (url !== window.webContents.getURL()) event.preventDefault()
   })
   window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
+  const fileDialogs = new FileDialogs(window, false)
+  files = fileDialogs
+  const mcpControl = new DesktopMcpControl(studio.root,
+    () => startDesktopMcp(desktopAdapter(window, () => studio.snapshot()), studio.root),
+    enabled => {
+      fileDialogs.setControlled(enabled)
+      if (!window.isDestroyed()) window.webContents.send('studio:mcp-changed', enabled)
+    })
+  mcp = mcpControl
+  window.webContents.on('did-start-loading', () => fileDialogs.cancel())
+  window.on('closed', () => fileDialogs.cancel())
   const allowedRenderer = process.env.ELECTRON_RENDERER_URL
   function handle(channel: string, callback: (...args: never[]) => unknown) {
     ipcMain.handle(channel, (event, ...args) => {
@@ -72,13 +91,20 @@ if (ownsWorkspace) app.whenReady().then(async () => {
     })
   }
   studio.onUpdate = snapshot => { if (!window.isDestroyed()) window.webContents.send('studio:update', snapshot) }
+  handle('studio:mcp-enabled', () => mcpControl.enabled)
+  handle('studio:mcp-set-enabled', (enabled: unknown) => mcpControl.setEnabled(z.boolean().parse(enabled)))
+  handle('studio:file-dialog-reply', (...args: unknown[]) => {
+    const [id, paths, overwrite] = z.tuple([z.string().uuid(), z.array(z.string().min(1).max(32768)).max(32).nullable(), z.boolean()]).parse(args)
+    return fileDialogs.reply(id, paths, overwrite)
+  })
+  handle('studio:file-dialog-browse', (value: unknown) => fileDialogs.browse(z.string().uuid().parse(value)))
   handle('studio:snapshot', () => studio.snapshot())
   handle('designer:readiness', () => studio.designer.readiness())
   handle('designer:settings', (config: DesignerConfig) => studio.designer.saveSettings(config))
   handle('designer:create', (request: DesignRequest) => studio.designer.create(request))
   handle('designer:import', async (value: DesignImportRequest) => {
     const request = designImportSchema.parse(value)
-    const result = await dialog.showOpenDialog(window, {
+    const result = await fileDialogs.showOpenDialog(window, {
       title: request.stage === 'tpose' ? 'Use an existing T-pose reference' : 'Use an existing 3D GLB mesh',
       properties: ['openFile'],
       filters: request.stage === 'model' ? [{ name: 'Embedded GLB mesh', extensions: ['glb'] }] : [{ name: 'Character image', extensions: ['png', 'jpg', 'jpeg', 'webp'] }]
@@ -89,13 +115,13 @@ if (ownsWorkspace) app.whenReady().then(async () => {
   handle('designer:cancel', () => studio.designer.cancel())
   handle('designer:animate', (id: string) => studio.importDesign(id))
   handle('designer:reference', async () => {
-    const result = await dialog.showOpenDialog(window, { title: 'Choose a local character reference', properties: ['openFile'], filters: [{ name: 'Character image', extensions: ['png', 'jpg', 'jpeg', 'webp'] }] })
+    const result = await fileDialogs.showOpenDialog(window, { title: 'Choose a local character reference', properties: ['openFile'], filters: [{ name: 'Character image', extensions: ['png', 'jpg', 'jpeg', 'webp'] }] })
     return result.canceled ? null : studio.designer.addReference(result.filePaths[0])
   })
   handle('designer:export', async (id: string, stage: DesignStage) => {
     const source = studio.designer.output(id, stage)
     const extension = stage === 'model' ? 'glb' : 'png'
-    const choice = await dialog.showSaveDialog(window, { defaultPath: `${studio.designer.title(id).replace(/[^a-zA-Z0-9 _-]/g, '_')}-${stage}.${extension}`, filters: [{ name: 'Design output', extensions: [extension] }] })
+    const choice = await fileDialogs.showSaveDialog(window, { defaultPath: `${studio.designer.title(id).replace(/[^a-zA-Z0-9 _-]/g, '_')}-${stage}.${extension}`, filters: [{ name: 'Design output', extensions: [extension] }] })
     if (choice.canceled || !choice.filePath) return null
     await copyFile(source, choice.filePath)
     return choice.filePath
@@ -103,7 +129,7 @@ if (ownsWorkspace) app.whenReady().then(async () => {
   handle('studio:settings', (settings: Settings) => studio.saveSettings(settings))
   handle('studio:browse', async (kind: string) => {
     if (!['blender', 'comfy', 'output'].includes(kind)) throw new Error('Invalid path selector')
-    const result = await dialog.showOpenDialog(window, {
+    const result = await fileDialogs.showOpenDialog(window, {
       title: kind === 'blender' ? 'Choose native Blender executable' : kind === 'comfy' ? 'Choose ComfyUI backend folder (contains main.py)' : 'Choose ComfyUI output folder',
       properties: kind === 'blender' ? ['openFile'] : ['openDirectory'],
       ...(kind === 'blender' && process.platform === 'win32' ? { filters: [{ name: 'Blender', extensions: ['exe'] }] } : {})
@@ -111,11 +137,11 @@ if (ownsWorkspace) app.whenReady().then(async () => {
     return result.canceled ? null : result.filePaths[0]
   })
   handle('studio:import', async () => {
-    const result = await dialog.showOpenDialog(window, { title: 'Import humanoid FBX', properties: ['openFile'], filters: [{ name: 'FBX character', extensions: ['fbx'] }] })
+    const result = await fileDialogs.showOpenDialog(window, { title: 'Import humanoid FBX', properties: ['openFile'], filters: [{ name: 'FBX character', extensions: ['fbx'] }] })
     return result.canceled ? null : studio.importCharacter(result.filePaths[0])
   })
   handle('studio:import-collection', async () => {
-    const result = await dialog.showOpenDialog(window, { title: 'Import FBX collection', properties: ['openFile', 'multiSelections'], filters: [{ name: 'FBX characters', extensions: ['fbx'] }] })
+    const result = await fileDialogs.showOpenDialog(window, { title: 'Import FBX collection', properties: ['openFile', 'multiSelections'], filters: [{ name: 'FBX characters', extensions: ['fbx'] }] })
     if (result.canceled) return []
     if (result.filePaths.length > 32) throw new Error('Import up to 32 FBXs per collection.')
     const characters = []
@@ -130,7 +156,7 @@ if (ownsWorkspace) app.whenReady().then(async () => {
   handle('studio:start-comfy', () => studio.startComfy())
   handle('studio:save-output', async (jobId: string, file: string) => {
     const source = studio.output(jobId, file)
-    const result = await dialog.showSaveDialog(window, { defaultPath: file, filters: [{ name: extname(file).slice(1).toUpperCase(), extensions: [extname(file).slice(1)] }] })
+    const result = await fileDialogs.showSaveDialog(window, { defaultPath: file, filters: [{ name: extname(file).slice(1).toUpperCase(), extensions: [extname(file).slice(1)] }] })
     if (result.canceled || !result.filePath) return null
     await copyFile(source, result.filePath)
     return result.filePath
@@ -142,18 +168,18 @@ if (ownsWorkspace) app.whenReady().then(async () => {
   handle('studio:run-batch', (request: BatchRequest) => studio.runBatch(request))
   handle('studio:rerun-batch', (id: string) => studio.rerunBatch(id))
   handle('studio:export-batch', async (id: string) => {
-    const choice = await dialog.showOpenDialog(window, { title: 'Save completed batch outputs into a new subfolder', properties: ['openDirectory', 'createDirectory'] })
+    const choice = await fileDialogs.showOpenDialog(window, { title: 'Save completed batch outputs into a new subfolder', properties: ['openDirectory', 'createDirectory'] })
     return choice.canceled ? null : studio.exportBatch(id, choice.filePaths[0])
   })
   handle('studio:export-plan', async (id: string) => {
     const plan = studio.plan(id)
-    const choice = await dialog.showSaveDialog(window, { defaultPath: plan.name.replace(/[^a-zA-Z0-9 _-]/g, '_') + '.json', filters: [{ name: 'Motion configuration', extensions: ['json'] }] })
+    const choice = await fileDialogs.showSaveDialog(window, { defaultPath: plan.name.replace(/[^a-zA-Z0-9 _-]/g, '_') + '.json', filters: [{ name: 'Motion configuration', extensions: ['json'] }] })
     if (choice.canceled || !choice.filePath) return null
     await writeFile(choice.filePath, JSON.stringify({ schemaVersion: 2, plan }, null, 2))
     return choice.filePath
   })
   handle('studio:import-plan', async () => {
-    const choice = await dialog.showOpenDialog(window, { title: 'Import saved motion configuration', properties: ['openFile'], filters: [{ name: 'Motion configuration', extensions: ['json'] }] })
+    const choice = await fileDialogs.showOpenDialog(window, { title: 'Import saved motion configuration', properties: ['openFile'], filters: [{ name: 'Motion configuration', extensions: ['json'] }] })
     if (choice.canceled) return null
     if ((await stat(choice.filePaths[0])).size > 1024 * 1024) throw new Error('Configuration JSON exceeds 1 MB.')
     const data = JSON.parse(await readFile(choice.filePaths[0], 'utf8'))
@@ -162,13 +188,15 @@ if (ownsWorkspace) app.whenReady().then(async () => {
   })
   if (allowedRenderer) await window.loadURL(allowedRenderer)
   else await window.loadFile(join(import.meta.dirname, '../renderer/index.html'))
+  await mcpControl.initialize(mcpRequested)
 }).catch(error => { dialog.showErrorBox('Character Studio could not start', errorText(error)); app.exit(1) })
 
 app.on('before-quit', event => {
   if (!quitting && studio) {
     event.preventDefault()
     quitting = true
-    studio.dispose().catch(error => dialog.showErrorBox('Backend shutdown needs attention', errorText(error))).finally(() => app.quit())
+    files?.cancel()
+    Promise.all([mcp?.close(), studio.dispose()]).catch(error => dialog.showErrorBox('Backend shutdown needs attention', errorText(error))).finally(() => app.quit())
   }
 })
 app.on('window-all-closed', () => app.quit())
