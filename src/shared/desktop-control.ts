@@ -18,6 +18,7 @@ export interface DesktopElement {
   expanded?: string
   selected?: string
   pressed?: string
+  current?: string
   options?: { label: string; value: string; disabled: boolean }[]
   bounds: { x: number; y: number; width: number; height: number }
 }
@@ -68,6 +69,7 @@ export async function desktopControl(command: DesktopCommand) {
         ...(el instanceof HTMLSelectElement ? { options: Array.from(el.options).map(o => ({ label: o.label, value: o.value, disabled: o.disabled || !!o.closest('optgroup:disabled') })) } : {}),
         ...(el.hasAttribute('aria-expanded') ? { expanded: el.getAttribute('aria-expanded')! } : {}),
         ...(el.hasAttribute('aria-selected') ? { selected: el.getAttribute('aria-selected')! } : {}),
+        ...(el.hasAttribute('aria-current') ? { current: el.getAttribute('aria-current')! } : {}),
         ...(el.hasAttribute('aria-pressed') ? { pressed: el.getAttribute('aria-pressed')! } : {})
       })
     }

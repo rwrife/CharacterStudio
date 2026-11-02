@@ -1,9 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ArrowDownToLine, Check, RefreshCw, X } from 'lucide-react'
 import { aiConfigurationSchema, aiModelLabel, aiRouteLabel, aiStages, aiStageSchema, defaultAiConfiguration, localRoute, resolveAiRoute, tripoCredentialEndpoints, tripoImageModelId, tripoImageModels, tripoMeshLimits, unavailableTripoImageModels, workflowSchema,
   type AiConfiguration, type AiHardware, type AiRoute, type AiStage, type TripoCredentialTarget } from '../shared/ai'
-import { imageProfiles, meshProfiles } from '../shared/designer'
-import type { Snapshot } from '../shared/types'
+import { imageProfiles, meshProfiles, tposeEditProfile, type DesignerReadiness } from '../shared/designer'
+import type { Check as BackendCheck, Snapshot } from '../shared/types'
+import { mergeSettingsDraft } from '../shared/workspace'
+import { NativeModelFields } from './NativeModelFields'
+import { ModelSetupGuide } from './ModelSetupGuide'
+import { useModalSurface } from './useModalSurface'
+import { recommendTextEncoder } from '../shared/text-encoder'
 import './ai.css'
 
 const choices: Record<string, { label: string; provider: AiRoute['provider']; location: AiRoute['location']; endpoint: string }> = {
@@ -17,14 +22,15 @@ const choices: Record<string, { label: string; provider: AiRoute['provider']; lo
 const future = new Set<AiStage>(['segmentation', 'landmarks', 'cloth'])
 const explain = (error: unknown) => (error instanceof Error ? error.message : String(error)).replace(/^Error invoking remote method '[^']+': Error: /, '')
 
-function TripoKeySetup({ target, disabled, onBusy }: {
-  target?: TripoCredentialTarget; disabled: boolean; onBusy: (busy: boolean) => void
+function TripoKeySetup({ target, disabled, onBusy, onDraftChange }: {
+  target?: TripoCredentialTarget; disabled: boolean; onBusy: (busy: boolean) => void; onDraftChange: (dirty: boolean) => void
 }) {
   const [secret, setSecret] = useState('')
   const [hasSecret, setHasSecret] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  useEffect(() => onDraftChange(!!secret), [secret, onDraftChange])
   useEffect(() => {
     let current = true
     setSecret(''); setHasSecret(false); setError(''); setNotice(''); setLoading(!!target)
@@ -69,9 +75,11 @@ function TripoKeySetup({ target, disabled, onBusy }: {
   </section>
 }
 
-export function AiProvidersPanel({ snapshot, initialStage = 'scene', locked, onClose }: {
-  snapshot: Snapshot; initialStage?: AiStage; locked: boolean; onClose: () => void
+export function AiProvidersPanel({ snapshot, initialStage = 'scene', initialField, locked, onClose }: {
+  snapshot: Snapshot; initialStage?: AiStage; initialField?: string; locked: boolean; onClose: () => void
 }) {
+  const baseline = useRef(snapshot)
+  const dialog = useRef<HTMLElement>(null)
   const [config, setConfig] = useState<AiConfiguration>(snapshot.ai ?? defaultAiConfiguration)
   const [stage, setStage] = useState<AiStage | 'global'>(initialStage)
   const [hardware, setHardware] = useState<AiHardware>()
@@ -87,13 +95,19 @@ export function AiProvidersPanel({ snapshot, initialStage = 'scene', locked, onC
   })
   const [native, setNative] = useState(snapshot.designer?.config)
   const [encoder, setEncoder] = useState(snapshot.settings.textEncoder ?? 'llm2vec')
+  const [ready, setReady] = useState<DesignerReadiness>()
+  const [catalogError, setCatalogError] = useState('')
+  const [checkingModels, setCheckingModels] = useState(false)
+  const [modelChecks, setModelChecks] = useState<BackendCheck[]>([])
+  const [confirmClose, setConfirmClose] = useState(false)
+  const [keyDirty, setKeyDirty] = useState(false)
   const ownRoute = stage === 'global' ? config.globalComfy : config.stages[stage]
   const route = stage === 'global' ? config.globalComfy ?? localRoute : resolveAiRoute(config, stage)
   const inherited = stage !== 'global' && !ownRoute
   const selected = inherited ? 'inherit' : route.provider === 'builtin' ? 'builtin' : route.provider === 'tripo' ? 'tripo' : `${route.location}-${route.provider}`
-  const dirty = JSON.stringify(config) !== JSON.stringify(snapshot.ai ?? defaultAiConfiguration) ||
+  const dirty = JSON.stringify(config) !== JSON.stringify(baseline.current.ai ?? defaultAiConfiguration) ||
     workflowText !== (route.workflow ? JSON.stringify(route.workflow, null, 2) : '') ||
-    JSON.stringify(native) !== JSON.stringify(snapshot.designer?.config) || encoder !== (snapshot.settings.textEncoder ?? 'llm2vec')
+    JSON.stringify(native) !== JSON.stringify(baseline.current.designer?.config) || encoder !== (baseline.current.settings.textEncoder ?? 'llm2vec')
   const disabled = locked || busy
   const tripoImage = route.provider === 'tripo' && ['scene', 'tpose'].includes(stage)
   const tripoModel = tripoImageModelId(route.model)
@@ -103,6 +117,25 @@ export function AiProvidersPanel({ snapshot, initialStage = 'scene', locked, onC
   const tripoTarget = tripoEndpoint === tripoCredentialEndpoints.tripo ? 'tripo' :
     tripoEndpoint === tripoCredentialEndpoints['tripo-com'] ? 'tripo-com' : undefined
   const free = Math.max(0, ...(hardware?.devices.map(device => device.freeGB) ?? []))
+  const encoderGpu = modelChecks.find(check => check.gpu)?.gpu
+  const encoderAdvice = recommendTextEncoder(encoderGpu)
+  function requestClose() {
+    if (busy) return
+    if (dirty || secret || keyDirty) setConfirmClose(true)
+    else onClose()
+  }
+  useModalSurface(dialog, requestClose)
+  async function refreshModels() {
+    setCheckingModels(true); setCatalogError('')
+    try {
+      if (stage === 'motion') setModelChecks(await window.studio.check())
+      else setReady(await window.studio.designerReadiness())
+    } catch (error) { setCatalogError(explain(error)) } finally { setCheckingModels(false) }
+  }
+  useEffect(() => { if (route.provider === 'builtin') void refreshModels() }, [stage, route.provider])
+  useEffect(() => {
+    if (initialField) dialog.current?.querySelector<HTMLElement>(`#${initialField}`)?.focus()
+  }, [initialField])
   async function perform(work: () => Promise<void>) {
     setBusy(true); setError(''); setNotice('')
     try { await work() } catch (error) { setError(explain(error)) } finally { setBusy(false) }
@@ -153,28 +186,55 @@ export function AiProvidersPanel({ snapshot, initialStage = 'scene', locked, onC
       const workflow = workflowText.trim() ? workflowSchema.parse(JSON.parse(workflowText)) : undefined
       next = { ...config, stages: { ...config.stages, [stage]: { ...route, workflow } } }
     }
-    next = aiConfigurationSchema.parse(next)
-    if (native && JSON.stringify(native) !== JSON.stringify(snapshot.designer?.config)) await window.studio.designerSettings(native)
-    if (encoder !== (snapshot.settings.textEncoder ?? 'llm2vec')) await window.studio.settings({ ...snapshot.settings, textEncoder: encoder })
+    const latest = await window.studio.snapshot()
+    const { stages: baseStages, ...baseGlobal } = baseline.current.ai ?? defaultAiConfiguration
+    const { stages: draftStages, ...draftGlobal } = next
+    const { stages: currentStages, ...currentGlobal } = latest.ai ?? defaultAiConfiguration
+    next = aiConfigurationSchema.parse({
+      ...mergeSettingsDraft(baseGlobal, draftGlobal, currentGlobal),
+      stages: mergeSettingsDraft(baseStages, draftStages, currentStages)
+    })
+    const nextNative = native && baseline.current.designer && latest.designer ?
+      mergeSettingsDraft(baseline.current.designer.config, native, latest.designer.config) : native
+    const nextSettings = mergeSettingsDraft(
+      { textEncoder: baseline.current.settings.textEncoder ?? 'llm2vec' },
+      { textEncoder: encoder }, { textEncoder: latest.settings.textEncoder ?? 'llm2vec' })
+    if (nextNative && JSON.stringify(nextNative) !== JSON.stringify(latest.designer?.config)) await window.studio.designerSettings(nextNative)
+    if (nextSettings.textEncoder !== (latest.settings.textEncoder ?? 'llm2vec')) await window.studio.settings({ ...latest.settings, ...nextSettings })
     await window.studio.aiSettings(next)
+    baseline.current = await window.studio.snapshot()
+    setNative(baseline.current.designer?.config)
+    setEncoder(baseline.current.settings.textEncoder ?? 'llm2vec')
     setConfig(next)
     const workflow = stage === 'global' ? undefined : resolveAiRoute(next, stage).workflow
     setWorkflowText(workflow ? JSON.stringify(workflow, null, 2) : '')
     setNotice('Provider selections saved. Existing jobs keep their original provenance; remote generation still requires approval.')
   }
   const budgetText = (gb: number) => hardware?.devices.length ? free >= gb ? 'Recommended for available VRAM' : 'Not enough free VRAM' : 'VRAM not detected'
-  return <div className="modal-backdrop"><section className="settings-modal ai-modal" role="dialog" aria-modal="true" aria-label="Model and workflow providers">
-    <div className="modal-heading"><div><span className="section-kicker">LOCAL FIRST / PER-STAGE CONTROL</span><h2>Model & workflow providers</h2></div>
-      <button aria-label="Close provider settings" disabled={busy} onClick={onClose}><X size={20} /></button></div>
+  return <div className="modal-backdrop model-settings-backdrop"><section ref={dialog} tabIndex={-1} className="settings-modal ai-modal model-settings" role="dialog" aria-modal="true" aria-label="Model Settings">
+    <div className="modal-heading"><div><span className="section-kicker">LOCAL FIRST / PER-STAGE CONTROL</span><h2>Model Settings</h2></div>
+      <button aria-label="Close Model Settings" disabled={busy} onClick={requestClose}><X size={20} /></button></div>
+    {confirmClose && <section className="model-close-confirm" role="alert" aria-label="Unsaved model settings">
+      <p>You have unsaved settings or credential input. Save settings first, discard the draft, or continue editing. Saving settings does not save an unsubmitted key.</p>
+      <div className="settings-actions">
+        <button className="secondary" disabled={busy} onClick={() => setConfirmClose(false)}>Continue editing</button>
+        <button className="secondary" disabled={busy} onClick={onClose}>Discard changes</button>
+        <button className="primary" disabled={disabled || !dirty} onClick={() => void perform(async () => { await save(); setConfirmClose(false) })}>Save settings</button>
+      </div>
+      {error && <p className="modal-error" role="alert">{error}</p>}
+    </section>}
+    <div className="model-settings-content" role="region" aria-label="Model Settings content" inert={confirmClose}>
     <p className="panel-description">Choose hardware-fit local presets or opt in to a remote server. No model is switched automatically and no generation starts when you save.</p>
-    <TripoKeySetup target={tripoTarget} disabled={disabled} onBusy={setBusy} />
-    <div className="ai-hardware" aria-label="Local hardware">
+    <details className="model-advanced"><summary>API keys & connections</summary>
+      <TripoKeySetup target={tripoTarget} disabled={disabled} onBusy={setBusy} onDraftChange={setKeyDirty} />
+    </details>
+    <details className="ai-hardware"><summary>Hardware guidance</summary><div aria-label="Local hardware">
       <div className="section-heading"><strong>This machine</strong><button className="text-button" disabled={disabled} onClick={() => void perform(async () => setHardware(await window.studio.aiHardware()))}><RefreshCw size={14} /> Detect local hardware</button></div>
       {hardware ? <><p>{hardware.platform} / {hardware.architecture} / {hardware.cpu}</p><p>{hardware.freeRamGB.toFixed(1)} GiB free / {hardware.ramGB.toFixed(1)} GiB system RAM</p>
         {hardware.devices.map((device, index) => <p key={index}>{device.name}: {device.freeGB.toFixed(1)} GiB free / {device.totalGB.toFixed(1)} GiB total VRAM</p>)}
         {hardware.warning && <p>{hardware.warning}</p>}</> : <p>Detecting local hardware...</p>}
       <p className="fine-print">Memory estimates are guidance, not guarantees. GPU architecture, drivers, precision and shared memory still matter.</p>
-    </div>
+    </div></details>
     <label className="field-label" htmlFor="ai-stage">AI stage</label>
     <select id="ai-stage" value={stage} disabled={disabled || workflowText !== (route.workflow ? JSON.stringify(route.workflow, null, 2) : '')} onChange={event => switchStage(event.target.value)}>
       <option value="global">Global ComfyUI connection</option>
@@ -264,47 +324,47 @@ export function AiProvidersPanel({ snapshot, initialStage = 'scene', locked, onC
       </div></>}
     </>}
     {route.provider === 'builtin' && native && <>
-      <h3>Built-in local model choices</h3>
-      {stage === 'scene' && <>
-        <label className="field-label" htmlFor="ai-image-profile">Local image preset</label>
-        <select id="ai-image-profile" disabled={disabled} value={native.imageProfile} onChange={event => setNative({ ...native, imageProfile: event.target.value === 'sdxl' ? 'sdxl' : 'sd15', checkpoint: '', controlnet: '', ipadapter: '', clipVision: '' })}>
-          {Object.entries(imageProfiles).map(([value, profile]) => <option key={value} value={value}>{profile.label} / ~{profile.gb} GiB / {budgetText(profile.gb)}</option>)}
-        </select>
-        <label className="field-label" htmlFor="ai-native-checkpoint">Local image checkpoint</label>
-        <input id="ai-native-checkpoint" disabled={disabled} value={native.checkpoint} onChange={event => setNative({ ...native, checkpoint: event.target.value })} />
-      </>}
-      {stage === 'mesh' && <>
-        <label className="field-label" htmlFor="ai-mesh-profile">Local mesh preset</label>
-        <select id="ai-mesh-profile" disabled={disabled} value={native.meshProfile} onChange={event => setNative({ ...native, meshProfile: event.target.value === 'standard' ? 'standard' : event.target.value === 'textured' ? 'textured' : 'mini', meshCheckpoint: '' })}>
-          {Object.entries(meshProfiles).map(([value, profile]) => <option key={value} value={value}>{profile.label} / ~{profile.gb} GiB / {budgetText(profile.gb)}</option>)}
-        </select>
-        <label className="field-label" htmlFor="ai-native-mesh">Local mesh checkpoint</label>
-        <input id="ai-native-mesh" disabled={disabled} value={native.meshProfile === 'textured' ? native.meshTextureModel ?? '' : native.meshCheckpoint}
-          onChange={event => setNative({ ...native, ...(native.meshProfile === 'textured' ? { meshTextureModel: event.target.value } : { meshCheckpoint: event.target.value }) })} />
-      </>}
+      <button className="text-button" aria-label="Refresh local models" disabled={disabled || checkingModels} onClick={() => void refreshModels()}>
+        <RefreshCw size={14} className={checkingModels ? 'spin' : ''} /> Refresh installed models
+      </button>
+      {catalogError && <p className="modal-error" role="status">Could not refresh local model readiness: {catalogError}</p>}
+      {stage !== 'motion' && stage !== 'global' && <NativeModelFields stage={stage} config={native} ready={ready} disabled={disabled} budgetText={budgetText} onChange={setNative} />}
       {stage === 'motion' && <>
-        <label className="field-label" htmlFor="ai-native-encoder">Local motion encoder preset</label>
+        <label className="field-label" htmlFor="ai-native-encoder">Kimodo text encoder</label>
         <select id="ai-native-encoder" disabled={disabled} value={encoder} onChange={event => setEncoder(event.target.value === 'lfm' ? 'lfm' : 'llm2vec')}>
-          <option value="llm2vec">Kimodo + Llama / LLM2Vec / high memory (~24 GiB recommended)</option>
-          <option value="lfm">Kimodo + LFM bridge / low VRAM (experimental)</option>
+          <option value="llm2vec">Kimodo + Llama / LLM2Vec / high memory (~24 GiB recommended){encoderAdvice.encoder === 'llm2vec' ? ' / Recommended for available memory' : ''}</option>
+          <option value="lfm">Kimodo + LFM bridge / low VRAM (experimental){encoderAdvice.encoder === 'lfm' ? ' / Recommended for available memory' : ''}</option>
         </select>
+        {encoderGpu && <p className="fine-print" aria-label="Detected GPU memory">{encoderGpu.name}: {encoderGpu.freeGB.toFixed(1)} GiB free / {encoderGpu.totalGB.toFixed(1)} GiB total VRAM</p>}
+        <p className="fine-print" id="encoder-memory-guidance">{encoderAdvice.detail} Memory budgets are estimates, not guarantees. Your saved encoder is never changed automatically.</p>
+        <ModelSetupGuide comfyRoot={snapshot.settings.comfyRoot} textEncoder={encoder} checking={checkingModels}
+          needsSetup={modelChecks.some(check => check.status === 'blocked' && check.name.includes('text encoder'))}
+          onAccessPage={() => void perform(() => window.studio.openAccessPage())}
+          onTokenSettings={() => void perform(() => window.studio.openTokenSettings())}
+          onRefresh={() => void refreshModels()} />
+        {modelChecks.filter(check => check.status !== 'ready').map(check => <p className="fine-print" key={check.name}>{check.name}: {check.detail}</p>)}
       </>}
-      {(['naming', 'cutout', 'tpose'] as string[]).includes(stage) && <>
-        <label className="field-label" htmlFor="ai-native-model">{stage === 'naming' ? 'Local Ollama title model' : stage === 'cutout' ? 'Local background-removal model' : 'Local FLUX.2 editing model'}</label>
-        <input id="ai-native-model" disabled={disabled} value={(stage === 'naming' ? native.titleModel : stage === 'cutout' ? native.backgroundModel : native.editModel) ?? ''}
-          onChange={event => setNative({ ...native, [stage === 'naming' ? 'titleModel' : stage === 'cutout' ? 'backgroundModel' : 'editModel']: event.target.value })} />
-      </>}
-      <p className="fine-print">Weights must already be installed. Full checkpoint, adapter, VAE and vision-encoder choices and supported downloads remain in Designer model settings. Native T-pose editing uses FLUX.2 klein (~14 GiB), then independent cutout removal (~2 GiB). Rigging uses local Blender; built-in PBR generation is the TRELLIS.2 mesh preset, not a post-texturing pass.</p>
+      <p className="fine-print">Select installed weights; missing-model failures in the workflow offer supported downloads with approval. Optional adapters, Ollama and unsupported checkpoints need manual setup. Native rigging uses local Blender; built-in PBR generation is the TRELLIS.2 mesh preset, not a post-texturing pass.</p>
     </>}
-    <div className="settings-actions"><button className="primary" disabled={disabled || !dirty} onClick={() => void perform(save)}><Check size={16} /> Save provider selections</button></div>
     {error && <p className="modal-error" role="alert">{error}</p>}
     {notice && <p className="banner success" role="status">{notice}</p>}
+    </div>
+    <div className="model-settings-footer" inert={confirmClose}>
+      <div className="settings-actions"><span className="fine-print">{dirty ? 'Unsaved changes' : 'Applies to future runs'}</span>
+        <button className="primary" disabled={disabled || !dirty} onClick={() => void perform(save)}><Check size={16} /> Save settings</button></div>
+      <p className="fine-print">Saving does not start generation. Remote execution still requires approval before prompts or assets leave this PC.</p>
+    </div>
   </section></div>
 }
 
 export function AiRouteBadge({ snapshot, stage, onClick }: { snapshot: Snapshot; stage: AiStage; onClick?: () => void }) {
   const route = resolveAiRoute(snapshot.ai, stage)
-  const label = aiRouteLabel(snapshot.ai, stage)
+  const native = snapshot.designer?.config
+  const model = route.provider !== 'builtin' ? '' : stage === 'motion' ? snapshot.settings.textEncoder === 'lfm' ? 'Kimodo / LFM bridge' : 'Kimodo / Llama + LLM2Vec' :
+    !native ? '' : stage === 'scene' ? native.checkpoint || imageProfiles[native.imageProfile].label :
+    stage === 'tpose' ? tposeEditProfile.label : stage === 'cutout' ? 'BiRefNet' :
+    stage === 'mesh' ? meshProfiles[native.meshProfile].label : stage === 'naming' ? native.titleModel : ''
+  const label = `${aiRouteLabel(snapshot.ai, stage)}${model ? ` / ${model}` : ''}`
   return onClick ? <button className={`ai-route-badge ${route.location}`} aria-label={`${aiStages[stage]} provider: ${label}`} onClick={onClick}>{label}</button> :
     <span className={`ai-route-badge ${route.location}`}>{label}</span>
 }

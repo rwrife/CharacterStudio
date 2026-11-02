@@ -1,10 +1,12 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowDownToLine, ArrowRight, Check, Copy, FolderOpen, GitBranch, Layers3, Plus, Save, X, RefreshCw } from 'lucide-react'
 import type { GenerateRequest, MotionNode, MotionPlan, RigSetup, Snapshot } from '../shared/types'
 import { expandGraph } from '../shared/plans'
 import { MotionGraph } from './MotionGraph'
 import { AiRouteBadge } from './AiProvidersPanel'
 import { aiRouteLabel } from '../shared/ai'
+import { ProcessStepper } from './WorkspaceLayout'
+import { useModalSurface } from './useModalSurface'
 
 interface Props {
   snapshot: Snapshot
@@ -13,12 +15,15 @@ interface Props {
   characterId: string
   startNew: boolean
   onClose(): void
+  onProviders(): void
   onApply(node: MotionNode, setup?: RigSetup): void
   onPreview(characterId: string, jobId: string, part?: 'path' | 'clip' | 'transition'): void
 }
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e)).replace(/^Error invoking remote method '[^']+': Error: /, '')
 
 export function LibraryPanel(props: Props) {
+  const dialog = useRef<HTMLElement>(null)
+  useModalSurface(dialog, props.onClose)
   const newNode = (label: string, kind: MotionNode['kind'] = 'action'): MotionNode => ({
     id: crypto.randomUUID(), label, ...props.current, kind, loop: kind === 'state', stance: '', position: { x: 0, y: 0 }
   })
@@ -40,6 +45,12 @@ export function LibraryPanel(props: Props) {
   const [notice, setNotice] = useState('')
   const [working, setWorking] = useState(false)
   const [tab, setTab] = useState<'plans' | 'batches'>('plans')
+  const [editStep, setEditStep] = useState<'graph' | 'batch'>('graph')
+  const [batchId, setBatchId] = useState('')
+  useEffect(() => {
+    dialog.current?.scrollTo({ top: 0 })
+    dialog.current?.querySelector('.graph-inspector')?.scrollTo({ top: 0 })
+  }, [tab, editStep])
   const selected = plan.nodes.find(n => n.id === selectedId) ?? plan.nodes[0]
   const selectedEdge = plan.edges.find(e => e.id === edgeId)
   const running = props.snapshot.batches.find(b => b.status === 'running')
@@ -116,14 +127,19 @@ export function LibraryPanel(props: Props) {
   }
 
   return <div className="modal-backdrop">
-    <section className="library-modal graph-library" role="dialog" aria-modal="true" aria-label="Motion library and batches">
+    <section ref={dialog} tabIndex={-1} className="library-modal graph-library" role="dialog" aria-modal="true" aria-label="Motion library and batches">
       <div className="modal-heading"><div><span className="section-kicker">STATE / ACTION / CONTEXT</span><h2>Animation graph</h2></div>
-        <div className="library-top-actions"><div className="view-tabs"><button className={tab === 'plans' ? 'active' : ''} onClick={() => setTab('plans')}>Graph editor</button><button className={tab === 'batches' ? 'active' : ''} onClick={() => setTab('batches')}>Generated paths <span className="count">{props.snapshot.batches.length}</span></button></div><button aria-label="Close motion library" onClick={props.onClose}><X size={20} /></button></div>
+        <div className="library-top-actions"><button aria-label="Close motion library" onClick={props.onClose}><X size={20} /></button></div>
       </div>
+      <ProcessStepper label="Graph process" current={tab === 'batches' ? 'results' : editStep} steps={[
+        { id: 'graph', label: 'Graph editor', complete: !dirty && !expansion.error },
+        { id: 'batch', label: 'Configure batch', complete: selectedCharacters.length > 0 },
+        { id: 'results', label: 'Generated paths', state: running ? 'running' : undefined }
+      ]} onSelect={id => { if (id === 'results') setTab('batches'); else if (id === 'graph' || id === 'batch') { setTab('plans'); setEditStep(id) } }} />
       {error && <div className="banner error" role="alert">{error}</div>}
       {notice && <div className="banner success" role="status">{notice}</div>}
       {tab === 'plans' ? <div className="library-grid">
-        <aside className="preset-list" aria-label="Saved animation graphs">
+        <details className="preset-list" aria-label="Saved animation graphs"><summary>Saved graphs & templates</summary>
           <button className="secondary full" disabled={locked} onClick={() => choose(newPlan(), true)}><Plus size={15} /> New graph</button>
           {props.snapshot.plans.map(p => <button className={`preset ${p.id === plan.id ? 'active' : ''}`} key={p.id} disabled={locked} onClick={() => choose(p)}><Layers3 size={16} /><span><strong>{p.name}</strong><small>{p.nodes.length} nodes · {p.edges.length} connections</small></span></button>)}
           <button className="text-button full" disabled={locked} onClick={fightingTemplate}><GitBranch size={14} /> Fighting graph template</button>
@@ -132,7 +148,7 @@ export function LibraryPanel(props: Props) {
           <button className="text-button full" disabled={locked} onClick={() => void action(async () => { const p = await window.studio.importPlan(); if (p) choose(p) })}><FolderOpen size={14} /> Import configuration JSON</button>
           <button className="text-button full" disabled={locked || !!expansion.error} onClick={() => void action(async () => { await save(); const path = await window.studio.exportPlan(plan.id); if (path) setNotice(`Configuration saved to ${path}`) })}><ArrowDownToLine size={14} /> Export configuration JSON</button>
           <p className="fine-print">Save the layout, shared actions, entry states, transitions, prompts, seeds and rig fit as one reusable graph. Older branch configurations are preserved as direct pose joins.</p>
-        </aside>
+        </details>
         <div className="plan-editor" aria-label="Animation graph editor">
           <label className="field-label" htmlFor="plan-name">Graph name {dirty && <span>UNSAVED</span>}</label>
           <input id="plan-name" value={plan.name} disabled={locked} onChange={e => change({ ...plan, name: e.target.value })} />
@@ -162,6 +178,7 @@ export function LibraryPanel(props: Props) {
           </section>
         </div>
         <aside className="graph-inspector" aria-label="Animation graph inspector">
+          <div hidden={editStep !== 'graph'}>
           {selectedEdge ? <>
             <div className="section-kicker">CONNECTION</div><h3>{plan.nodes.find(n => n.id === selectedEdge.source)?.label} → {plan.nodes.find(n => n.id === selectedEdge.target)?.label}</h3>
             <label className="field-label" htmlFor="transition-duration">Transition seconds</label><input id="transition-duration" type="number" min="0" max="5" step="0.5" value={selectedEdge.seconds} disabled={locked} onChange={e => change({ ...plan, edges: plan.edges.map(edge => edge.id === edgeId ? { ...edge, seconds: Number(e.target.value) } : edge) })} />
@@ -188,9 +205,10 @@ export function LibraryPanel(props: Props) {
             <label className="checkbox"><input type="checkbox" checked={applyFit} onChange={e => setApplyFit(e.target.checked)} /> Also apply saved rig landmarks</label>
             <button className="text-button full" disabled={locked} onClick={() => { props.onApply(selected, applyFit ? plan.rigSetup : undefined); props.onClose() }}>Use prompt in character lab <ArrowRight size={13} /></button>
           </>}
-          <div className="panel-rule" />
+          </div>
+          <div hidden={editStep !== 'batch'}>
           <details className="graph-targets" open><summary>Generate for characters</summary>
-            <AiRouteBadge snapshot={props.snapshot} stage="motion" />
+            <AiRouteBadge snapshot={props.snapshot} stage="motion" onClick={props.onProviders} />
             <div className="section-heading"><span className="fine-print">TARGETS</span><button className="text-button" disabled={locked} onClick={() => setSelectedCharacters(props.snapshot.characters.slice(0, 32).map(c => c.id))}>Select all</button></div>
             <div className="batch-targets">{props.snapshot.characters.map(c => <label className="checkbox" key={c.id}><input type="checkbox" disabled={locked} checked={selectedCharacters.includes(c.id)} onChange={e => setSelectedCharacters(old => e.target.checked ? [...old, c.id] : old.filter(id => id !== c.id))} /><span>{c.name}<small>{c.rigged ? 'Rig ready' : 'Needs rigging'}</small></span></label>)}{!props.snapshot.characters.length && <p className="fine-print">Import an FBX first.</p>}</div>
             <label className="field-label" htmlFor="seed-stride">Variation per character</label><select id="seed-stride" disabled={locked} value={stride} onChange={e => setStride(Number(e.target.value))}><option value="0">Reuse identical motion per path</option><option value="1">Vary seeds by 1</option><option value="100">Vary seeds by 100</option><option value="1000">Vary seeds by 1000</option></select>
@@ -199,10 +217,17 @@ export function LibraryPanel(props: Props) {
             <button className="primary full" disabled={locked || !!expansion.error || !selectedCharacters.length || selectedCharacters.length > 32} onClick={queue}><Layers3 size={15} /> Generate graph · {selectedCharacters.length * expansion.contexts.length} variants</button>
             <p className="fine-print">Sequential queue. Up to 64 contexts per character and 60 seconds per path. Cycles stop at the first revisited node; they do not enqueue indefinitely.</p>
           </details>
+          </div>
         </aside>
-      </div> : <div className="batch-history">
+      </div> : <div className="batch-workspace"><aside className="batch-settings" aria-label="Batch review settings">
+        <h3>Review generated paths</h3>
+        <label className="field-label" htmlFor="review-batch">Saved batch</label>
+        <select id="review-batch" value={batchId} onChange={event => setBatchId(event.target.value)}><option value="">All batches</option>{props.snapshot.batches.map(batch => <option key={batch.id} value={batch.id}>{batch.name}</option>)}</select>
+        <p className="fine-print">Select a validated node clip, transition or full path to review in Animator. Failed and cancelled work remains visible; only completed outputs can be exported.</p>
+        <button className="secondary full" onClick={() => { setTab('plans'); setEditStep('batch') }}>Configure another batch</button>
+      </aside><div className="batch-history">
         {!props.snapshot.batches.length && <div className="empty-assets"><Layers3 size={30} /><p>No generated paths yet</p></div>}
-        {props.snapshot.batches.map(batch => <section className="batch-card" key={batch.id}>
+        {props.snapshot.batches.filter(batch => !batchId || batch.id === batchId).map(batch => <section className="batch-card" key={batch.id}>
           <p className="fine-print">Saved provider: {aiRouteLabel({ version: 1, stages: { motion: batch.aiRoute } }, 'motion')}. Reruns require the same provider, model and workflow.</p>
           <div className="section-heading"><div><h3>{batch.name} <span className={`batch-status ${batch.status}`}>{batch.status}</span></h3><p className="fine-print">{new Date(batch.createdAt).toLocaleString()} · {batch.items.filter(i => i.status === 'complete').length}/{batch.items.length} variants · seed stride {batch.request.seedStride}</p></div><div className="node-actions">
             {batch.status === 'running' ? <button className="secondary" onClick={() => void window.studio.cancel().catch(e => setError(message(e)))}>Cancel batch</button> : <button className="secondary" disabled={locked} onClick={() => void action(() => window.studio.rerunBatch(batch.id))}><RefreshCw size={13} /> Run same batch again</button>}
@@ -215,7 +240,7 @@ export function LibraryPanel(props: Props) {
             </div>
           })}</div>
         </section>)}
-      </div>}
+      </div></div>}
     </section>
   </div>
 }

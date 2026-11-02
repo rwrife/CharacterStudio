@@ -16,7 +16,7 @@ const info = await fetch(base + '/object_info').then(response => {
 assert.ok(info.Studio_Kimodo_LoadLFM, 'Restart ComfyUI after installing the LFM custom node.')
 await mkdir(resolve('artifacts'), { recursive: true })
 const root = await mkdtemp(resolve('artifacts', 'lfm-desktop-'))
-const app = await electron.launch({ args: ['.'], env: { ...process.env, STUDIO_SKIP_SETUP_CHECKLIST: '1', STUDIO_DATA_DIR: root }, timeout: 60000 })
+const app = await electron.launch({ args: ['.'], env: { ...process.env, STUDIO_SKIP_SETUP_CHECKLIST: '1', STUDIO_NO_AUTO_INSTALL: '1', STUDIO_DATA_DIR: root }, timeout: 60000 })
 try {
   const page = await app.firstWindow()
   const errors = []
@@ -24,6 +24,9 @@ try {
   await page.getByRole('heading', { name: 'Character lab' }).waitFor()
   await page.getByRole('button', { name: 'Backend connections', exact: true }).click()
   await page.locator('#comfy-url').fill(base)
+  await page.getByRole('button', { name: 'Save settings', exact: true }).click()
+  await expect.poll(() => page.evaluate(async () => (await window.studio.snapshot()).settings.comfyUrl)).toBe(base)
+  await page.getByRole('button', { name: 'Model Settings', exact: true }).click()
   await page.getByLabel('Kimodo text encoder', { exact: true }).selectOption('lfm')
   await page.getByRole('button', { name: 'Save settings', exact: true }).click()
   await expect.poll(() => page.evaluate(async () => (await window.studio.snapshot()).settings.textEncoder)).toBe('lfm')
@@ -34,7 +37,7 @@ try {
   assert.ok(gpu && gpu.totalGB > 0 && gpu.freeGB >= 0, 'Readiness must report actual GPU memory.')
   await page.getByRole('dialog').evaluate(el => { el.scrollTop = 0 })
   await page.screenshot({ path: join(root, 'real-gpu-selector.png') })
-  await page.getByRole('button', { name: 'Close settings' }).click()
+  await page.getByRole('button', { name: 'Close Model Settings' }).click()
   await page.reload({ waitUntil: 'domcontentloaded' })
   await expect.poll(() => page.evaluate(async () => (await window.studio.snapshot()).settings.textEncoder)).toBe('lfm')
 
@@ -53,6 +56,7 @@ try {
   await page.reload({ waitUntil: 'domcontentloaded' })
   await page.getByLabel('Motion instructions', { exact: true }).fill('A person walks forward.')
   await page.getByRole('spinbutton', { name: 'Duration seconds' }).fill('2')
+  await page.getByRole('tabpanel', { name: 'Animator' }).getByText('Advanced generation', { exact: true }).click()
   await page.getByRole('combobox', { name: 'Denoising steps quality' }).selectOption('25')
   await page.getByRole('button', { name: 'Generate animation', exact: true }).click()
   await expect.poll(async () => page.evaluate(async () => {
