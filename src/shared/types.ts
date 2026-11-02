@@ -188,4 +188,12 @@ export interface StudioApi {
   rerunBatch(id: string): Promise<void>
   exportBatch(id: string): Promise<string | null>
   onUpdate(callback: (snapshot: Snapshot) => void): () => void
+  setupState(): Promise<import('./setup').SetupState>
+  setupReport(): Promise<import('./setup').SetupReport>
+  setupRun(request: { item: import('./setup').SetupItemId; action: import('./setup').SetupActionId; model?: import('./setup').SetupModelId }): Promise<import('./setup').SetupState>
+  setupCancel(): Promise<void>
+  setupPreferences(value: { showOnLaunch?: boolean; completed?: boolean; checkOnLaunch?: boolean; ignoredAtLaunch?: import('./setup').SetupItemId[] }): Promise<import('./setup').SetupState>
+  setupLaunchCheck(): Promise<import('./setup').LaunchCheck>
+  setupCancelLaunchCheck(): Promise<void>
+  onSetupUpdate(callback: (state: import('./setup').SetupState) => void): () => void
 }

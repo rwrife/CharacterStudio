@@ -20,7 +20,7 @@ const server = createServer((request, response) => {
 })
 server.listen(0, '127.0.0.1')
 await once(server, 'listening')
-const app = await electron.launch({ args: ['.'], env: { ...process.env, STUDIO_DATA_DIR: data }, timeout: 60000 })
+const app = await electron.launch({ args: ['.'], env: { ...process.env, STUDIO_SKIP_SETUP_CHECKLIST: '1', STUDIO_DATA_DIR: data }, timeout: 60000 })
 try {
   const page = await app.firstWindow()
   const errors = []

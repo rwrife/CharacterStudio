@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { StudioApi, Snapshot } from '../shared/types'
+import type { SetupState } from '../shared/setup'
 
 const api: StudioApi = {
   desktopControlEnabled: () => ipcRenderer.invoke('studio:mcp-enabled'),
@@ -53,6 +54,18 @@ const api: StudioApi = {
     const listener = (_: Electron.IpcRendererEvent, snapshot: Snapshot) => callback(snapshot)
     ipcRenderer.on('studio:update', listener)
     return () => ipcRenderer.removeListener('studio:update', listener)
+  },
+  setupState: () => ipcRenderer.invoke('setup:state'),
+  setupReport: () => ipcRenderer.invoke('setup:report'),
+  setupRun: request => ipcRenderer.invoke('setup:run', request),
+  setupCancel: () => ipcRenderer.invoke('setup:cancel'),
+  setupPreferences: value => ipcRenderer.invoke('setup:preferences', value),
+  setupLaunchCheck: () => ipcRenderer.invoke('setup:launch-check'),
+  setupCancelLaunchCheck: () => ipcRenderer.invoke('setup:cancel-launch-check'),
+  onSetupUpdate: callback => {
+    const listener = (_: Electron.IpcRendererEvent, state: SetupState) => callback(state)
+    ipcRenderer.on('setup:update', listener)
+    return () => ipcRenderer.removeListener('setup:update', listener)
   }
 }
 contextBridge.exposeInMainWorld('studio', api)

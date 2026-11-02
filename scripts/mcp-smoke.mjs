@@ -9,7 +9,7 @@ await mkdir(resolve('artifacts', 'mcp-smoke'), { recursive: true })
 const directory = await mkdtemp(resolve('artifacts', 'mcp-smoke', 'run-'))
 const connection = join(directory, 'mcp-connection.json')
 const app = await electron.launch({
-  args: ['.', '--mcp'], env: { ...process.env, STUDIO_DATA_DIR: directory }, timeout: 60000
+  args: ['.', '--mcp'], env: { ...process.env, STUDIO_SKIP_SETUP_CHECKLIST: '1', STUDIO_DATA_DIR: directory }, timeout: 60000
 })
 const errors = []
 let client = new Client({ name: 'desktop-smoke', version: '1.0.0' })
@@ -218,7 +218,7 @@ try {
 }
 await assert.rejects(access(connection), { code: 'ENOENT' })
 
-const restored = await electron.launch({ args: ['.'], env: { ...process.env, STUDIO_DATA_DIR: directory } })
+const restored = await electron.launch({ args: ['.'], env: { ...process.env, STUDIO_SKIP_SETUP_CHECKLIST: '1', STUDIO_DATA_DIR: directory } })
 try {
   const page = await restored.firstWindow()
   await page.getByRole('heading', { name: 'Character lab' }).waitFor()
@@ -228,7 +228,7 @@ try {
 
 // Verify ordinary launches remain opt-out and keep native file pickers.
 const ordinaryDirectory = await mkdtemp(resolve('artifacts', 'mcp-smoke', 'ordinary-'))
-const ordinary = await electron.launch({ args: ['.'], env: { ...process.env, STUDIO_DATA_DIR: ordinaryDirectory } })
+const ordinary = await electron.launch({ args: ['.'], env: { ...process.env, STUDIO_SKIP_SETUP_CHECKLIST: '1', STUDIO_DATA_DIR: ordinaryDirectory } })
 try {
   const page = await ordinary.firstWindow()
   await page.getByRole('heading', { name: 'Character lab' }).waitFor()

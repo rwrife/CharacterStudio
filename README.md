@@ -10,6 +10,7 @@ Local Windows ARM64 desktop app with **Designer** and **Animator** workspaces. D
 
 | Feature | What you can do |
 |---|---|
+| [First-launch setup checklist](#first-launch-setup-checklist) | On first launch, see what this PC already has and what Designer and Animator still need. One-click actions install a checksum-verified Blender, connect and start ComfyUI, download pinned and verified Designer weights, and open the right pages for gated or manual steps. Later launches [validate dependencies](#dependency-check-on-later-launches) and prompt you to fix problems such as a stopped ComfyUI. |
 | [Staged character design](#designer-workflow) | Describe a character, scenario, and art style, or condition a concept with a local reference image. Review each scene, transparent T-pose, and GLB before continuing. |
 | [Textured models](#local-textured-models) | Select native TRELLIS.2 to generate geometry and embedded base-color/metallic/roughness textures together from the T-pose. Hunyuan remains the lower-memory geometry-only option. |
 | [External inputs](#start-from-external-inputs) | Skip ahead with an existing T-pose or embedded GLB instead of regenerating earlier stages. Scenes are always generated from a description or a reference photo plus description. Preserve originals and distinguish imported artifacts from generated results. |
@@ -26,6 +27,18 @@ Local Windows ARM64 desktop app with **Designer** and **Animator** workspaces. D
 **Current boundaries:** Designer outputs are unrigged until prepared in Animator. Hunyuan outputs are untextured; TRELLIS.2 can infer textures but cannot guarantee accurate unseen surfaces or seam-free UVs. Rigging is guided and body-only, not universal auto-rigging. Motion and graph joins require review; endpoint checks do not guarantee seamless animation or game-engine readiness. Models and local backend setup are prerequisites, not bundled capabilities.
 
 ## Screenshots
+
+### Setup checklist on first launch
+
+![Setup checklist showing detected core tools, an Install Blender action, Animator text-encoder options and Designer model rows](docs/screenshots/setup-checklist.png)
+
+A real first launch against a fresh workspace on the development PC. Items already present show as complete; the remaining steps have one-click actions. Readiness checks confirm prerequisites, not successful generation.
+
+### Dependency check on a later launch
+
+![Dependency check prompt listing Blender and the gated Llama text encoder, each with one-click actions and a Don't warn at launch option](docs/screenshots/launch-check.png)
+
+A real later launch on the development PC, in a fresh workspace without Blender and with the Llama encoder not yet approved. ComfyUI was already running there, so it is not listed.
 
 ### Designer: character concept and transparent T-pose
 
@@ -96,6 +109,29 @@ npm run dev
 ```
 
 `npm run build` builds the app; `npm start` launches that build. `npm run package` creates a portable application for the current OS and CPU architecture, including the isolated Blender runtime installed by `npm run setup:blender`. Windows ARM64 keeps the existing `release\CharacterStudio-win32-arm64` layout. The PowerShell Blender setup launcher remains available for compatibility.
+
+### First-launch setup checklist
+
+The first time Studio opens with a new workspace, it shows **Get Character Studio ready**. Reopen it any time from **Setup checklist** in the top bar. Studio inspects this PC and groups what it finds:
+
+| Group | Detected | One-click actions |
+|---|---|---|
+| Core requirements | OS, CPU, RAM, free disk space and GPU; Blender; ComfyUI folder (with `main.py` and its venv Python); output folder; whether the local ComfyUI API responds | **Install Blender 4.5.15** (official mirror archive, SHA-256 checked, extracted into the workspace `tools` folder and selected) or **Choose existing**; **Use this folder** for a detected ComfyUI install; **Use ComfyUI/output**; **Start ComfyUI** |
+| Animator | Kimodo nodes registered in ComfyUI (or present under `custom_nodes`); the selected text encoder | **Open ComfyUI-Kimodo** (install guide); **Check access** runs the existing Llama preflight; **Request access**; **Use LFM bridge instead** runs `backend\setup_lfm.py` with ComfyUI's Python and selects LFM |
+| Designer models | DreamShaper 8, FLUX.2 klein 4B fp8, Qwen3 4B text encoder, FLUX.2 VAE, BiRefNet and Hunyuan3D 2.0, either as exact files or as weights already chosen in Designer | **Download** one model (the button shows its size), or **Download all missing** (about 18.5 GB for all six); **License** opens each model's license page |
+| Optional | A local Ollama service for character naming | **Get Ollama** |
+
+Designer downloads are pinned to an immutable Hugging Face revision and an exact byte size and SHA-256. They stream to a `.part` file, are verified, and only then move into `ComfyUI\models`. Studio also checks free space first and deletes partial data on failure or **Cancel**. A downloaded model is selected in Designer only when that field is empty or still at its default; existing choices are kept. If a file at a pinned path has a different size, it is flagged. Only that row's **Download** replaces it, after the new copy is verified; **Download all missing** skips it. Studio never asks for passwords or tokens, and every external page comes from a fixed allowlist in the main process.
+
+**Limitations:** the checklist does not install ComfyUI, GPU drivers, PyTorch or custom nodes such as ComfyUI-Kimodo. Follow the linked guides, then select **Re-check**. TRELLIS.2 textured generation and the optional scene IP-Adapter are not part of the one-click downloads. The gated Llama encoder still needs approved access and a Hugging Face login inside the ComfyUI environment. The LFM bridge needs ComfyUI-Kimodo on disk and a ComfyUI restart. A completed checklist means the prerequisites were found, not that generation or export will succeed on this hardware. Clear **Show this checklist at launch** to stop it from opening automatically. Automation can set `STUDIO_SKIP_SETUP_CHECKLIST=1` to suppress the first-launch dialog.
+
+#### Dependency check on later launches
+
+After the first launch, Studio checks its dependencies each time it opens (unless **Show this checklist at launch** opens the full checklist instead). A small **Checking Blender, ComfyUI and models…** card appears in the corner while you keep working; select **Cancel** to stop the check. If every required item passes, a brief confirmation appears. If anything Designer or Animator needs is missing or not working, the **Some dependencies need attention** prompt lists only those items with the same one-click actions as the checklist, such as **Start ComfyUI** or **Install Blender 4.5.15**. The prompt re-checks after each action and offers **Re-check** (with **Cancel check**), **Open setup checklist** and **Continue anyway**. Optional items never interrupt a launch.
+
+**Don't warn at launch** hides one item until it works again; afterwards a new failure is reported again. If several Designer models are missing, **Don't warn about Designer models** silences them together for Animator-only use. Clear **Check dependencies at launch** in the prompt, or **Otherwise, check dependencies at launch** in the checklist, to stop the check entirely. The check runs the same probes as the checklist, so it confirms prerequisites, not successful generation. `STUDIO_SKIP_SETUP_CHECKLIST=1` also suppresses it.
+
+After `npm run build`, `npm run test:setup` opens the checklist for a fresh temporary workspace using this PC's real tools, then relaunches to exercise the dependency check and its **Cancel**. It intercepts external links and does not start downloads or installs.
 
 ### Automated builds and releases
 
@@ -232,7 +268,7 @@ Each import creates a **new design**, preserves a byte-for-byte original, and re
 
 ### Offline models and memory profiles
 
-Models must already be installed before going offline. Studio never downloads models or installs custom nodes/packages **during generation**. After a missing-model failure, **Download required models** starts a separate, explicitly approved setup operation. Weight selectors come from the connected ComfyUI, not a fictitious installed-model list. Model licenses, GPU architecture, drivers, precision, and available system RAM still matter.
+Models must already be installed before going offline. Studio never downloads models or installs custom nodes/packages **during generation**. After a missing-model failure, **Download required models** starts a separate, explicitly approved setup operation; the [setup checklist](#first-launch-setup-checklist) can also download pinned Designer weights when you choose. Weight selectors come from the connected ComfyUI, not a fictitious installed-model list. Model licenses, GPU architecture, drivers, precision, and available system RAM still matter.
 
 #### Download models from a warning
 

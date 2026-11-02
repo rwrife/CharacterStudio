@@ -7,7 +7,7 @@ import assert from 'node:assert/strict'
 const data = await mkdtemp(join(tmpdir(), 'studio-rigging-ui-'))
 const output = resolve('artifacts', 'rigging-smoke')
 await mkdir(output, { recursive: true })
-const app = await electron.launch({ args: ['.'], env: { ...process.env, STUDIO_DATA_DIR: data }, timeout: 60000 })
+const app = await electron.launch({ args: ['.'], env: { ...process.env, STUDIO_SKIP_SETUP_CHECKLIST: '1', STUDIO_DATA_DIR: data }, timeout: 60000 })
 try {
   const page = await app.firstWindow()
   const errors = []
