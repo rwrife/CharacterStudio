@@ -54,6 +54,8 @@ export interface Design {
   tposeIsolated?: boolean
   modelUrl?: string
   modelTextured?: boolean
+  modelRigged?: boolean
+  ai?: import('./ai').AiProvenance[]
   characterId?: string
   sources?: Partial<Record<DesignStage, DesignSource>>
   recovery?: import('./designer-models').DesignRecovery

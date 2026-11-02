@@ -4,7 +4,7 @@
 
 KimodoStudio is an AI-assisted video game character creation studio. Help game developers prepare character assets, fit and skin humanoid rigs, generate motion from natural-language instructions, organize reusable animation graphs, and export animated characters for downstream game development.
 
-The current product is a local Windows ARM64 desktop application with Designer and Animator workspaces. Designer uses local ComfyUI to turn a text brief or reference image into a scene, transparent T-pose, and untextured Hunyuan3D geometry; scenes are always generated, but it can skip ahead from imported T-poses or embedded GLB meshes. Animator prepares imported humanoid FBX assets or Designer meshes with Blender and generates Kimodo motion through ComfyUI. Generated geometry is not a finished game asset. Treat broader character-creation capabilities as goals, not shipped features.
+The current product is a local-first Windows ARM64 desktop application with Designer and Animator workspaces. Designer's built-in ComfyUI presets turn a text brief or reference image into a scene, transparent T-pose, and Hunyuan3D geometry or textured TRELLIS.2 GLB; scenes are always generated, but it can skip ahead from imported T-poses or embedded GLB meshes. Per-stage providers also support explicitly approved remote ComfyUI, Studio API gateways, and paid Tripo image/3D/texture/rig tasks. Animator prepares imported humanoid FBX assets or Designer meshes with local Blender and generates compatible Kimodo motion through the selected provider. Generated geometry and remote rigs are not finished game assets. Treat broader character-creation capabilities as goals, not shipped features.
 
 ## Repository layout
 
@@ -33,7 +33,7 @@ ComfyUI is a separately configured local dependency, normally under `%LOCALAPPDA
 
 ## Implementation principles
 
-- Keep character processing and inference local. Do not add character uploads, remote inference, or credential collection without an explicit product requirement.
+- Keep character processing local and inference local-first by default. Remote inference is opt-in through Model & workflow providers, with visible per-stage approval before transmitting prompts, references, meshes or pose constraints. Never silently switch providers or models.
 - Preserve Electron context isolation, sandboxing, the narrow preload bridge, and validation at IPC and filesystem boundaries.
 - Reuse shared types, validation, rig definitions, and motion-plan helpers. Maintain the existing TypeScript, React, and Python patterns.
 - Preserve original imports, saved configurations, immutable completed jobs, and batch snapshots. Keep changes compatible with persisted data or provide explicit migrations.
@@ -46,6 +46,17 @@ ComfyUI is a separately configured local dependency, normally under `%LOCALAPPDA
 - Be explicit about limitations: guided body rigging is not universal AI auto-rigging; endpoint continuity is not a guarantee of seamless motion, foot-contact quality, or game-engine integration.
 - Never claim successful learned motion generation based on analytic fixtures. The documented full-pipeline attempt was blocked by gated model access; report actual observed results rather than assuming approval or inference success.
 - Keep downloaded models, Blender distributions, portable builds, user assets, logs, workspace data, and credentials out of Git. Retain third-party notices when distributing runtimes.
+
+## Required architecture for every AI feature
+
+- New and updated AI stages must expose hardware-fit local model/profile selection and support custom checkpoints, mapped workflows, and explicit remote ComfyUI/API execution wherever the output contract allows. This applies to images, cutouts, mesh generation, PBR texturing, segmentation, landmarks, secondary/cloth analysis, motion and trained text encoders. Register stages and contracts in `src/shared/ai.ts`; reuse `src/main/ai-providers.ts`, rather than adding a parallel hard-coded provider path.
+- Keep built-in local presets as the compatible default, including old saved configurations. Show Local/Remote and the selected provider/model at the action. Hardware guidance must distinguish measured free VRAM from estimates and unavailable telemetry; never require local inference weights or local GPU memory for remote inference. Retain local Blender/Python requirements for motion validation, retargeting and character exports.
+- Use validated ComfyUI API-format workflow envelopes with explicit parameter and output mappings, not arbitrary JavaScript, shell, or private IPC. Preserve actual reference inputs, seeds, trained encoder choices, incoming poses and endpoint constraints. Native routed Kimodo uses the optional `backend/studio_provider_nodes` bridge: its sampler converts inline constraints to the server-local file that upstream Kimodo expects, and its output node exposes safe HTTP file descriptors.
+- Remote execution must obtain approval through the real desktop consent handler before any inference request or asset upload. Store keys only with OS-backed `safeStorage` in the endpoint-bound credential vault; fail closed without encryption and require HTTPS for credentials. Never put keys in URLs, workflow JSON, snapshots, project history, manifests or logs. Never return existing keys to the renderer or MCP inspection. Password entry is write-only through the visible UI. Warn about paid credits, uncertain submissions and cancellation that cannot be confirmed; do not retry potentially billable submissions automatically.
+- Preserve non-sensitive provider/model/workflow hashes, actual mapped workflows and task IDs with completed outputs and configuration history. Preserve source provenance when reusing outputs. Batch reruns must retain their original provider/model/workflow and text-encoder selection, or fail explicitly rather than silently drifting.
+- Validate retrieved images, cutouts, embedded GLBs, PBR maps and compatible motion before publishing completion. Remote jobs do not imply a shared filesystem. Keep output retrieval bounded and scoped to that job; do not forward credentials to asset-download hosts. Reject missing outputs and incompatible motion instead of substituting analytic fixtures or another model.
+- All provider configuration, workflow import, credential management, remote approvals, cancellation and resulting workflows must remain operable through the actual visible desktop MCP controls, respecting modal/disabled boundaries. Add unit contract tests and real desktop/MCP fixture coverage that observes outputs; mocks are not proof of paid API interoperability or learned inference.
+- Be precise about integrations: Tripo H3 v3.1 is not Tencent Hunyuan 3.1. Other vendor APIs need an explicit adapter or the documented Studio API gateway contract. Remote skinned GLB output does not guarantee compatibility with Animator's SOMA rig. Reserved segmentation, landmark and cloth stages are extension points, not implemented AI features.
 
 ## Validation
 

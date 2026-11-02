@@ -96,8 +96,8 @@ export async function desktopControl(command: DesktopCommand) {
       el.click()
     } else if (command.action === 'fill') {
       if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) ||
-          el instanceof HTMLInputElement && !['text', 'search', 'url', 'tel', 'email', 'number', 'range'].includes(el.type) ||
-          el.readOnly) throw new Error('This is not an editable text, number, or range field.')
+          el instanceof HTMLInputElement && !['text', 'search', 'url', 'tel', 'email', 'number', 'range', 'password'].includes(el.type) ||
+          el.readOnly) throw new Error('This is not an editable text, password, number, or range field.')
       if (el.maxLength >= 0 && command.value.length > el.maxLength) throw new Error(`Field permits at most ${el.maxLength} characters.`)
       if (el instanceof HTMLInputElement && ['number', 'range'].includes(el.type)) {
         const n = Number(command.value)

@@ -9,6 +9,8 @@ __pycache__/
 .env.*
 mcp-connection.json
 mcp-settings.json
+ai-credentials.json
+ai-credentials.json.tmp
 .mcp-*.tmp
 !.env.example
 .venv/

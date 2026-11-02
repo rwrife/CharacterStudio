@@ -3,6 +3,19 @@ import type { StudioApi, Snapshot } from '../shared/types'
 import type { SetupState } from '../shared/setup'
 
 const api: StudioApi = {
+  aiSettings: config => ipcRenderer.invoke('ai:settings', config),
+  aiHardware: () => ipcRenderer.invoke('ai:hardware'),
+  aiImportWorkflow: () => ipcRenderer.invoke('ai:import-workflow'),
+  aiCredentialStatus: stage => ipcRenderer.invoke('ai:credential-status', stage),
+  aiCredential: (stage, value) => ipcRenderer.invoke('ai:credential', stage, value),
+  aiBalance: stage => ipcRenderer.invoke('ai:balance', stage),
+  aiConsentReply: (id, approved) => ipcRenderer.invoke('ai:consent-reply', id, approved),
+  onAiConsent: callback => {
+    const listener = (_: Electron.IpcRendererEvent, request: import('../shared/ai').AiConsent | null) => callback(request)
+    ipcRenderer.on('ai:consent', listener)
+    return () => ipcRenderer.removeListener('ai:consent', listener)
+  },
+  designerProcessModel: (id, stage) => ipcRenderer.invoke('designer:process-model', id, stage),
   desktopControlEnabled: () => ipcRenderer.invoke('studio:mcp-enabled'),
   setDesktopControlEnabled: enabled => ipcRenderer.invoke('studio:mcp-set-enabled', enabled),
   onDesktopControlChanged: callback => {

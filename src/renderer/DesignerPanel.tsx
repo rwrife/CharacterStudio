@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ArrowDownToLine, ArrowRight, Box, Check, CircleAlert, ImagePlus, LoaderCircle, Palette, PanelRightClose, PanelRightOpen, Plus, RefreshCw, ShieldCheck, Sparkles } from 'lucide-react'
 import type { Character, Snapshot } from '../shared/types'
 import type { DesignRequest, DesignerConfig, DesignerReadiness, DesignStage } from '../shared/designer'
@@ -6,18 +6,21 @@ import { imageProfiles, meshProfiles, meshTextureProfile, tposeEditProfile, tpos
 import { designerModelPackages, type DesignerModelPackage } from '../shared/designer-models'
 import { Viewport } from './Viewport'
 import './designer.css'
+import { AiRouteBadge } from './AiProvidersPanel'
+import { resolveAiRoute, type AiStage } from '../shared/ai'
 
 const initial: DesignRequest = { title: '', description: '', style: '', seed: 42, steps: 30, referenceStrength: 0.3 }
 const explain = (error: unknown) => (error instanceof Error ? error.message : String(error)).replace(/^Error invoking remote method '[^']+': Error: /, '')
 
-export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSettings }: {
-  snapshot: Snapshot; visible: boolean; animatorBusy: boolean; onAnimate: (character: Character) => void; onSettings: () => void
+export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSettings, onProviders }: {
+  snapshot: Snapshot; visible: boolean; animatorBusy: boolean; onAnimate: (character: Character) => void; onSettings: () => void; onProviders: (stage: AiStage) => void
 }) {
   const data = snapshot.designer
   const [request, setRequest] = useState<DesignRequest>(initial)
   const [input, setInput] = useState<'text' | 'image'>('text')
   const [id, setId] = useState('')
   const [config, setConfig] = useState<DesignerConfig | undefined>(data?.config)
+  const previousConfig = useRef(data?.config)
   const [ready, setReady] = useState<DesignerReadiness>()
   const [checking, setChecking] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -52,7 +55,11 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
     try { setReady(await window.studio.designerReadiness()) } catch (error) { setError(explain(error)); setReady(undefined) } finally { setChecking(false) }
   }
   useEffect(() => { if (visible) void refresh() }, [visible, snapshot.settings.comfyUrl])
-  useEffect(() => { if (!config && data?.config) setConfig(data.config) }, [data?.config])
+  useEffect(() => {
+    const previous = previousConfig.current
+    setConfig(current => !current || JSON.stringify(current) === JSON.stringify(previous) ? data?.config : current)
+    previousConfig.current = data?.config
+  }, [data?.config])
   useEffect(() => {
     if (!modelsOpen || !reviewTarget) return
     const field = document.getElementById(reviewTarget)
@@ -110,10 +117,11 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
           const image = await window.studio.designerReference()
           if (image) setRequest(old => ({ ...old, referenceId: image.id }))
         })}><ImagePlus size={16} /> {reference ? 'Replace local image' : 'Choose local image'}</button>
-        <p className="fine-print">PNG, JPEG or WebP, up to 20 MB. Copied locally; sent only to your loopback ComfyUI. The photo guides a newly generated scene; it is not used as the scene itself.</p>
+        <p className="fine-print">PNG, JPEG or WebP, up to 20 MB. Copied locally; sent only to the selected stage provider, with approval before remote transmission. The photo guides a newly generated scene; it is not used as the scene itself.</p>
       </div>}
       <label className="field-label" htmlFor="design-title">Character title <span>optional</span></label>
-      <input id="design-title" disabled={locked} maxLength={100} placeholder="Leave blank for local AI naming" value={request.title} onChange={e => setRequest({ ...request, title: e.target.value })} />
+      {!request.title && <AiRouteBadge snapshot={snapshot} stage="naming" onClick={() => onProviders('naming')} />}
+      <input id="design-title" disabled={locked} maxLength={100} placeholder="Leave blank for the selected AI naming provider" value={request.title} onChange={e => setRequest({ ...request, title: e.target.value })} />
       <label className="field-label" htmlFor="design-description">{input === 'image' ? 'What to use from this photo' : 'Character & scenario'}</label>
       <textarea id="design-description" disabled={locked} maxLength={2000} rows={5} placeholder={input === 'image' ? 'Use the person in this photo as a heavyweight boxer in a neon-lit arena...' : 'A Brazilian MMA fighter raised in the jungles of Brazil...'} value={request.description} onChange={e => setRequest({ ...request, description: e.target.value })} />
       <label className="field-label" htmlFor="design-style">Art style</label>
@@ -124,7 +132,8 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
       </div>
       <label className="field-label" htmlFor="design-strength">Reference influence <span>{Math.round(request.referenceStrength * 100)}%</span></label>
       <input id="design-strength" type="range" min={0.1} max={0.6} step={0.05} disabled={locked} value={request.referenceStrength} onChange={e => setRequest({ ...request, referenceStrength: Number(e.target.value) })} />
-      <p className="fine-print">For creating a scene from an optional reference image. T-pose editing instead uses the completed scene directly, with its own fixed four-step edit workflow.</p>
+      <p className="fine-print">For creating a scene from an optional reference image. T-pose editing uses the completed scene directly. The built-in FLUX.2 preset uses four steps; custom providers use their configured workflow.</p>
+      <AiRouteBadge snapshot={snapshot} stage="scene" onClick={() => onProviders('scene')} />
       <button className="primary full" disabled={locked || settingsDirty || sceneBlocked} onClick={() => void perform(async () => {
         const created = await window.studio.designerCreate({ ...request, referenceId: input === 'image' ? request.referenceId : undefined })
         setId(created); setPreview('scene')
@@ -176,7 +185,7 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
           <div className="design-empty"><div className="design-empty-icon">{preview === 'model' ? <Box size={42} strokeWidth={1} /> : <Palette size={42} strokeWidth={1} />}</div>
             <h2>{preview === 'scene' ? 'Start with a little imagination.' : preview === 'tpose' ? 'Same character. A clean silhouette.' : 'From reference to dimension.'}</h2>
             <p>{preview === 'scene' ? 'Your character, their world, your art direction.' : preview === 'tpose' ? 'Review the scene, then generate a front-facing T-pose.' : 'Approve the isolated T-pose before building geometry.'}</p>
-            <span>LOCAL MODELS / YOUR MACHINE</span>
+            <span>LOCAL FIRST / YOUR SELECTED PROVIDER</span>
           </div>}
       </div>
       {active && <div className="job-progress" role="status"><LoaderCircle size={18} className="spin" /><div><strong>{active.stage?.toUpperCase()}</strong><p>{active.message}</p></div><button disabled={active.status !== 'running'} onClick={() => void window.studio.designerCancel().catch(error => setError(explain(error)))}>Cancel design</button></div>}
@@ -204,17 +213,30 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
       </div>}
       {notice && <div className="banner success" role="status"><Check size={17} /><span>{notice}</span></div>}
       {design && design.status !== 'running' && design.status !== 'failed' && <p className="design-status">{design.message}</p>}
+      {design && <div className="ai-stage-routes">{(['scene', 'tpose', 'cutout', 'mesh'] as const).map(stage =>
+        <div key={stage}><span className="fine-print">{stage === 'mesh' ? '3D' : stage === 'cutout' ? 'Cutout' : stage === 'tpose' ? 'T-pose' : 'Scene'} </span><AiRouteBadge snapshot={snapshot} stage={stage} onClick={() => onProviders(stage)} /></div>)}</div>}
       {design && <div className="design-actions">
         <button className="primary" disabled={locked || settingsDirty || sceneBlocked} onClick={() => void run('scene')}><RefreshCw size={15} /> {design.sceneUrl ? 'Regenerate scene' : 'Generate scene'}</button>
         {design.sceneUrl && (!design.tposeUrl || design.tposeIsolated) && <button className="primary" disabled={locked || settingsDirty} onClick={() => void run('tpose')}><Check size={15} /> {design.tposeUrl ? 'Regenerate T-pose' : 'Use scene & generate T-pose'} <ArrowRight size={15} /></button>}
         {design.tposeUrl && !design.tposeIsolated && <button className="primary" disabled={locked || settingsDirty} onClick={() => void run('tpose')}><RefreshCw size={15} /> Remove T-pose background</button>}
         {design.tposeIsolated && <button className="primary" disabled={locked || settingsDirty} onClick={() => void run('model')}><Box size={15} /> {design.modelUrl ? 'Regenerate 3D' : 'Use T-pose & generate 3D'} <ArrowRight size={15} /></button>}
         {design.modelUrl && <button className="primary" disabled={locked} onClick={() => void perform(async () => onAnimate(await window.studio.designerAnimate(design.id)))}><ArrowRight size={15} /> {design.characterId ? 'Open in Animator' : 'Send to Animator'}</button>}
-        {url && <button className="secondary" disabled={locked} onClick={() => void perform(async () => { const path = await window.studio.designerExport(design.id, preview); if (path) setNotice(`Saved ${path}`) })}><ArrowDownToLine size={15} /> Save {preview === 'model' ? design.modelTextured ? 'textured GLB' : 'GLB geometry' : 'reference PNG'}</button>}
+        {design.modelUrl && (['texture', 'rig'] as const).map(stage => <div key={stage}>
+          <AiRouteBadge snapshot={snapshot} stage={stage} onClick={() => onProviders(stage)} />
+          <button className="secondary" disabled={locked || resolveAiRoute(snapshot.ai, stage).provider === 'builtin'} onClick={() => void perform(async () => {
+            const next = await window.studio.designerProcessModel(design.id, stage)
+            setId(next); setPreview('model')
+          })}>{stage === 'rig' ? 'Create rigged GLB variation' : 'Create PBR texture variation'}</button>
+        </div>)}
+        {url && <button className="secondary" disabled={locked} onClick={() => void perform(async () => { const path = await window.studio.designerExport(design.id, preview); if (path) setNotice(`Saved ${path}`) })}><ArrowDownToLine size={15} /> Save {preview === 'model' ? design.modelRigged ? 'rigged GLB' : design.modelTextured ? 'textured GLB' : 'GLB geometry' : 'reference PNG'}</button>}
         <button className="text-button" disabled={locked} onClick={() => { setRequest({ ...design.request, title: design.title }); setInput(design.request.referenceId ? 'image' : 'text'); setId(''); setNotice('Brief copied. Change the seed or descriptions, then create a new concept.'); setError('') }}><Plus size={14} /> Use brief for variation</button>
       </div>}
       {design && <p className="fine-print">Generate again after changing the brief, seed or saved model choices. Reruns create a saved variation and keep only the references needed for that stage; earlier outputs and Animator characters stay unchanged. Identical settings and seeds may reproduce the same result.</p>}
-      <div className="design-limits"><ShieldCheck size={17} /><p>Review each stage before continuing. 3D uses only the validated T-pose foreground, not the original scene. Hunyuan3D produces geometry only; TRELLIS.2 generates new geometry plus embedded textures from the same reference. It does not repaint an existing Hunyuan mesh. Both are <strong>unrigged</strong>. Review unseen surfaces, texture seams, anatomy and hands before Animator.</p></div>
+      {!!design?.ai?.length && <details className="fine-print"><summary>Saved provider provenance</summary>
+        {design.ai.map((record, index) => <p key={index}>{record.stage}: {record.route.location} / {record.route.provider} / {record.route.model || 'native preset'}<br />
+          {record.route.endpoint}<br />Configuration: {record.configurationHash}<br />{record.taskId && `Task: ${record.taskId}`}</p>)}
+      </details>}
+      <div className="design-limits"><ShieldCheck size={17} /><p>Review each stage before continuing. 3D uses the validated T-pose, not the original scene. Built-in Hunyuan3D produces geometry only; TRELLIS.2 generates new geometry with textures. Both are <strong>unrigged</strong>. Separate configured providers can texture or rig an existing GLB. A remote rig is not guaranteed compatible with Animator's guided SOMA body rig. Review all surfaces, seams, anatomy and hands.</p></div>
     </main>
     <aside id="designer-model-profiles" className="design-models" aria-label="Designer model profiles" hidden={!modelsOpen}>
       <div className="section-heading"><span className="section-kicker">LOCAL MODEL PROFILES</span><button aria-label="Refresh designer models" disabled={checking || locked} onClick={() => void refresh()}><RefreshCw size={14} className={checking ? 'spin' : ''} /></button></div>
@@ -222,7 +244,7 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
       <div className="design-hardware">
         {ready?.devices.map(device => <div key={device.name}><strong>{device.freeGB.toFixed(1)} GB available</strong><p>{device.totalGB.toFixed(1)} GB reported total</p><small>{device.name}</small></div>)}
         {!ready && <p>{checking ? 'Reading local ComfyUI hardware...' : 'Start local ComfyUI, then refresh models.'}</p>}
-        {ready && !ready.devices.length && <p>No supported GPU reported. CPU-only generation is not supported.</p>}
+        {ready && !ready.devices.length && <p>No supported GPU reported. Built-in Designer presets require a GPU; custom or remote providers may have different requirements.</p>}
       </div>
       {config && <>
         <label className="field-label" htmlFor="image-profile">Image model family</label>
@@ -311,6 +333,7 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
         {settingsDirty && <p className="fine-print">Save model choices before generating. Completed image stages keep their original model family.</p>}
       </>}
       <details className="design-setup"><summary>Model setup & offline requirements</summary><p>Missing-model errors offer Download required models for BiRefNet, FLUX.2 klein editing, DreamShaper 8 / SDXL, standard Hunyuan3D 2 and TRELLIS.2. Approve the size and source, then Studio verifies, refreshes and selects the required files. Retry generation yourself after setup. Other checkpoints, optional IP-Adapter and Ollama still need manual setup. No Python packages are changed.</p><p>Scene/Hunyuan checkpoints go in models\checkpoints. T-pose edits use flux-2-klein-4b-fp8.safetensors in models\diffusion_models, qwen_3_4b.safetensors in models\text_encoders, flux2-vae.safetensors in models\vae, and BiRefNet in models\background_removal.</p><p>Use native single-view Hunyuan3D 2 / 2mini safetensors with names identifying the model and mini variant. Turbo, multiview and 2.1 checkpoints are not supported by these profiles. 2mini weights must be installed manually; downloads never silently switch profiles.</p><p>Textured generation uses {meshTextureProfile.model} in models\diffusion_models, {meshTextureProfile.vision} in models\clip_vision, and {meshTextureProfile.shapeVae} plus {meshTextureProfile.textureVae} in models\vae. These total about 8.5 GB. ComfyUI must include native TRELLIS.2, remeshing, UV unwrapping and texture-baking nodes.</p><p>Memory budgets are conservative estimates, not compatibility guarantees. GPU architecture, free system RAM, drivers and checkpoint precision also matter. Stages and Animator jobs run sequentially.</p></details>
+      <button className="secondary full" onClick={() => onProviders('scene')}>Model & workflow providers</button>
       <button className="text-button full" onClick={onSettings}>Backend connections</button>
     </aside>
   </div>

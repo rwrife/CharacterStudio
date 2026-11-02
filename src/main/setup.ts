@@ -14,6 +14,7 @@ import { downloadVerified, ensureSpace, freeBytes } from './download'
 import { blenderDistribution, comfyPythonPath, defaultComfyRoot } from './native-runtime'
 import { runProcess } from './process'
 import { errorText } from './validation'
+import { resolveAiRoute, type AiConfiguration, type AiStage } from '../shared/ai'
 
 export interface SetupHost {
   root: string
@@ -22,6 +23,7 @@ export interface SetupHost {
   /** Suppresses launch-time prompts (used by automated smoke checks). */
   quietLaunch?: boolean
   settings(): Settings
+  aiConfiguration?(): AiConfiguration
   saveSettings(value: Settings): Settings
   startComfy(): Promise<void>
   designerConfig(): DesignerConfig
@@ -308,6 +310,25 @@ export class SetupAssistant {
           'Optional. Without Ollama, give each design a title yourself.',
       actions: titleModels.length ? [] : [{ id: 'open-ollama', label: 'Get Ollama' }]
     })
+    const routing = this.host.aiConfiguration?.()
+    if (routing) {
+      const builtin = (stage: AiStage) => resolveAiRoute(routing, stage).provider === 'builtin'
+      const nativeDesigner = (['scene', 'tpose', 'cutout', 'mesh'] as const).some(builtin)
+      const modelStages: Partial<Record<keyof DesignerConfig, AiStage>> = {
+        checkpoint: 'scene', editModel: 'tpose', editTextEncoder: 'tpose', editVae: 'tpose',
+        backgroundModel: 'cutout', meshCheckpoint: 'mesh'
+      }
+      for (const item of items) {
+        const model = setupModels.find(model => `model:${model.id}` === item.id)
+        const stage = model ? modelStages[model.configField] : undefined
+        if (stage && !builtin(stage) || ['comfy-install', 'comfy-output', 'comfy-running'].includes(item.id) && !nativeDesigner)
+          item.requiredFor = item.requiredFor.filter(workspace => workspace !== 'designer')
+        if (!builtin('motion') && ['comfy-output', 'comfy-running', 'kimodo-nodes', 'text-encoder'].includes(item.id))
+          item.requiredFor = item.requiredFor.filter(workspace => workspace !== 'animator')
+        if (!item.requiredFor.length && (stage || ['comfy-output', 'comfy-running', 'kimodo-nodes', 'text-encoder'].includes(item.id)))
+          item.detail += ' Not required by the selected provider routes; remote prerequisites are checked before generation.'
+      }
+    }
     return { items, ready: summarizeSetup(items), checkedAt: new Date().toISOString() }
   }
 

@@ -29,7 +29,7 @@ export function imageWorkflow(config: DesignerConfig, request: DesignRequest, pr
   return workflow
 }
 
-export function tposeWorkflow(config: DesignerConfig, request: DesignRequest, prefix: string, scene: string): Workflow {
+export function tposeWorkflow(config: DesignerConfig, request: DesignRequest, prefix: string, scene: string, isolate = true): Workflow {
   if (!scene || !config.editModel || !config.editTextEncoder || !config.editVae)
     throw new Error('T-pose editing requires a scene image and installed FLUX.2 klein 4B, Qwen 3 4B and FLUX.2 VAE weights.')
   const workflow: Workflow = {
@@ -53,7 +53,7 @@ export function tposeWorkflow(config: DesignerConfig, request: DesignRequest, pr
     '22': { class_type: 'SamplerCustomAdvanced', inputs: { noise: ['21', 0], guider: ['12', 0], sampler: ['20', 0], sigmas: ['14', 0], latent_image: ['13', 0] } },
     '23': { class_type: 'VAEDecode', inputs: { samples: ['22', 0], vae: ['3', 0] } }
   }
-  addIsolation(workflow, config, ['23', 0])
+  if (isolate) addIsolation(workflow, config, ['23', 0])
   return workflow
 }
 

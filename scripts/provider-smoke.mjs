@@ -1,0 +1,300 @@
+import { _electron as electron, expect } from '@playwright/test'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
+import { createServer } from 'node:http'
+import { once } from 'node:events'
+import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import assert from 'node:assert/strict'
+
+// Visible desktop/MCP contract coverage with deterministic local fixtures, not cloud inference.
+const directory = await mkdtemp(join(tmpdir(), 'studio-provider-ui-'))
+const jobs = [], cancelled = [], comfyJobs = new Map()
+let png
+function modelFixture(textured = false, rigged = false) {
+  const binary = Buffer.alloc(Math.ceil((132 + (textured ? png.length : 0)) / 4) * 4)
+  binary.writeFloatLE(1, 12); binary.writeFloatLE(1, 28)
+  binary.writeFloatLE(1, 44); binary.writeFloatLE(1, 56)
+  for (let vertex = 0; vertex < 3; vertex++) binary.writeFloatLE(1, 84 + vertex * 16)
+  if (textured) png.copy(binary, 132)
+  const document = {
+    asset: { version: '2.0' }, buffers: [{ byteLength: binary.length }],
+    bufferViews: [{ buffer: 0, byteLength: 36 }, { buffer: 0, byteOffset: 36, byteLength: 24 },
+      { buffer: 0, byteOffset: 60, byteLength: 24 }, { buffer: 0, byteOffset: 84, byteLength: 48 },
+      ...(textured ? [{ buffer: 0, byteOffset: 132, byteLength: png.length }] : [])],
+    accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: 'VEC3', min: [0, 0, 0], max: [1, 1, 0] },
+      { bufferView: 1, componentType: 5126, count: 3, type: 'VEC2' }, { bufferView: 2, componentType: 5123, count: 3, type: 'VEC4' },
+      { bufferView: 3, componentType: 5126, count: 3, type: 'VEC4' }],
+    scenes: [{ nodes: rigged ? [0, 1] : [0] }], scene: 0,
+    nodes: [{ mesh: 0, ...(rigged ? { skin: 0 } : {}) }, ...(rigged ? [{ name: 'Fixture root joint' }] : [])],
+    ...(rigged ? { skins: [{ joints: [1] }] } : {}),
+    ...(textured ? { images: [{ bufferView: 4, mimeType: 'image/png' }], textures: [{ source: 0 }],
+      materials: [{ pbrMetallicRoughness: { baseColorTexture: { index: 0 }, metallicRoughnessTexture: { index: 0 } } }] } : {}),
+    meshes: [{ primitives: [{ attributes: { POSITION: 0, ...(textured ? { TEXCOORD_0: 1 } : {}),
+      ...(rigged ? { JOINTS_0: 2, WEIGHTS_0: 3 } : {}) }, ...(textured ? { material: 0 } : {}) }] }]
+  }
+  const json = Buffer.from(JSON.stringify(document))
+  const padded = Buffer.alloc(Math.ceil(json.length / 4) * 4, 32); json.copy(padded)
+  const result = Buffer.alloc(padded.length + binary.length + 28)
+  result.write('glTF'); result.writeUInt32LE(2, 4); result.writeUInt32LE(result.length, 8)
+  result.writeUInt32LE(padded.length, 12); result.write('JSON', 16); padded.copy(result, 20)
+  result.writeUInt32LE(binary.length, padded.length + 20); result.write('BIN\0', padded.length + 24)
+  binary.copy(result, padded.length + 28)
+  return result
+}
+const glb = modelFixture()
+let pending = false
+const server = createServer(async (request, response) => {
+  try {
+    response.setHeader('Content-Type', 'application/json')
+    let raw = ''; for await (const chunk of request) raw += chunk
+    if (request.method === 'POST' && request.url === '/jobs') {
+      const job = JSON.parse(raw); jobs.push(job); response.end(JSON.stringify({ id: job.id }))
+    } else if (request.method === 'DELETE') {
+      cancelled.push(request.url.split('/').at(-1)); response.end('{}')
+    } else if (request.url.startsWith('/jobs/')) {
+      const job = jobs.find(job => request.url.endsWith(job.id))
+      assert.ok(job)
+      response.end(JSON.stringify({ status: pending ? 'running' : 'complete', outputs:
+        ['texture', 'rig'].includes(job.stage) ? { model: modelFixture(true, job.stage === 'rig').toString('base64') } : { image: png.toString('base64') } }))
+    } else if (request.url === '/comfy/object_info') response.end(JSON.stringify({ FixtureMesh: {} }))
+    else if (request.url === '/comfy/upload/image') {
+      const name = /filename="([^"]+)"/.exec(raw)?.[1]; assert.ok(name)
+      response.end(JSON.stringify({ name, subfolder: '', type: 'input' }))
+    } else if (request.url === '/comfy/prompt') {
+      const body = JSON.parse(raw); comfyJobs.set(body.prompt_id, body)
+      response.end(JSON.stringify({ prompt_id: body.prompt_id }))
+    } else if (request.url.startsWith('/comfy/history/')) {
+      const id = request.url.split('/').at(-1), job = comfyJobs.get(id); assert.ok(job)
+      response.end(JSON.stringify({ [id]: { status: { completed: true, status_str: 'success' },
+        outputs: { '1': { '3d': [{ filename: job.prompt['1'].inputs.filename_prefix + '_1.glb', subfolder: '', type: 'output' }] } } } }))
+    } else if (request.url.startsWith('/comfy/view?')) response.end(glb)
+    else { response.statusCode = 404; response.end('{}') }
+  } catch (error) { response.statusCode = 500; response.end(JSON.stringify({ error: error.message })) }
+})
+server.listen(0, '127.0.0.1'); await once(server, 'listening')
+const endpoint = `http://127.0.0.1:${server.address().port}`
+await writeFile(join(directory, 'studio.json'), JSON.stringify({
+  settings: { comfyUrl: 'http://127.0.0.1:1', comfyRoot: directory, comfyOutput: join(directory, 'no-shared-output'), blenderPath: join(directory, 'unused-blender.exe') },
+  characters: [], jobs: [], plans: [], batches: []
+}))
+const template = {
+  version: 1, prompt: { '1': { class_type: 'FixtureMesh', inputs: { image: '', filename_prefix: '' } } },
+  bindings: [{ parameter: 'image', node: '1', input: 'image' }, { parameter: 'prefix', node: '1', input: 'filename_prefix' }],
+  outputs: [{ kind: 'model', node: '1', field: '3d' }]
+}
+const templatePath = join(directory, 'mesh-workflow.json')
+await writeFile(templatePath, JSON.stringify(template))
+let app, client
+const errors = []
+const until = async (probe, message) => expect.poll(probe, { timeout: 20000, intervals: [100, 250], message }).toBeTruthy()
+const call = async (name, args = {}) => {
+  const result = await client.callTool({ name, arguments: args })
+  assert.ok(!result.isError, `${name}: ${JSON.stringify(result.content)}`)
+  return JSON.parse(result.content[0].text)
+}
+const ui = () => call('studio_get_ui')
+const state = () => call('studio_get_state')
+const locate = async (name, role) => {
+  let match
+  await until(async () => {
+    const matches = (await ui()).elements.filter(item => item.role === role && (name instanceof RegExp ? name.test(item.name) : item.name === name))
+    assert.ok(matches.length < 2, `Ambiguous ${role}: ${name}`)
+    match = matches[0]
+    return match && !match.disabled
+  }, `enabled ${role}: ${name}`)
+  return match.ref
+}
+const click = async (name, role = 'button') => call('studio_click', { ref: await locate(name, role) })
+const fill = async (name, value) => call('studio_set_value', { ref: await locate(name, 'textbox'), value })
+const select = async (name, value) => call('studio_select', { ref: await locate(name, 'combobox'), values: [value] })
+const save = async () => {
+  await click('Save provider selections')
+  await until(async () => (await ui()).text.includes('Provider selections saved.'), 'provider settings saved')
+}
+const configure = async (stage, provider, model = 'fixture-image') => {
+  await select('AI stage', stage)
+  await select('Execution provider', provider)
+  if (provider !== 'builtin') {
+    await fill('Provider endpoint no key in URL', endpoint)
+    await fill('Provider model / checkpoint ID', model)
+  }
+  await save()
+}
+try {
+  app = await electron.launch({ args: ['.', '--mcp'], env: { ...process.env, STUDIO_SKIP_SETUP_CHECKLIST: '1', STUDIO_DATA_DIR: directory }, timeout: 60000 })
+  const page = await app.firstWindow()
+  page.on('pageerror', error => errors.push(error.message))
+  await page.getByRole('heading', { name: 'Character lab' }).waitFor()
+  png = Buffer.from(await app.evaluate(({ nativeImage }) => {
+    const bitmap = Buffer.alloc(100 * 100 * 4)
+    for (let y = 15; y < 85; y++) for (let x = 35; x < 65; x++) {
+      const offset = (y * 100 + x) * 4
+      bitmap[offset + 1] = 180; bitmap[offset + 3] = 255
+    }
+    return nativeImage.createFromBitmap(bitmap, { width: 100, height: 100 }).toPNG().toString('base64')
+  }), 'base64')
+  await until(() => readFile(join(directory, 'mcp-connection.json')).then(() => true, () => false), 'MCP connection')
+  client = new Client({ name: 'provider-ui-smoke', version: '1.0.0' })
+  await client.connect(new StdioClientTransport({ command: process.execPath,
+    args: [resolve('scripts', 'mcp-client.mjs'), '--connection', join(directory, 'mcp-connection.json')] }))
+  await click('Designer', 'tab')
+  await click('Model & workflow providers')
+  await select('AI stage', 'global')
+  await select('Execution provider', 'remote-comfyui')
+  await fill('Provider endpoint no key in URL', endpoint + '/comfy')
+  await save()
+  assert.equal((await state()).ai.globalComfy.location, 'remote')
+  await select('AI stage', 'scene')
+  await select('Execution provider', 'builtin')
+  await select('Local image preset', 'sdxl')
+  await save()
+  assert.equal((await state()).designer.config.imageProfile, 'sdxl')
+  assert.equal((await state()).designer.config.checkpoint, '')
+  await configure('scene', 'remote-api')
+  assert.equal((await state()).ai.stages.scene.location, 'remote')
+  await click('Close provider settings')
+  await fill('Character title optional', 'Provider UI fixture')
+  await fill('Character & scenario', 'An original geometric robot in a garden')
+  await fill('Art style', 'Colorful game art')
+  const behind = await locate('Art style', 'textbox')
+  await click('Create character concept')
+  await until(async () => (await ui()).modal === 'Approve remote AI execution', 'remote approval')
+  assert.equal(jobs.length, 0, 'Remote opt-in must precede all prompt and asset transmission.')
+  const blocked = await client.callTool({ name: 'studio_set_value', arguments: { ref: behind, value: 'must not change' } })
+  assert.equal(blocked.isError, true)
+  await click('Keep data local / cancel')
+  await until(async () => (await state()).designer.designs[0].status === 'failed', 'unapproved generation failure')
+  assert.equal(jobs.length, 0)
+  await click('Generate scene')
+  await click('Approve this remote stage')
+  await until(async () => !!(await state()).designer.designs[0].sceneUrl, 'gateway scene output')
+  assert.equal(jobs[0].stage, 'scene')
+  const designId = (await state()).designer.designs[0].id
+  await click('Model & workflow providers')
+  await configure('tpose', 'remote-api')
+  await configure('cutout', 'local-api')
+  await click('Close provider settings')
+  await click('Use scene & generate T-pose')
+  await click('Approve this remote stage')
+  await until(async () => (await state()).designer.designs.find(design => design.id === designId).tposeIsolated, 'independent cutout output')
+  assert.deepEqual(jobs.map(job => job.stage), ['scene', 'tpose', 'cutout'])
+  assert.deepEqual(Buffer.from(jobs[1].inputs[0].base64, 'base64'), png)
+  await click('Model & workflow providers')
+  await select('AI stage', 'mesh')
+  await select('Execution provider', 'remote-comfyui')
+  await fill('Provider endpoint no key in URL', endpoint + '/comfy')
+  await fill('Provider model / checkpoint ID', 'fixture-mesh')
+  await fill('Estimated free VRAM requirement (GiB)', '100')
+  await fill('Custom workflow JSON & parameter mappings', '{"version":1}')
+  await click('Save provider selections')
+  await until(async () => (await ui()).text.includes('Invalid input'), 'invalid workflow rejected visibly')
+  assert.equal((await state()).ai.stages.mesh, undefined)
+  await click('Import workflow JSON')
+  await fill('Absolute file path', templatePath)
+  await click('Use selected paths')
+  await until(async () => (await ui()).text.includes('Workflow imported.'), 'imported workflow mappings')
+  await save()
+  await click('Close provider settings')
+  await click('Use T-pose & generate 3D')
+  await click('Approve this remote stage')
+  await until(async () => !!(await state()).designer.designs.find(design => design.id === designId).modelUrl, 'ComfyUI HTTP output retrieval')
+  assert.equal(comfyJobs.size, 1)
+  assert.deepEqual(await readFile(join(directory, 'designs', designId, 'model.glb')), glb)
+  const completed = (await state()).designer.designs.find(design => design.id === designId)
+  assert.equal(completed.ai.length, 4)
+  assert.ok(completed.ai.every(item => item.configurationHash && item.taskId))
+
+  await click('Model & workflow providers')
+  await configure('texture', 'local-api', 'fixture-pbr')
+  await click('Close provider settings')
+  await click('Create PBR texture variation')
+  await until(async () => (await state()).designer.designs[0].modelTextured, 'validated PBR variation')
+  const textured = (await state()).designer.designs[0]
+  assert.notEqual(textured.id, designId)
+  assert.deepEqual(await readFile(join(directory, 'designs', textured.id, 'original-model.glb')), glb)
+  await click('Model & workflow providers')
+  await configure('rig', 'remote-api', 'fixture-rig')
+  await click('Close provider settings')
+  await click('Create rigged GLB variation')
+  await until(async () => (await ui()).modal === 'Approve remote AI execution', 'mesh upload approval')
+  assert.equal(jobs.length, 4)
+  assert.ok((await ui()).text.includes('Character mesh and embedded textures'))
+  await click('Approve this remote stage')
+  await until(async () => (await state()).designer.designs[0].modelRigged, 'validated skinned GLB variation')
+  const rigged = (await state()).designer.designs[0]
+  assert.ok(rigged.modelTextured)
+  assert.equal(rigged.ai.at(-1).stage, 'rig')
+  await click('Save rigged GLB')
+  const riggedExport = join(directory, 'exported-rig.glb')
+  await fill('Absolute file path', riggedExport)
+  await click('Save selected file')
+  await until(() => readFile(riggedExport).then(bytes => bytes.equals(modelFixture(true, true)), () => false), 'byte-preserving rigged mesh export')
+  assert.deepEqual((await state()).designer.designs.find(design => design.id === designId), completed)
+  pending = true
+  await click('Generate scene')
+  await click('Approve this remote stage')
+  await until(() => jobs.length === 6, 'pending gateway job')
+  await click('Cancel design')
+  await until(async () => (await state()).designer.designs[0].status === 'cancelled', 'gateway cancellation')
+  assert.equal(cancelled[0], jobs[5].id)
+  assert.deepEqual((await state()).designer.designs.find(design => design.id === designId), completed)
+
+  await click('Model & workflow providers')
+  await select('AI stage', 'motion')
+  await select('Execution provider', 'remote-comfyui')
+  await fill('Provider endpoint no key in URL', 'https://credentials.example')
+  await save()
+  const fakeKey = 'test-only-not-a-real-api-key'
+  await fill('API key / bearer token OS-encrypted', fakeKey)
+  assert.ok(!JSON.stringify(await ui()).includes(fakeKey), 'MCP inspection must redact password values.')
+  await click('Save encrypted credential')
+  await until(async () => (await ui()).text.includes('API credential encrypted'), 'OS credential encryption')
+  assert.ok(!(await readFile(join(directory, 'ai-credentials.json'), 'utf8')).includes(fakeKey))
+  assert.ok(!JSON.stringify(await state()).includes(fakeKey))
+  await fill('Provider endpoint no key in URL', 'https://different.example')
+  await save()
+  await until(async () => (await ui()).text.includes('No credential saved for this endpoint.'), 'credential endpoint isolation')
+  await fill('Provider endpoint no key in URL', 'https://credentials.example')
+  await save()
+  await until(async () => (await ui()).text.includes('An encrypted credential is saved'), 'original credential retained')
+  await click('Remove credential')
+  await until(async () => (await ui()).text.includes('Credential removed.'), 'credential removal')
+
+  await select('AI stage', 'scene')
+  await select('Execution provider', 'tripo')
+  await select('Tripo image model', 'midjourney')
+  await save()
+  assert.equal((await state()).ai.stages.scene.model, 'midjourney')
+  await select('Tripo image model', 'gemini_2.5_flash_image_preview')
+  await save()
+  await page.setViewportSize({ width: 1440, height: 1150 })
+  await call('studio_scroll', { ref: await locate('Model and workflow providers', 'dialog'), y: -10000 })
+  await mkdir(resolve('docs', 'screenshots'), { recursive: true })
+  const screenshot = await client.callTool({ name: 'studio_screenshot', arguments: {} })
+  assert.equal(screenshot.content[0].type, 'image')
+  await writeFile(resolve('docs', 'screenshots', 'ai-providers.png'), Buffer.from(screenshot.content[0].data, 'base64'))
+  await client.close(); client = undefined
+  await app.close(); app = undefined
+  const saved = JSON.parse(await readFile(join(directory, 'ai-providers.json'), 'utf8'))
+  assert.equal(saved.configuration.stages.scene.model, 'gemini_2.5_flash_image_preview')
+  assert.ok(saved.history.length >= 8)
+  assert.equal(Object.keys(JSON.parse(await readFile(join(directory, 'ai-credentials.json'), 'utf8'))).length, 0)
+  app = await electron.launch({ args: ['.', '--mcp'], env: { ...process.env, STUDIO_SKIP_SETUP_CHECKLIST: '1', STUDIO_DATA_DIR: directory }, timeout: 60000 })
+  const reopened = await app.firstWindow()
+  reopened.on('pageerror', error => errors.push(error.message))
+  await reopened.getByRole('heading', { name: 'Character lab' }).waitFor()
+  client = new Client({ name: 'provider-ui-restart', version: '1.0.0' })
+  await client.connect(new StdioClientTransport({ command: process.execPath,
+    args: [resolve('scripts', 'mcp-client.mjs'), '--connection', join(directory, 'mcp-connection.json')] }))
+  assert.deepEqual((await state()).ai, saved.configuration)
+  assert.deepEqual((await state()).designer.designs.find(design => design.id === rigged.id), rigged)
+  assert.deepEqual(errors, [])
+  console.log('Provider MCP smoke passed: global/native/stage selections, workflow import/invalid mappings, approval/rejection, mixed routing, real PNG/PBR/skinned GLB variations, encrypted credential redaction/isolation, cancellation and provenance after restart. Fixtures only; no cloud requests or learned inference.')
+} finally {
+  await client?.close()
+  await app?.close()
+  server.closeAllConnections(); await new Promise(resolve => server.close(resolve))
+  await rm(directory, { recursive: true, force: true })
+}
