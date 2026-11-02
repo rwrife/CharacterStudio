@@ -28,6 +28,12 @@ Local Windows ARM64 desktop app with **Designer** and **Animator** workspaces. D
 
 ## Screenshots
 
+### App identity and titlebar
+
+![Character Studio titlebar with a large green anime avatar icon beside the app name, Designer and Animator tabs, and setup and backend controls](docs/screenshots/app-titlebar.png)
+
+The green avatar artwork is used for the desktop window and packaged Windows application. The in-app titlebar displays it at 48px so the character silhouette stays recognizable.
+
 ### Setup checklist on first launch
 
 ![Setup checklist showing detected core tools, an Install Blender action, Animator text-encoder options and Designer model rows](docs/screenshots/setup-checklist.png)
