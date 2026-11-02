@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: studio:; connect-src 'self' blob: studio: ws://127.0.0.1:*; font-src 'self'; worker-src blob:; object-src 'none'; base-uri 'none'; form-action 'none'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' studio: 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: studio:; media-src 'self' blob: studio: mediastream:; connect-src 'self' blob: studio: ws://127.0.0.1:*; font-src 'self'; worker-src blob:; object-src 'none'; base-uri 'none'; form-action 'none'" />
     <link rel="icon" type="image/png" href="./icon.png" />
     <title>Character Studio</title>
   </head>

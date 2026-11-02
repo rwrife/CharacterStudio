@@ -1,0 +1,96 @@
+.mocap-settings>*{flex-shrink:0}
+.mocap-settings select{font-size:11px;padding:9px 8px;width:100%}
+.mocap-settings .fine-print{line-height:1.7;margin-top:8px;overflow-wrap:anywhere}
+.mocap-settings .secondary.full,.mocap-settings .text-button.full{margin-top:10px;width:100%}
+.mocap-settings .text-button.full{justify-content:center}
+.mocap-settings .field-label{display:flex;justify-content:space-between;margin-top:14px}
+.mocap-settings input[type=range]{width:100%;accent-color:var(--lime)}
+.mocap-settings .checkbox{margin:9px 0 0}
+.mocap-settings .ai-stage-routes{margin-top:14px}
+.mocap-card{display:flex;align-items:center;gap:10px;margin-bottom:12px;padding:11px;border:1px solid var(--line);border-radius:8px;background:var(--surface-raised)}
+.mocap-card-icon{display:grid;place-items:center;width:36px;height:36px;border-radius:7px;background:var(--surface-app);color:var(--lime);flex:none}
+.mocap-card-text{flex:1;min-width:0}
+.mocap-card-text strong{display:block;font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mocap-card-text small{display:block;font-size:10px;color:var(--text-secondary);margin-top:3px}
+.mocap-card .text-button{color:var(--lime);white-space:nowrap}
+.mocap-clip-fields{display:flex;align-items:flex-end;gap:8px;margin-top:6px}
+.mocap-clip-fields label{flex:1;display:flex;flex-direction:column;gap:4px}
+.mocap-clip-fields small{font-size:9.5px;color:var(--text-secondary);letter-spacing:.4px;text-transform:uppercase}
+.mocap-clip-fields input{width:100%;font-variant-numeric:tabular-nums;font-size:12px;padding:8px}
+.mocap-clip-dash{color:var(--text-secondary);padding-bottom:8px}
+.mocap-options>:not(summary){margin-top:10px}
+.mocap-models{display:flex;flex-direction:column;gap:8px}
+.mocap-model{border:1px solid var(--line);border-radius:7px;padding:10px;background:var(--surface-raised);display:flex;flex-direction:column;gap:8px}
+.mocap-model.selected{border-color:var(--lime)}
+.mocap-model label{display:flex;gap:9px;align-items:flex-start;cursor:pointer}
+.mocap-model input{width:auto;margin-top:2px}
+.mocap-model strong{display:block;font-size:12px;font-weight:500;color:var(--text-primary)}
+.mocap-model small{display:block;font-size:9.5px;line-height:1.6;color:var(--text-secondary);margin-top:3px}
+.mocap-model .secondary{align-self:flex-start;padding:6px 10px;font-size:10px}
+.mocap-checklist{margin:12px 0 0 16px;padding:0;display:flex;flex-direction:column;gap:6px;font-size:11px;line-height:1.6;color:var(--text-secondary)}
+.mocap-settings .output-section{margin-top:18px}
+.mocap-settings .asset-list.mocap-list{margin-top:10px}
+.mocap-take{display:flex;align-items:center;gap:4px;border-radius:7px}
+.mocap-take .asset{flex:1;min-width:0;margin-bottom:4px}
+.mocap-take.active .asset{border-color:var(--lime);background:var(--surface-raised)}
+.mocap-take .asset>span:last-child{min-width:0}
+.mocap-take .asset small{display:block;font-size:9.5px;color:var(--text-secondary);margin-top:2px}
+.mocap-take .asset:disabled{opacity:.6}
+.mocap-take-confirm{display:flex;flex-direction:column;align-items:stretch;gap:3px}
+.mocap-take-confirm .secondary{padding:5px 8px;font-size:10px}
+.mocap-settings .local-note{margin-top:22px}
+.icon-button{display:inline-grid;place-items:center;width:30px;height:30px;padding:0;border-radius:6px;background:var(--surface-raised);border:1px solid var(--line);color:var(--text-primary);flex:none}
+.icon-button.lime{background:var(--lime);border-color:var(--lime);color:var(--surface-app)}
+.icon-button:disabled{opacity:.45}
+.muted{color:var(--text-secondary);font-weight:400;margin-left:4px}
+
+.mocap-main .scene-heading{display:flex;justify-content:space-between;align-items:flex-end;gap:12px}
+.mocap-panes{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;flex:1;min-height:360px}
+.mocap-pane{display:flex;flex-direction:column;min-width:0;min-height:0}
+.mocap-pane[hidden]{display:none}
+.mocap-pane-title{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px;font-size:11.5px;color:var(--text-primary)}
+.mocap-pane-title small{font-size:10px;color:var(--text-secondary)}
+.mocap-video-frame,.mocap-preview-frame{position:relative;flex:1;min-height:300px;border:1px solid var(--line);border-radius:9px;background:var(--surface-app);overflow:hidden}
+.mocap-video-frame>video,.mocap-video-frame>canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
+.mocap-video-frame>canvas{pointer-events:none}
+.mocap-video-frame>video.mirrored{transform:scaleX(-1)}
+.mocap-preview-frame>.viewport{position:absolute;inset:0;min-height:0}
+.pose-skeleton{position:absolute;inset:0}
+.pose-skeleton canvas{display:block}
+.mocap-source-controls{display:flex;align-items:center;gap:8px;margin-top:8px}
+.mocap-source-controls input[type=range]{flex:1;min-width:60px;accent-color:var(--lime);padding:0}
+.mocap-time{font-size:10.5px;color:var(--text-secondary);font-variant-numeric:tabular-nums;white-space:nowrap}
+.mocap-time.strong{font-size:12px;color:var(--text-primary)}
+.mocap-time small{color:var(--text-secondary);font-size:10.5px}
+.mocap-empty{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:var(--text-secondary);text-align:center;padding:20px}
+.mocap-empty p{font-size:13px;color:var(--text-primary)}
+.mocap-empty small{font-size:10px}
+.mocap-countdown{position:absolute;inset:0;display:grid;place-items:center;font-size:96px;font-weight:300;color:var(--text-primary);background:#11141480}
+.mocap-recording{position:absolute;top:14px;left:14px;display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:5px;background:#2a1715d9;color:#f2c2b5;font-size:10px;letter-spacing:1px}
+.mocap-recording>span,.rec-dot{width:9px;height:9px;border-radius:50%;background:#e2553f;display:inline-block}
+.mocap-recording>span{animation:mocap-pulse 1s ease-in-out infinite}
+.mocap-camera-controls{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px}
+.mocap-camera-controls .primary{min-height:36px}
+.mocap-camera-controls .fine-print{flex-basis:100%}
+
+.mocap-timeline{margin-top:14px;padding:12px 14px 10px;border:1px solid var(--line);border-radius:9px;background:var(--surface-panel)}
+.mocap-timeline-bar{display:flex;align-items:center;gap:10px}
+.mocap-clip-length{font-size:10.5px;color:var(--lime);padding:3px 8px;border:1px solid var(--line);border-radius:20px;background:var(--surface-raised);white-space:nowrap}
+.mocap-timeline-spacer{flex:1}
+.mocap-volume{display:flex;align-items:center;gap:6px;color:var(--text-secondary)}
+.mocap-volume input{width:80px;accent-color:var(--lime);padding:0}
+.mocap-track{position:relative;height:62px;margin-top:10px;border-radius:6px;overflow:visible;cursor:pointer;touch-action:none;outline-offset:3px}
+.mocap-track.disabled{cursor:default;opacity:.7}
+.mocap-filmstrip{position:absolute;inset:0;display:flex;border-radius:6px;overflow:hidden;background:var(--surface-app)}
+.mocap-filmstrip>*{flex:1;min-width:0;height:100%;object-fit:cover;border-right:1px solid var(--surface-app)}
+.mocap-filmstrip>span{background:var(--surface-raised)}
+.mocap-outside{position:absolute;top:0;bottom:0;background:#0b0f0dcc;pointer-events:none}
+.mocap-range{position:absolute;top:0;bottom:0;border-top:2px solid var(--lime);border-bottom:2px solid var(--lime);pointer-events:none}
+.mocap-playhead{position:absolute;top:-4px;bottom:-4px;width:2px;margin-left:-1px;background:#fff;box-shadow:0 0 0 1px #0007;pointer-events:none}
+.mocap-handle{position:absolute;top:-2px;bottom:-2px;width:12px;margin-left:-6px;border-radius:4px;background:var(--lime);cursor:ew-resize;touch-action:none;display:flex;justify-content:center}
+.mocap-handle:focus-visible{outline:2px solid #fff}
+.mocap-handle[aria-disabled=true]{cursor:default;opacity:.6}
+.mocap-handle>span{position:absolute;top:-18px;font-size:9px;font-weight:600;color:var(--lime);letter-spacing:.5px;text-transform:uppercase;pointer-events:none}
+.mocap-ruler{display:flex;justify-content:space-between;margin-top:5px;font-size:9px;color:var(--text-secondary);font-variant-numeric:tabular-nums}
+@keyframes mocap-pulse{50%{opacity:.25}}
+@media(max-width:1280px){.mocap-panes{grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}}

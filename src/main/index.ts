@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, net, protocol, safeStorage, shell } from 'electron'
 import { copyFile, readFile, writeFile, stat } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { createReadStream, existsSync } from 'node:fs'
+import { Readable } from 'node:stream'
 import { randomUUID } from 'node:crypto'
 import { join, extname } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -21,13 +22,37 @@ import { AiCredentials } from './ai-credentials'
 import { RemoteConsent } from './ai-consent'
 import { resolveAiCredentialRoute, workflowSchema } from '../shared/ai'
 
-protocol.registerSchemesAsPrivileged([{ scheme: 'studio', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }])
+protocol.registerSchemesAsPrivileged([{ scheme: 'studio', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } }])
 let window: BrowserWindow
 let studio: Studio
 let quitting = false
 const mcpRequested = process.argv.includes('--mcp')
 let mcp: DesktopMcpControl | undefined
 let files: FileDialogs | undefined
+const MOCAP_RUNTIME = new Map([
+  ['vision_wasm_internal.js', 'text/javascript'], ['vision_wasm_internal.wasm', 'application/wasm'],
+  ['vision_wasm_nosimd_internal.js', 'text/javascript'], ['vision_wasm_nosimd_internal.wasm', 'application/wasm']
+])
+const VIDEO_TYPES: Record<string, string> = { '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.mov': 'video/quicktime', '.webm': 'video/webm' }
+
+/** Serve a local video with byte ranges so the capture pass can seek frame by frame. */
+async function serveVideo(file: string, range: string | null): Promise<Response> {
+  const size = (await stat(file)).size
+  const headers: Record<string, string> = { 'Content-Type': VIDEO_TYPES[extname(file).toLowerCase()] ?? 'application/octet-stream', 'Accept-Ranges': 'bytes', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' }
+  const match = range ? /^bytes=(\d*)-(\d*)$/.exec(range.trim()) : null
+  if (range && !match) return new Response(null, { status: 416, headers: { ...headers, 'Content-Range': `bytes */${size}` } })
+  let start = 0, end = size - 1
+  if (match) {
+    if (match[1]) { start = Number(match[1]); if (match[2]) end = Math.min(Number(match[2]), size - 1) }
+    else if (match[2]) start = Math.max(0, size - Number(match[2]))
+    if (!(start <= end && start < size)) return new Response(null, { status: 416, headers: { ...headers, 'Content-Range': `bytes */${size}` } })
+  }
+  const body = Readable.toWeb(createReadStream(file, { start, end })) as ReadableStream
+  return new Response(body, {
+    status: match ? 206 : 200,
+    headers: { ...headers, 'Content-Length': String(end - start + 1), ...(match ? { 'Content-Range': `bytes ${start}-${end}/${size}` } : {}) }
+  })
+}
 app.setName('Character Studio')
 // Keep the established data directory so the product rename does not hide existing work.
 app.setPath('userData', process.env.STUDIO_DATA_DIR ?? join(app.getPath('appData'), 'KimodoStudio'))
@@ -63,8 +88,16 @@ if (ownsWorkspace) app.whenReady().then(async () => {
   })
   protocol.handle('studio', async request => {
     const url = new URL(request.url)
-    const file = url.hostname === 'asset' && !url.search ? studio.assets.get(url.pathname.slice(1)) : undefined
+    if (url.hostname === 'mocap-runtime' && !url.search) {
+      const name = url.pathname.slice(1), type = MOCAP_RUNTIME.get(name)
+      if (!type) return new Response('Unknown runtime file', { status: 404 })
+      const body = await readFile(join(app.getAppPath(), 'node_modules', '@mediapipe', 'tasks-vision', 'wasm', name))
+      return new Response(body, { headers: { 'Content-Type': type, 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' } })
+    }
+    const key = url.pathname.slice(1)
+    const file = url.hostname === 'asset' && !url.search ? studio.assets.get(key) : undefined
     if (!file) return new Response('Unknown local asset', { status: 404 })
+    if (key.endsWith('-video')) return serveVideo(file, request.headers.get('range'))
     return net.fetch(pathToFileURL(file).toString())
   })
   window = new BrowserWindow({
@@ -77,7 +110,11 @@ if (ownsWorkspace) app.whenReady().then(async () => {
   window.webContents.on('will-navigate', (event, url) => {
     if (url !== window.webContents.getURL()) event.preventDefault()
   })
-  window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
+  // Only the trusted app window may open a camera for Mocap recording; microphones and all other permissions stay denied.
+  const trustedCamera = (contents: Electron.WebContents | null, permission: string, details: { mediaTypes?: string[]; requestingUrl?: string; securityOrigin?: string }) =>
+    permission === 'media' && contents === window.webContents && !!details.mediaTypes?.length && details.mediaTypes.every(type => type === 'video')
+  window.webContents.session.setPermissionRequestHandler((contents, permission, callback, details) =>
+    callback(trustedCamera(contents, permission, details as { mediaTypes?: string[] })))
   const fileDialogs = new FileDialogs(window, false)
   const remoteConsent = new RemoteConsent(request => {
     if (!window.isDestroyed()) window.webContents.send('ai:consent', request)
@@ -238,6 +275,26 @@ if (ownsWorkspace) app.whenReady().then(async () => {
     if (result.canceled || !result.filePath) return null
     await copyFile(source, result.filePath)
     return result.filePath
+  })
+  handle('mocap:import-character', async () => {
+    const result = await fileDialogs.showOpenDialog(window, { title: 'Import T-pose character for Mocap', properties: ['openFile'], filters: [{ name: 'T-pose character', extensions: ['fbx', 'glb'] }] })
+    return result.canceled ? null : studio.importCharacter(result.filePaths[0])
+  })
+  handle('mocap:import-video', async () => {
+    const result = await fileDialogs.showOpenDialog(window, { title: 'Import reference video for Mocap', properties: ['openFile'], filters: [{ name: 'Reference video', extensions: ['mp4', 'webm', 'mov', 'm4v'] }] })
+    return result.canceled ? null : studio.mocap.importVideo(result.filePaths[0])
+  })
+  handle('mocap:save-recording', (data: unknown) => studio.mocap.saveRecording(data as ArrayBuffer | ArrayBufferView))
+  handle('mocap:save-capture', (takeId: unknown, capture: unknown) => studio.mocap.saveCapture(z.uuid().parse(takeId), capture))
+  handle('mocap:capture', (request: unknown) => studio.mocapCapture(request))
+  handle('mocap:read-capture', (takeId: unknown) => studio.mocap.readCapture(z.uuid().parse(takeId)))
+  handle('mocap:delete-take', (takeId: unknown) => studio.mocap.deleteTake(z.uuid().parse(takeId)))
+  handle('mocap:download-model', (model: unknown) => studio.mocap.downloadModel(z.enum(['lite', 'full']).parse(model)))
+  handle('mocap:cancel-download', () => studio.mocap.cancelDownload())
+  handle('mocap:model', (model: unknown) => studio.mocap.modelBytes(z.enum(['lite', 'full']).parse(model)))
+  handle('mocap:export', (request: unknown) => {
+    const value = z.object({ takeId: z.uuid(), characterId: z.uuid(), options: z.unknown() }).strict().parse(request)
+    return studio.mocapExport(value as import('../shared/mocap').MocapExportRequest)
   })
   handle('studio:access-page', () => shell.openExternal('https://huggingface.co/meta-llama/Meta-Llama-3-8B-Instruct'))
   handle('studio:token-settings', () => shell.openExternal('https://huggingface.co/settings/tokens'))

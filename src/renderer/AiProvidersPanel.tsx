@@ -240,10 +240,10 @@ export function AiProvidersPanel({ snapshot, initialStage = 'scene', initialFiel
       <option value="global">Global ComfyUI connection</option>
       {Object.entries(aiStages).map(([value, label]) => <option key={value} value={value} disabled={future.has(aiStageSchema.parse(value))}>{label}</option>)}
     </select>
-    <p className="fine-print">Global ComfyUI applies to scene, T-pose, cutout, mesh and motion unless overridden. Naming, post-texturing and remote rigging are independent. Segmentation, landmark AI and cloth AI are not yet implemented.</p>
+    <p className="fine-print">Global ComfyUI applies to scene, T-pose, cutout, mesh and motion unless overridden. Naming, post-texturing, remote rigging and Mocap video pose capture are independent. Segmentation, landmark AI and cloth AI are not yet implemented.</p>
     <label className="field-label" htmlFor="ai-provider">Execution provider</label>
     <select id="ai-provider" disabled={disabled} value={selected} onChange={event => choice(event.target.value)}>
-      {stage !== 'global' && <option value="inherit">Use default / global ComfyUI connection</option>}
+      {stage !== 'global' && <option value="inherit">{stage === 'capture' ? 'Use default (built-in MediaPipe in Mocap)' : 'Use default / global ComfyUI connection'}</option>}
       {Object.entries(choices).filter(([key, item]) => stage !== 'global' || ['builtin', 'local-comfyui', 'remote-comfyui'].includes(key))
         .filter(([, item]) => item.provider !== 'tripo' || ['scene', 'tpose', 'mesh', 'texture', 'rig'].includes(stage))
         .map(([value, item]) => <option key={value} value={value}>{stage === 'global' && value === 'builtin' ? 'No global override (local defaults)' : item.label}</option>)}
@@ -323,7 +323,12 @@ export function AiProvidersPanel({ snapshot, initialStage = 'scene', initialFiel
         })}>Remove credential</button>
       </div></>}
     </>}
-    {route.provider === 'builtin' && native && <>
+    {route.provider === 'builtin' && stage === 'capture' && <>
+      <h3>Built-in local capture</h3>
+      <p className="fine-print">MediaPipe Pose Landmarker runs on the CPU inside the visible Mocap window; no GPU, ComfyUI or Python is required. Choose Pose Lite (~5.5 MB) or Pose Full (~9 MB) under Capture options in Mocap. Models are downloaded once from Google and verified by SHA-256.</p>
+    </>}
+    {route.provider !== 'builtin' && stage === 'capture' && <p className="fine-print">Routed capture uploads the entire reference video, then requires a mapped <code>json</code> output with 33 MediaPipe-compatible world landmarks per frame for the requested clip. Retargeting and FBX export stay in local Blender.</p>}
+    {route.provider === 'builtin' && native && stage !== 'capture' && <>
       <button className="text-button" aria-label="Refresh local models" disabled={disabled || checkingModels} onClick={() => void refreshModels()}>
         <RefreshCw size={14} className={checkingModels ? 'spin' : ''} /> Refresh installed models
       </button>
@@ -360,7 +365,7 @@ export function AiProvidersPanel({ snapshot, initialStage = 'scene', initialFiel
 export function AiRouteBadge({ snapshot, stage, onClick }: { snapshot: Snapshot; stage: AiStage; onClick?: () => void }) {
   const route = resolveAiRoute(snapshot.ai, stage)
   const native = snapshot.designer?.config
-  const model = route.provider !== 'builtin' ? '' : stage === 'motion' ? snapshot.settings.textEncoder === 'lfm' ? 'Kimodo / LFM bridge' : 'Kimodo / Llama + LLM2Vec' :
+  const model = route.provider !== 'builtin' ? '' : stage === 'motion' ? snapshot.settings.textEncoder === 'lfm' ? 'Kimodo / LFM bridge' : 'Kimodo / Llama + LLM2Vec' : stage === 'capture' ? 'MediaPipe Pose' :
     !native ? '' : stage === 'scene' ? native.checkpoint || imageProfiles[native.imageProfile].label :
     stage === 'tpose' ? tposeEditProfile.label : stage === 'cutout' ? 'BiRefNet' :
     stage === 'mesh' ? meshProfiles[native.meshProfile].label : stage === 'naming' ? native.titleModel : ''

@@ -441,6 +441,126 @@ def rig_character(req):
     emit("rigging", f"Skin validated: {report['weightedVertices']:,} weighted vertices", 100)
 
 
+def finish_animation(rig, report, req, frames, fps, action_name, notes):
+    action = rig.animation_data.action
+    action.name = action_name
+    # Blender 4.5 uses layered actions.
+    for layer in action.layers:
+        for strip in layer.strips:
+            for slot in action.slots:
+                bag = strip.channelbag(slot)
+                if bag:
+                    for curve in bag.fcurves:
+                        for key in curve.keyframe_points:
+                            key.interpolation = "LINEAR"
+    samples = {}
+    sample_frames = sorted(set([1, max(1, frames // 3), max(1, frames * 2 // 3), frames]))
+    for frame in sample_frames:
+        bpy.context.scene.frame_set(frame)
+        deps = bpy.context.evaluated_depsgraph_get()
+        samples[frame] = []
+        for obj in meshes():
+            evaluated = obj.evaluated_get(deps)
+            mesh = evaluated.to_mesh()
+            stride = max(1, len(mesh.vertices) // 1000)
+            samples[frame].extend([tuple(evaluated.matrix_world @ mesh.vertices[i].co) for i in range(0, len(mesh.vertices), stride)])
+            evaluated.to_mesh_clear()
+    first = samples[sample_frames[0]]
+    displacement = max((Vector(a) - Vector(b)).length for frame in sample_frames[1:] for a, b in zip(first, samples[frame]))
+    if not math.isfinite(displacement) or (displacement < 0.00001 and not req.get("allowStatic", False)):
+        raise ValueError("Retargeted mesh did not move across sampled frames. Refusing an animated-character success result.")
+    out = Path(req["output"])
+    prefix = req.get("exportPrefix", "animated")
+    if prefix not in ("animated", "clip", "transition"):
+        raise ValueError("Invalid character export prefix.")
+    out.mkdir(parents=True, exist_ok=True)
+    bpy.context.scene.frame_set(1)
+    emit("retargeting", "Exporting skinned animated GLB and FBX", 82)
+    bpy.ops.wm.save_as_mainfile(filepath=str(out / f"{prefix}.blend"))
+    export_glb(out / f"{prefix}.glb", True)
+    bpy.ops.export_scene.fbx(
+        filepath=str(out / f"{prefix}.fbx"), use_selection=False, object_types={"ARMATURE", "MESH"},
+        add_leaf_bones=False, bake_anim=True, bake_anim_use_all_actions=False, bake_anim_use_nla_strips=False,
+        bake_anim_simplify_factor=0.0, path_mode="COPY", embed_textures=True, axis_forward="-Z", axis_up="Y",
+    )
+    report.update({
+        "frames": frames, "fps": fps, "duration": (frames - 1) / fps,
+        "sampledMeshDisplacement": displacement,
+        "staticHold": displacement < 0.00001,
+        "warnings": json.loads(rig.get("studio_skinning_warnings", "[]")) + list(notes),
+    })
+    write_json(out / ("animation-report.json" if prefix == "animated" else f"{prefix}-report.json"), report)
+    emit("retargeting", "Animated character exported and mesh deformation verified", 100)
+
+
+def mocap_character(req):
+    bpy.ops.wm.open_mainfile(filepath=req["input"])
+    rig = bpy.data.objects.get("StudioHumanoid")
+    if rig is None or rig.type != "ARMATURE":
+        raise ValueError("Validated StudioHumanoid rig is missing. Build the skin and rig again.")
+    report = validate_skin(rig, meshes())
+    motion = json.loads(Path(req["motion"]).read_text(encoding="utf-8"))
+    if motion.get("version") != 1:
+        raise ValueError("Unsupported video mocap motion version.")
+    names = {name: i for i, name in enumerate(motion["bones"])}
+    animated = [entry for entry in BONES if entry[0] in names]
+    missing = {"Hips", "Chest", "LeftArm", "RightArm", "LeftLeg", "RightLeg"} - names.keys()
+    if missing:
+        raise ValueError("Video mocap motion is missing bones: " + ", ".join(sorted(missing)))
+    rotations = motion["rotations"]
+    hips = motion["hips"]
+    frames = len(rotations)
+    if frames < 2 or frames != motion["frames"] or len(hips) != frames:
+        raise ValueError("Video mocap motion must contain at least two complete frames.")
+    fps = float(motion["fps"])
+    if not math.isfinite(fps) or fps <= 0 or fps > 120:
+        raise ValueError("Video mocap frame rate is invalid.")
+    bpy.context.scene.render.fps = round(fps)
+    bpy.context.scene.render.fps_base = round(fps) / fps
+    bpy.context.scene.frame_start = 1
+    bpy.context.scene.frame_end = frames
+    rest = {name: rig.data.bones[name].matrix_local.to_quaternion() for name, _, _ in BONES}
+    root_rest = rig.data.bones["Hips"].head_local.copy()
+    rig.animation_data_clear()
+    previous = {}
+    emit("retargeting", f"Baking {frames} captured frames onto skinned character", 12)
+    for frame in range(frames):
+        row = rotations[frame]
+        if len(row) != len(motion["bones"]):
+            raise ValueError(f"Video mocap frame {frame + 1} is incomplete.")
+        desired = {}
+        for name, _, parent in BONES:
+            if name in names:
+                w, x, y, z = (float(v) for v in row[names[name]])
+                world = (C @ Quaternion((w, x, y, z)).normalized().to_matrix() @ C.inverted()).to_quaternion()
+                desired[name] = world @ rest[name]
+            else:
+                desired[name] = desired[parent] @ rest[parent].inverted() @ rest[name] if parent else rest[name]
+        for name, _, parent in animated:
+            if parent:
+                local_rest = rest[parent].inverted() @ rest[name]
+                q = local_rest.inverted() @ desired[parent].inverted() @ desired[name]
+            else:
+                q = rest[name].inverted() @ desired[name]
+            if name in previous and q.dot(previous[name]) < 0:
+                q.negate()
+            previous[name] = q.copy()
+            pb = rig.pose.bones[name]
+            pb.rotation_mode = "QUATERNION"
+            pb.rotation_quaternion = q
+            pb.keyframe_insert(data_path="rotation_quaternion", frame=frame + 1, group=name)
+        offset = C @ Vector([float(v) for v in hips[frame]])
+        rig.pose.bones["Hips"].location = rest["Hips"].inverted() @ offset
+        rig.pose.bones["Hips"].keyframe_insert(data_path="location", frame=frame + 1, group="Hips")
+        if frame % 30 == 0:
+            emit("retargeting", f"Baking frame {frame + 1}/{frames}", 15 + 55 * frame / frames)
+    if not all(math.isfinite(v) for pb in rig.pose.bones for v in pb.rotation_quaternion):
+        raise ValueError("Video mocap produced invalid bone rotations.")
+    finish_animation(rig, report, req, frames, fps, "Video mocap", list(motion.get("warnings", [])) + [
+        "Captured from monocular video: depth, contacts and occluded limbs are estimated.",
+    ])
+
+
 def animate_character(req):
     bpy.ops.wm.open_mainfile(filepath=req["input"])
     rig = bpy.data.objects.get("StudioHumanoid")
@@ -507,61 +627,16 @@ def animate_character(req):
         rig.pose.bones["Hips"].keyframe_insert(data_path="location", frame=frame + 1, group="Hips")
         if frame % 20 == 0:
             emit("retargeting", f"Baking frame {frame + 1}/{frames}", 15 + 55 * frame / frames)
-    action = rig.animation_data.action
-    action.name = "Kimodo character motion"
-    # Blender 4.5 uses layered actions.
-    for layer in action.layers:
-        for strip in layer.strips:
-            for slot in action.slots:
-                bag = strip.channelbag(slot)
-                if bag:
-                    for curve in bag.fcurves:
-                        for key in curve.keyframe_points:
-                            key.interpolation = "LINEAR"
-    samples = {}
-    sample_frames = sorted(set([1, max(1, frames // 3), max(1, frames * 2 // 3), frames]))
-    for frame in sample_frames:
-        bpy.context.scene.frame_set(frame)
-        deps = bpy.context.evaluated_depsgraph_get()
-        samples[frame] = []
-        for obj in meshes():
-            evaluated = obj.evaluated_get(deps)
-            mesh = evaluated.to_mesh()
-            stride = max(1, len(mesh.vertices) // 1000)
-            samples[frame].extend([tuple(evaluated.matrix_world @ mesh.vertices[i].co) for i in range(0, len(mesh.vertices), stride)])
-            evaluated.to_mesh_clear()
-    first = samples[sample_frames[0]]
-    displacement = max((Vector(a) - Vector(b)).length for frame in sample_frames[1:] for a, b in zip(first, samples[frame]))
-    if not math.isfinite(displacement) or (displacement < 0.00001 and not req.get("allowStatic", False)):
-        raise ValueError("Retargeted mesh did not move across sampled frames. Refusing an animated-character success result.")
-    out = Path(req["output"])
-    prefix = req.get("exportPrefix", "animated")
-    if prefix not in ("animated", "clip", "transition"):
-        raise ValueError("Invalid character export prefix.")
-    out.mkdir(parents=True, exist_ok=True)
-    bpy.context.scene.frame_set(1)
-    emit("retargeting", "Exporting skinned animated GLB and FBX", 82)
-    bpy.ops.wm.save_as_mainfile(filepath=str(out / f"{prefix}.blend"))
-    export_glb(out / f"{prefix}.glb", True)
-    bpy.ops.export_scene.fbx(
-        filepath=str(out / f"{prefix}.fbx"), use_selection=False, object_types={"ARMATURE", "MESH"},
-        add_leaf_bones=False, bake_anim=True, bake_anim_use_all_actions=False, bake_anim_use_nla_strips=False,
-        bake_anim_simplify_factor=0.0, path_mode="COPY", embed_textures=True, axis_forward="-Z", axis_up="Y",
-    )
-    report.update({
-        "frames": frames, "fps": fps, "duration": (frames - 1) / fps,
-        "sampledMeshDisplacement": displacement,
-        "staticHold": displacement < 0.00001,
-        "warnings": json.loads(rig.get("studio_skinning_warnings", "[]")) + ["Foot contact cleanup is not installed; foot sliding can require manual cleanup.", "Body rig only; finger/facial animation is not retargeted."],
-    })
-    write_json(out / ("animation-report.json" if prefix == "animated" else f"{prefix}-report.json"), report)
-    emit("retargeting", "Animated character exported and mesh deformation verified", 100)
+    finish_animation(rig, report, req, frames, fps, "Kimodo character motion", [
+        "Foot contact cleanup is not installed; foot sliding can require manual cleanup.",
+        "Body rig only; finger/facial animation is not retargeted.",
+    ])
 
 
 if __name__ == "__main__":
     try:
         request = json.loads(Path(sys.argv[sys.argv.index("--") + 1]).read_text(encoding="utf-8"))
-        {"import": import_character, "rig": rig_character, "animate": animate_character}[request["command"]](request)
+        {"import": import_character, "rig": rig_character, "animate": animate_character, "mocap": mocap_character}[request["command"]](request)
     except Exception as exc:
         emit("failed", str(exc), code="unweighted-skin" if isinstance(exc, UnweightedSkinError) else None)
         traceback.print_exc()
