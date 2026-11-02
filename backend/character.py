@@ -6,8 +6,10 @@ import traceback
 from statistics import median
 from pathlib import Path
 
+import bmesh
 import bpy
 from mathutils import Matrix, Quaternion, Vector
+from mathutils.kdtree import KDTree
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from skin_weights import repair_weights
@@ -185,6 +187,47 @@ def validate_skin(rig, objects):
     return {"vertices": total, "weightedVertices": total - unweighted, "deformingBones": len(influenced), "bones": len(rig.data.bones)}
 
 
+SEAM_WELD_DISTANCE = 1e-5
+
+
+def welded_heat_proxy(obj):
+    """Return a seam-welded copy and its original-to-copy vertex map, or None when nothing coincides."""
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    before = len(bm.verts)
+    bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=SEAM_WELD_DISTANCE)
+    if len(bm.verts) == before:
+        bm.free()
+        return None
+    mesh = bpy.data.meshes.new(obj.name + "StudioHeatProxy")
+    bm.to_mesh(mesh)
+    bm.free()
+    proxy = bpy.data.objects.new(mesh.name, mesh)
+    proxy.matrix_world = obj.matrix_world.copy()
+    bpy.context.collection.objects.link(proxy)
+    tree = KDTree(len(mesh.vertices))
+    for vertex in mesh.vertices:
+        tree.insert(vertex.co, vertex.index)
+    tree.balance()
+    mapping = []
+    for vertex in obj.data.vertices:
+        _, index, distance = tree.find(vertex.co)
+        if index is None or distance > SEAM_WELD_DISTANCE * 2:
+            raise ValueError(f"Could not map {obj.name} to its welded skinning copy. Repair the mesh before rigging.")
+        mapping.append(index)
+    return proxy, mapping, before - len(mesh.vertices)
+
+
+def copy_proxy_weights(proxy, obj, mapping):
+    names = {group.index: group.name for group in proxy.vertex_groups}
+    targets = {name: obj.vertex_groups.get(name) or obj.vertex_groups.new(name=name) for name in names.values()}
+    weights = [[(names[g.group], g.weight) for g in vertex.groups if g.group in names and g.weight > 1e-6]
+               for vertex in proxy.data.vertices]
+    for index, source in enumerate(mapping):
+        for name, weight in weights[source]:
+            targets[name].add([index], weight, "REPLACE")
+
+
 def repair_skin(rig, objects, fallback):
     connected, proximity = 0, 0
     bones = [(bone.name, tuple(rig.matrix_world @ bone.head_local), tuple(rig.matrix_world @ bone.tail_local))
@@ -237,20 +280,34 @@ def rig_character(req):
             bone.use_connect = (bone.head - bone.parent.tail).length < 1e-5
         bone.align_roll(Vector((0, -1, 0)))
     bpy.ops.object.mode_set(mode="OBJECT")
-    bpy.ops.object.select_all(action="DESELECT")
-    for obj in objects:
-        obj.select_set(True)
-    rig.select_set(True)
-    bpy.context.view_layer.objects.active = rig
     emit("rigging", "Solving Blender bone-heat skin weights (CPU)", 35)
     warnings = []
+    # glTF and generated meshes split vertices along UV seams; those open islands make bone heat fail,
+    # so solve on welded copies and map weights back without changing the character geometry.
+    proxies = {obj.name: welded for obj in objects if (welded := welded_heat_proxy(obj))}
+    seam_weld = {"meshes": len(proxies), "mergedVertices": sum(merged for _, _, merged in proxies.values())}
+    bpy.ops.object.select_all(action="DESELECT")
+    for obj in objects:
+        (proxies[obj.name][0] if obj.name in proxies else obj).select_set(True)
+    rig.select_set(True)
+    bpy.context.view_layer.objects.active = rig
     try:
-        bpy.ops.object.parent_set(type="ARMATURE_AUTO")
-    except RuntimeError as exc:
-        if "bone heat weighting: failed to find solution" not in str(exc).lower():
-            raise
-        warnings.append("Blender bone-heat weighting failed; missing-weight recovery was attempted.")
-        emit("rigging", warnings[-1], 45)
+        try:
+            bpy.ops.object.parent_set(type="ARMATURE_AUTO")
+        except RuntimeError as exc:
+            if "bone heat weighting: failed to find solution" not in str(exc).lower():
+                raise
+            warnings.append("Blender bone-heat weighting failed; missing-weight recovery was attempted.")
+            emit("rigging", warnings[-1], 45)
+        for obj in objects:
+            if obj.name in proxies:
+                proxy, mapping, _ = proxies[obj.name]
+                copy_proxy_weights(proxy, obj, mapping)
+    finally:
+        for proxy, _, _ in proxies.values():
+            mesh = proxy.data
+            bpy.data.objects.remove(proxy, do_unlink=True)
+            bpy.data.meshes.remove(mesh)
     for obj in objects:
         if obj.parent != rig:
             world = obj.matrix_world.copy()
@@ -275,6 +332,7 @@ def rig_character(req):
     report = validate_skin(rig, objects)
     report["skinning"] = skinning
     report["repair"] = repair
+    report["seamWeld"] = seam_weld
     report["warnings"] = warnings + [
         "Guided body rig: fingers, facial controls, and cloth simulation are not generated.",
         "Inspect joint placement and bending. Automatic weights may need artist cleanup.",

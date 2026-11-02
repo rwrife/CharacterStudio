@@ -5,9 +5,9 @@ import { basename, extname, isAbsolute, join, relative, sep } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { z } from 'zod'
 import type { Design, DesignerConfig, DesignerReadiness, DesignerSnapshot, DesignRequest, DesignStage, DesignImportRequest } from '../shared/designer'
-import { imageProfiles, meshProfiles, meshTextureProfile, tposeEditProfile } from '../shared/designer'
+import { imageProfiles, meshProfiles, meshTextureProfile, texturedMeshSettings, tposeEditProfile } from '../shared/designer'
 import type { Settings } from '../shared/types'
-import { api, cancelMotion } from './comfy'
+import { api, cancelMotion, comfyFailure } from './comfy'
 import { errorText } from './validation'
 import { imageWorkflow, isolationWorkflow, meshWorkflow, tposeWorkflow, type Workflow } from './design-workflows'
 import { validateDesignGlb } from './export-validation'
@@ -30,7 +30,10 @@ export const designConfigSchema = z.object({
   meshTextureModel: z.string().max(1024).default(meshTextureProfile.model),
   meshVision: z.string().max(1024).default(meshTextureProfile.vision),
   meshShapeVae: z.string().max(1024).default(meshTextureProfile.shapeVae),
-  meshTextureVae: z.string().max(1024).default(meshTextureProfile.textureVae)
+  meshTextureVae: z.string().max(1024).default(meshTextureProfile.textureVae),
+  meshShapeDetail: z.union([z.literal(512), z.literal(1024), z.literal(1536)]).optional(),
+  meshTextureSize: z.union([z.literal(1024), z.literal(2048), z.literal(4096)]).optional(),
+  meshFaceCount: z.number().int().min(10000).max(500000).optional()
 }).strict().refine(config => !!config.ipadapter === !!config.clipVision, 'Select both the identity adapter and its compatible CLIP Vision weights, or leave both empty.')
 export const designRequestSchema = z.object({
   title: z.string().trim().max(100), description: z.string().trim().min(3).max(2000),
@@ -85,7 +88,7 @@ export async function runDesignWorkflow(base: string, workflow: Workflow, node: 
     const item = history[id]
     if (item?.status.status_str === 'error') {
       const error = item.status.messages.find(([type]) => ['execution_error', 'execution_interrupted'].includes(type))
-      throw new Error(error ? `${error[1].node_type ?? 'ComfyUI'}: ${error[1].exception_message ?? 'Generation interrupted'}` : 'Local design generation failed. Inspect the ComfyUI log.')
+      throw new Error(comfyFailure(error?.[1], 'Local design generation failed. Inspect the ComfyUI log.'))
     }
     if (item?.status.completed) {
       const outputs = item.outputs[node]?.[field]
@@ -418,6 +421,9 @@ export class Designer {
         design.config.meshVision = current.meshVision
         design.config.meshShapeVae = current.meshShapeVae
         design.config.meshTextureVae = current.meshTextureVae
+        design.config.meshShapeDetail = current.meshShapeDetail
+        design.config.meshTextureSize = current.meshTextureSize
+        design.config.meshFaceCount = current.meshFaceCount
       }
       const config = design.config
       const textured = stage === 'model' && config.meshProfile === 'textured'
@@ -471,7 +477,8 @@ export class Designer {
       }
       let reference = ''
       if (stage === 'model') {
-        const normalized = await this.validateImage(this.file(id, 'tpose'), true, imageProfiles[config.imageProfile].size)
+        // TRELLIS.2 conditions on a 1024 crop, so avoid first shrinking textured inputs to the scene size.
+        const normalized = await this.validateImage(this.file(id, 'tpose'), true, textured ? 1024 : imageProfiles[config.imageProfile].size)
         const input = join(this.root, 'designs', id, 'model-input.png')
         await writeFile(input, normalized)
         reference = await this.upload(input, randomUUID(), settings.comfyUrl, signal)
@@ -497,7 +504,7 @@ export class Designer {
       const source = await designOutputPath(settings.comfyOutput, saved, stage === 'model' ? '.glb' : '.png')
       let hasTextures: boolean | undefined
       if (stage !== 'model') await this.validateImage(source, stage === 'tpose')
-      else hasTextures = await validateDesignGlb(source, textured ? meshTextureProfile.textureSize : undefined)
+      else hasTextures = await validateDesignGlb(source, textured ? texturedMeshSettings(config).textureSize : undefined)
       signal.throwIfAborted()
       const target = stage === 'tpose' ? join(this.root, 'designs', id, 'tpose-cutout.png') : this.file(id, stage)
       await copyFile(source, target)
@@ -509,7 +516,7 @@ export class Designer {
       if (!cleanupOnly) design.sources[stage] = { kind: 'generated', input: inputStage }
       design.status = 'idle'
       design.message = stage === 'scene' ? 'Scene ready. Review character identity and art style before generating the T-pose.' : stage === 'tpose' ? 'Transparent T-pose cutout ready. Confirm only the character remains before 3D generation.' :
-        textured ? 'Textured GLB ready, with embedded 1K base-color and material maps. Unrigged; review all sides, then send to Animator to fit and skin.' :
+        textured ? `Textured GLB ready, with embedded ${texturedMeshSettings(config).textureSize / 1024}K base-color and material maps. Unrigged; review all sides, then send to Animator to fit and skin.` :
           '3D geometry ready. Untextured and unrigged; send to Animator to fit and skin.'
     } catch (error) {
       design.status = signal.aborted ? 'cancelled' : 'failed'

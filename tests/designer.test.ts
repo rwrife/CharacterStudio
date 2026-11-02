@@ -8,9 +8,10 @@ import { once } from 'node:events'
 import { crc32, deflateSync } from 'node:zlib'
 import { Studio } from '../src/main/studio'
 import { designConfigSchema, designRequestSchema, designImportSchema, checkDesignBudget, designOutputPath, runDesignWorkflow } from '../src/main/designer'
-import { imageWorkflow, meshWorkflow, tposeWorkflow } from '../src/main/design-workflows'
+import { imageWorkflow, meshWorkflow, tposeWorkflow, type Workflow } from '../src/main/design-workflows'
 import type { DesignerConfig, DesignRequest, DesignerReadiness } from '../src/shared/designer'
-import { meshTextureProfile, tposeEditPrompt } from '../src/shared/designer'
+import type { Character } from '../src/shared/types'
+import { handAnatomyPrompt, meshTextureProfile, specifiesHandAnatomy, tposeEditPrompt } from '../src/shared/designer'
 import { validateCutout } from '../src/main/image-validation'
 
 const config: DesignerConfig = { imageProfile: 'sd15', checkpoint: 'DreamShaper_8.safetensors', controlnet: 'control_sd15_openpose.safetensors', meshProfile: 'mini', meshCheckpoint: 'hunyuan3d-dit-v2-mini.safetensors', titleModel: '', backgroundModel: 'birefnet.safetensors', editModel: 'flux-2-klein-4b-fp8.safetensors', editTextEncoder: 'qwen_3_4b.safetensors', editVae: 'flux2-vae.safetensors' }
@@ -38,7 +39,7 @@ test('T-pose uses actual scene latents and an edit-only instruction, never the c
   assert.deepEqual(graph['11'].inputs.latent, ['6', 0])
   assert.deepEqual(graph['12'].inputs.positive, ['10', 0])
   assert.deepEqual(graph['12'].inputs.negative, ['11', 0])
-  assert.equal(graph['8'].inputs.text, tposeEditPrompt)
+  assert.equal(graph['8'].inputs.text, `${tposeEditPrompt} ${handAnatomyPrompt}`)
   assert.match(tposeEditPrompt, /^Put this character in a T-pose, remove the background, only show the character\./)
   assert.match(String(graph['8'].inputs.text), /Both hands flat with palms facing down, fingers straight and held together side by side/)
   assert.match(String(graph['8'].inputs.text), /thumbs resting naturally alongside/)
@@ -59,6 +60,19 @@ test('T-pose uses actual scene latents and an edit-only instruction, never the c
   assert.throws(() => tposeWorkflow({ ...config, editModel: '' }, request, 'pose', 'scene.png'), /editing requires/)
 })
 
+test('hidden five-finger default applies unless the brief specifies hand anatomy', () => {
+  const scene = imageWorkflow(config, request, 'concept')
+  assert.ok(String(scene['2'].inputs.text).endsWith(handAnatomyPrompt))
+  assert.match(String(scene['3'].inputs.text), /extra fingers, missing fingers, fused fingers, six fingers/)
+  const clawed = { ...request, description: 'A lizard warrior with three clawed fingers on each hand' }
+  assert.equal(specifiesHandAnatomy(clawed), true)
+  assert.equal(specifiesHandAnatomy({ description: 'Wears fingerless gloves and carries a sword', style: 'Hand-painted' }), false)
+  const custom = imageWorkflow(config, clawed, 'concept')
+  assert.equal(String(custom['2'].inputs.text).includes(handAnatomyPrompt), false)
+  assert.doesNotMatch(String(custom['3'].inputs.text), /fingers/)
+  assert.equal(tposeWorkflow(config, clawed, 'pose', 'scene.png')['8'].inputs.text, tposeEditPrompt)
+})
+
 test('identity adapter consumes the actual reference without reusing its scene latent', () => {
   const graph = imageWorkflow({ ...config, ipadapter: 'plus_sd15.safetensors', clipVision: 'vision.safetensors' }, request, 'scene', 'reference.png')
   assert.equal(graph['4'].class_type, 'EmptyLatentImage')
@@ -66,6 +80,8 @@ test('identity adapter consumes the actual reference without reusing its scene l
   assert.deepEqual(graph['5'].inputs.model, ['15', 0])
   assert.deepEqual(graph['15'].inputs.image, ['9', 0])
   assert.equal(graph['8'].inputs.image, 'reference.png')
+  assert.equal(graph['9'].inputs.crop, 'center')
+  assert.match(String(graph['3'].inputs.text), /crowd, extra people/)
   assert.equal(graph['15'].inputs.weight, 0.6)
 })
 
@@ -120,7 +136,31 @@ test('textured generation conditions on foreground and shares shape, UV mesh and
   assert.equal(graph['29'].inputs.sign_mode, 'solid')
   assert.equal(graph['29'].inputs.resolution, 512)
   assert.deepEqual(graph['9'].inputs.mesh, ['28', 0])
+  assert.equal(graph['30'], undefined)
+  assert.deepEqual(graph['20'].inputs.samples, ['19', 0])
   assert.ok(Object.values(graph).every(node => !/Api|Hunyuan|Download/.test(node.class_type)))
+})
+
+test('textured quality settings add a shape refinement pass and size the remesh, faces and atlas', () => {
+  const graph = meshWorkflow(designConfigSchema.parse({ ...config, meshProfile: 'textured', meshShapeDetail: 1536, meshTextureSize: 4096, meshFaceCount: 150000 }), request, 'textured', 'pose.png')
+  assert.equal(graph['30'].class_type, 'Trellis2UpsampleStage')
+  assert.deepEqual(graph['30'].inputs.shape_latent, ['19', 0])
+  assert.deepEqual(graph['30'].inputs.vae, ['4', 0])
+  assert.equal(graph['30'].inputs.target_resolution, 1536)
+  assert.deepEqual(graph['31'].inputs.latent_image, ['30', 2])
+  assert.equal(graph['31'].inputs.seed, request.seed)
+  assert.deepEqual(graph['20'].inputs.samples, ['31', 0])
+  assert.deepEqual(graph['21'].inputs, { positive: ['30', 0], negative: ['30', 1], shape_latent: ['31', 0] })
+  assert.equal(graph['29'].inputs.resolution, 768)
+  assert.equal(graph['24'].inputs.target_face_count, 150000)
+  assert.equal(graph['25'].inputs.resolution, 4096)
+  assert.equal(graph['26'].inputs.texture_size, 4096)
+  const high = meshWorkflow(designConfigSchema.parse({ ...config, meshProfile: 'textured', meshShapeDetail: 1024 }), request, 'textured', 'pose.png')
+  assert.equal(high['30'].inputs.target_resolution, 1024)
+  assert.equal(high['29'].inputs.resolution, 512)
+  assert.equal(high['26'].inputs.texture_size, 1024)
+  for (const invalid of [{ meshShapeDetail: 768 }, { meshTextureSize: 3000 }, { meshFaceCount: 5000 }, { meshFaceCount: 600000 }, { meshFaceCount: 50000.5 }])
+    assert.throws(() => designConfigSchema.parse({ ...config, ...invalid }))
 })
 
 test('design IPC schemas reject invalid values, arbitrary keys and missing descriptions', () => {
@@ -164,7 +204,7 @@ async function fixture(t: TestContext) {
   const output = join(root, 'comfy-output')
   await mkdir(output)
   await writeFile(join(output, 'image.png'), 'TEST-ONLY image bytes')
-  let promptId = '', cancelled = '', pending = false, failed = false, missingOutput = false, textured = false
+  let promptId = '', cancelled = '', pending = false, failed = false, missingOutput = false, textured = false, atlasSize = 1024
   let filename = ''
   const submissions: Record<string, unknown>[] = []
   const uploads: { name: string; body: string }[] = []
@@ -173,7 +213,8 @@ async function fixture(t: TestContext) {
     ...Object.values(imageWorkflow(config, request, 'test')),
     ...Object.values(tposeWorkflow(config, request, 'test', 'ref.png')),
     ...Object.values(meshWorkflow(config, request, 'test', 'pose.png')),
-    ...Object.values(meshWorkflow(designConfigSchema.parse({ ...config, meshProfile: 'textured' }), request, 'test', 'pose.png'))
+    ...Object.values(meshWorkflow(designConfigSchema.parse({ ...config, meshProfile: 'textured' }), request, 'test', 'pose.png')),
+    ...Object.values(meshWorkflow(designConfigSchema.parse({ ...config, meshProfile: 'textured', meshShapeDetail: 1024 }), request, 'test', 'pose.png'))
   ].map(n => [n.class_type, { input: {} }]))
   const server = createServer(async (req, res) => {
     res.setHeader('Content-Type', 'application/json')
@@ -185,7 +226,7 @@ async function fixture(t: TestContext) {
       promptId = body.prompt_id; submissions.push(body)
       const model = !!body.prompt['9'] && body.prompt['9'].class_type === 'SaveGLB'
       filename = body.prompt[model ? '9' : '7'].inputs.filename_prefix + (model ? '_00001_.glb' : '_00001_.png')
-      if (model) await writeFile(join(output, filename), meshFixture(textured))
+      if (model) await writeFile(join(output, filename), meshFixture(textured, atlasSize))
       else await copyFile(join(output, 'image.png'), join(output, filename))
       res.end(JSON.stringify({ prompt_id: promptId }))
     } else if (req.url === `/history/${promptId}`) {
@@ -214,10 +255,10 @@ async function fixture(t: TestContext) {
   studio.designer.readiness = async () => ({ ...readiness, devices: [{ name: 'Test GPU', freeGB: 24, totalGB: 32 }] })
   return { root, base, studio, submissions, catalog, uploads, decoded, cancelled: () => cancelled, promptId: () => promptId,
     setPending: () => { pending = true }, setFailed: () => { failed = true }, setMissing: () => { missingOutput = true },
-    setTextured: () => { textured = true } }
+    setTextured: (size = 1024) => { textured = true; atlasSize = size } }
 }
 
-function meshFixture(textured = false): Buffer {
+function meshFixture(textured = false, size = 1024): Buffer {
   const pngChunk = (type: string, data: Buffer) => {
     const bytes = Buffer.alloc(data.length + 12)
     bytes.writeUInt32BE(data.length); bytes.write(type, 4); data.copy(bytes, 8)
@@ -225,9 +266,9 @@ function meshFixture(textured = false): Buffer {
     return bytes
   }
   const header = Buffer.alloc(13)
-  header.writeUInt32BE(1024); header.writeUInt32BE(1024, 4); header[8] = 8; header[9] = 2
+  header.writeUInt32BE(size); header.writeUInt32BE(size, 4); header[8] = 8; header[9] = 2
   const png = textured ? Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), pngChunk('IHDR', header),
-    pngChunk('IDAT', deflateSync(Buffer.alloc(1024 * (1024 * 3 + 1)))), pngChunk('IEND', Buffer.alloc(0))]) : Buffer.alloc(0)
+    pngChunk('IDAT', deflateSync(Buffer.alloc(size * (size * 3 + 1)))), pngChunk('IEND', Buffer.alloc(0))]) : Buffer.alloc(0)
   const binaryLength = textured ? Math.ceil((60 + png.length) / 4) * 4 : 36
   const json = JSON.stringify({
     asset: { version: '2.0' }, buffers: [{ byteLength: binaryLength }],
@@ -285,6 +326,32 @@ test('textured stages fail without matching weights or actual textures, preservi
   assert.equal(design.modelUrl, undefined)
   assert.equal(design.modelTextured, undefined)
   assert.ok(design.tposeUrl)
+})
+
+test('textured runs keep their quality settings, use a 1024 input and require the selected atlas size', async t => {
+  const { root, studio, submissions, decoded, setTextured } = await fixture(t)
+  const file = join(root, 'pose.png')
+  await writeFile(file, 'TEST-ONLY cutout')
+  const id = await studio.designer.importStage(file, { stage: 'tpose', brief: request, isolated: true })
+  studio.designer.saveSettings({ ...config, meshProfile: 'textured', meshShapeDetail: 1024, meshTextureSize: 2048, meshFaceCount: 100000 })
+  setTextured()
+  await assert.rejects(studio.designer.run(id, 'model'), /2048x2048 PNG atlas/)
+  assert.equal(decoded.at(-1)?.squareSize, 1024)
+  const prompt = (submissions.at(-1) as { prompt: Workflow }).prompt
+  assert.equal(prompt['30'].inputs.target_resolution, 1024)
+  assert.equal(prompt['26'].inputs.texture_size, 2048)
+  assert.equal(studio.designer.snapshot().designs[0].modelUrl, undefined)
+  setTextured(2048)
+  await studio.designer.run(id, 'model')
+  const design = studio.designer.snapshot().designs[0]
+  assert.equal(design.modelTextured, true)
+  assert.deepEqual([design.config.meshShapeDetail, design.config.meshTextureSize, design.config.meshFaceCount], [1024, 2048, 100000])
+  assert.match(design.message, /2K base-color/)
+  studio.designer.saveSettings({ ...config, meshProfile: 'textured' })
+  let required: number | undefined
+  studio.importCharacter = async (_input, _name, size) => { required = size; return { id: 'test-character' } as Character }
+  await studio.importDesign(id)
+  assert.equal(required, 2048)
 })
 
 test('stage import schemas allow absent descriptions without weakening generated concept validation', () => {

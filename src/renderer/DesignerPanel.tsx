@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { ArrowDownToLine, ArrowRight, Box, Check, CircleAlert, ImagePlus, LoaderCircle, Palette, Plus, RefreshCw, ShieldCheck, Sparkles } from 'lucide-react'
 import type { Character, Snapshot } from '../shared/types'
-import type { DesignRequest, DesignerConfig, DesignerReadiness, DesignStage } from '../shared/designer'
-import { imageProfiles, meshProfiles, meshTextureProfile, tposeEditProfile, tposeEditPrompt } from '../shared/designer'
+import type { DesignRequest, DesignerConfig, DesignerReadiness, DesignStage, MeshShapeDetail, MeshTextureSize } from '../shared/designer'
+import { imageProfiles, meshProfiles, meshQualityOptions, meshTextureProfile, texturedMeshSettings, tposeEditProfile, tposeEditPrompt } from '../shared/designer'
 import { designerModelPackages, type DesignerModelPackage } from '../shared/designer-models'
 import { Viewport } from './Viewport'
 import './designer.css'
@@ -33,8 +33,9 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
   const recovery = design?.status === 'failed' ? design.recovery : undefined
   const recovered = download?.status === 'complete' && download.package === recovery?.package
   const displayError = error || (!recovered && design?.status === 'failed' ? design.message : '')
-  const settingsDirty = (['imageProfile', 'checkpoint', 'controlnet', 'meshProfile', 'meshCheckpoint', 'titleModel', 'ipadapter', 'clipVision', 'backgroundModel', 'editModel', 'editTextEncoder', 'editVae', 'meshTextureModel', 'meshVision', 'meshShapeVae', 'meshTextureVae'] as const)
+  const settingsDirty = (['imageProfile', 'checkpoint', 'controlnet', 'meshProfile', 'meshCheckpoint', 'titleModel', 'ipadapter', 'clipVision', 'backgroundModel', 'editModel', 'editTextEncoder', 'editVae', 'meshTextureModel', 'meshVision', 'meshShapeVae', 'meshTextureVae', 'meshShapeDetail', 'meshTextureSize', 'meshFaceCount'] as const)
     .some(key => (config?.[key] ?? '') !== (data?.config[key] ?? ''))
+  const quality = texturedMeshSettings(config ?? {})
   const reference = data?.references.find(r => r.id === request.referenceId)
   const free = Math.max(0, ...(ready?.devices.map(d => d.freeGB) ?? []))
   const url = design?.[`${preview}Url`]
@@ -264,7 +265,19 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
           {Object.entries(meshProfiles).map(([key, profile]) => <option key={key} value={key}>{profile.label} / ~{profile.gb} GB{ready && free < profile.gb ? ' / low memory' : ''}</option>)}
         </select>
         {config.meshProfile === 'textured' ? <>
-          <p className="fine-print">Generates a new textured model from the T-pose: 512 shape resolution, {meshTextureProfile.textureSize}px base-color/metallic/roughness atlas, target {meshTextureProfile.faceCount.toLocaleString()} faces. Fixed 12/20/12 structure/shape/texture steps. Experimental native backend support; missing weights or textures are errors, not geometry-only fallbacks.</p>
+          <p className="fine-print">Generates a new textured model from the T-pose with a base-color/metallic/roughness atlas. Standard runs one 512 shape pass; High and Maximum add a 1024 or 1536 shape refinement pass for sharper faces, hands and folds. Higher detail, larger textures and more faces increase generation time, memory use, file size and later rigging time. Fixed 12/20/12 structure/shape/texture steps plus 12 refinement steps. Experimental native backend support; missing weights or textures are errors, not geometry-only fallbacks.</p>
+          <label className="field-label" htmlFor="design-mesh-detail">3D shape detail</label>
+          <select id="design-mesh-detail" disabled={locked} value={quality.shapeDetail} onChange={e => setConfig({ ...config, meshShapeDetail: Number(e.target.value) as MeshShapeDetail })}>
+            {meshQualityOptions.shapeDetail.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+          <label className="field-label" htmlFor="design-texture-size">3D texture size</label>
+          <select id="design-texture-size" disabled={locked} value={quality.textureSize} onChange={e => setConfig({ ...config, meshTextureSize: Number(e.target.value) as MeshTextureSize })}>
+            {meshQualityOptions.textureSize.map(size => <option key={size} value={size}>{size / 1024}K atlas ({size} x {size})</option>)}
+          </select>
+          <label className="field-label" htmlFor="design-face-count">3D target face count</label>
+          <select id="design-face-count" disabled={locked} value={quality.faceCount} onChange={e => setConfig({ ...config, meshFaceCount: Number(e.target.value) })}>
+            {[...new Set([...meshQualityOptions.faceCount, quality.faceCount])].sort((a, b) => a - b).map(count => <option key={count} value={count}>{count.toLocaleString()} faces</option>)}
+          </select>
           {([
             { key: 'meshTextureModel', label: 'Textured 3D model', names: ready?.diffusionModels ?? [] },
             { key: 'meshVision', label: '3D vision encoder', names: ready?.clipVision ?? [] },
