@@ -1,5 +1,6 @@
 """Run with Blender --background --factory-startup --python-exit-code 1 --python this_file."""
 import json
+import math
 import sys
 import tempfile
 import unittest
@@ -9,8 +10,9 @@ from pathlib import Path
 from unittest.mock import patch
 from contextlib import contextmanager
 
+import bmesh
 import bpy
-from mathutils import Vector
+from mathutils import Matrix, Vector
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 import character
@@ -105,6 +107,54 @@ class BlenderSkinTests(unittest.TestCase):
         self.run_rig("fallback")
         report = json.loads((self.root / "output" / "rig-report.json").read_text())
         self.assertEqual(report["vertices"], report["weightedVertices"])
+
+    def add_occluded_seam_island(self):
+        # Mirrors a failure seen on a generated character: a small UV-seam island whose
+        # vertices cannot see their nearest bone receives no heat until its rim is welded.
+        center = character.C @ ((Vector(self.points["Head"]) + Vector(self.points["HeadEnd"])) * 0.5)
+        obj = min(character.meshes(), key=lambda o: (o.location - center).length)
+        bm = bmesh.new()
+        bm.from_mesh(obj.data)
+        bmesh.ops.rotate(bm, verts=bm.verts, cent=Vector(), matrix=Matrix.Rotation(math.radians(90), 3, "X"))
+        ring = sorted((v for v in bm.verts if abs(-v.co.y - 0.02 * math.cos(math.radians(30))) < 1e-4),
+                      key=lambda v: math.atan2(v.co.z, v.co.x))
+        base = [bm.verts.new(v.co.copy()) for v in ring]
+        far = [bm.verts.new(v.co + Vector((0, -0.01, 0))) for v in ring]
+        rim = [bm.verts.new(v.co.copy()) for v in far]
+        tip = bm.verts.new(sum((v.co for v in far), Vector()) / len(far) + Vector((0, -0.001, 0)))
+        for i in range(len(ring)):
+            j = (i + 1) % len(ring)
+            bm.faces.new((base[i], base[j], far[j], far[i]))
+            bm.faces.new((tip, rim[i], rim[j]))
+        bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+        bm.to_mesh(obj.data)
+        bm.free()
+        bpy.ops.wm.save_as_mainfile(filepath=str(self.input))
+
+    def test_seam_split_islands_are_skinned_from_welded_copies(self):
+        self.add_occluded_seam_island()
+        original = {obj.name: [obj.matrix_world @ v.co for v in obj.data.vertices] for obj in character.meshes()}
+        with patch.object(character, "welded_heat_proxy", return_value=None):
+            with self.assertRaises(character.UnweightedSkinError):
+                self.run_rig("automatic")
+        self.assertFalse((self.root / "output" / "rigged.blend").exists())
+        self.run_rig("automatic")
+        report = json.loads((self.root / "output" / "rig-report.json").read_text())
+        self.assertEqual(report["vertices"], report["weightedVertices"])
+        self.assertEqual(report["repair"], {"connectedVertices": 0, "fallbackVertices": 0})
+        self.assertEqual(report["seamWeld"], {"meshes": 1, "mergedVertices": 16})
+        bpy.ops.wm.open_mainfile(filepath=str(self.root / "output" / "rigged.blend"))
+        self.assertEqual({obj.name for obj in character.meshes()}, set(original))
+        for obj in character.meshes():
+            self.assertEqual(len(obj.data.vertices), len(original[obj.name]))
+            weights = {}
+            for vertex in obj.data.vertices:
+                self.assertLess((obj.matrix_world @ vertex.co - original[obj.name][vertex.index]).length, 1e-6)
+                self.assertAlmostEqual(sum(group.weight for group in vertex.groups), 1, places=5)
+                key = tuple(round(c, 5) for c in vertex.co)
+                skin = sorted((obj.vertex_groups[g.group].name, round(g.weight, 5)) for g in vertex.groups)
+                # Coincident seam vertices share weights, so the seam cannot crack when posed.
+                self.assertEqual(weights.setdefault(key, skin), skin)
 
     def test_unrelated_blender_errors_are_not_swallowed(self):
         with parent_error("Unexpected operator error"):
