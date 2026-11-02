@@ -48,6 +48,7 @@ const api: StudioApi = {
   importCharacter: () => ipcRenderer.invoke('studio:import'),
   importCollection: () => ipcRenderer.invoke('studio:import-collection'),
   saveSetup: (id, setup) => ipcRenderer.invoke('studio:setup', id, setup),
+  fitLandmarks: (id, rotation) => ipcRenderer.invoke('studio:fit-landmarks', id, rotation),
   rig: (id, skinning) => ipcRenderer.invoke('studio:rig', id, skinning),
   generate: request => ipcRenderer.invoke('studio:generate', request),
   cancel: () => ipcRenderer.invoke('studio:cancel'),

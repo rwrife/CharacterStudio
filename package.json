@@ -17,7 +17,7 @@
     "test:desktop": "node scripts/desktop-smoke.mjs",
     "test:setup": "node scripts/setup-smoke.mjs",
     "test:rigging": "node --import tsx scripts/test-rigging.ts",
-    "test:mcp": "npm run build && node scripts/mcp-smoke.mjs && node --import tsx scripts/generation-smoke.mjs && node scripts/provider-smoke.mjs",
+    "test:mcp": "npm run build && node scripts/mcp-smoke.mjs && node --import tsx scripts/generation-smoke.mjs && node scripts/provider-smoke.mjs && node --import tsx scripts/autofit-smoke.mjs",
     "mcp": "node scripts/mcp-client.mjs",
     "setup:blender": "node --import tsx scripts/setup-blender.ts",
     "package": "npm run build && node --import tsx scripts/package.ts",

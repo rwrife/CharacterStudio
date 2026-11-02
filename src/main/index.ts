@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto'
 import { join, extname } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { Studio } from './studio'
-import { errorText } from './validation'
+import { errorText, rotationSchema } from './validation'
 import type { GenerateRequest, RigSetup, Settings, MotionPlan, BatchRequest } from '../shared/types'
 import type { DesignRequest, DesignerConfig, DesignStage, DesignImportRequest } from '../shared/designer'
 import { designImportSchema } from './designer'
@@ -226,6 +226,7 @@ if (ownsWorkspace) app.whenReady().then(async () => {
     return characters
   })
   handle('studio:setup', (id: string, setup: RigSetup) => studio.saveSetup(id, setup))
+  handle('studio:fit-landmarks', (id: unknown, rotation: unknown) => studio.fitLandmarks(z.string().uuid().parse(id), rotationSchema.parse(rotation)))
   handle('studio:rig', (id: string, skinning?: import('../shared/types').SkinningMode) => studio.rig(id, false, skinning))
   handle('studio:generate', (request: GenerateRequest) => studio.generate(request))
   handle('studio:cancel', () => studio.cancel())
