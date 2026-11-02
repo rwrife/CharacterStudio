@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Check, CircleAlert, ListChecks, LoaderCircle, RefreshCw, X } from 'lucide-react'
 import type { LaunchCheck as LaunchResult, SetupAction, SetupItem, SetupItemId, SetupState } from '../shared/setup'
-import { explain, SetupRow } from './SetupWizard'
+import { explain, SetupRow, startAutomatic } from './SetupWizard'
 
 type Phase = 'checking' | 'issues' | 'ready' | 'failed'
 
@@ -38,6 +38,7 @@ export function LaunchCheck({ onClose, onOpenChecklist }: { onClose: () => void;
     const hadIssues = !!known.current?.length
     known.current = result.issues
     setIssues(result.issues)
+    try { const started = await startAutomatic(result.issues); if (started && !stale()) setState(started) } catch (e) { if (!stale()) setError(explain(e)) }
     setPhase(result.issues.length ? 'issues' : 'ready')
     if (!result.issues.length && !hadIssues) setTimeout(() => close(), 2500)
   }

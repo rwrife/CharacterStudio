@@ -4,12 +4,19 @@ import { formatBytes, type SetupAction, type SetupGroup, type SetupItem, type Se
 
 export const explain = (e: unknown) => (e instanceof Error ? e.message : String(e)).replace(/^Error invoking remote method '[^']+': Error: /, '')
 const groups: { id: SetupGroup; title: string; detail: string }[] = [
-  { id: 'core', title: 'Core requirements', detail: 'Local tools both workspaces rely on.' },
+  { id: 'core', title: 'Core requirements', detail: 'ComfyUI for both workspaces, and Blender for Animator rigging and export.' },
   { id: 'animator', title: 'Animator', detail: 'Motion generation with Kimodo inside ComfyUI.' },
   { id: 'designer', title: 'Designer models', detail: 'Pinned public weights, verified by SHA-256 and saved into ComfyUI/models.' },
   { id: 'optional', title: 'Optional', detail: 'Nice to have; nothing is blocked without it.' }
 ]
 const external = new Set(['open-comfy-guide', 'open-kimodo-nodes', 'open-llama-access', 'open-model-license', 'open-ollama'])
+
+/** Starts the first item marked for automatic install when nothing else is running. Returns the started item. */
+export async function startAutomatic(items: SetupItem[]): Promise<SetupState | undefined> {
+  const item = items.find(entry => entry.automatic)
+  if (!item?.automatic || (await window.studio.setupState()).task) return undefined
+  return window.studio.setupRun({ item: item.id, action: item.automatic })
+}
 
 export function SetupWizard({ onClose }: { onClose: () => void }) {
   const [report, setReport] = useState<SetupReport>()
@@ -19,7 +26,12 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
 
   async function refresh() {
     setChecking(true)
-    try { setReport(await window.studio.setupReport()) } catch (e) { setError(explain(e)) } finally { setChecking(false) }
+    try {
+      const next = await window.studio.setupReport()
+      setReport(next)
+      const started = await startAutomatic(next.items)
+      if (started) setState(started)
+    } catch (e) { setError(explain(e)) } finally { setChecking(false) }
   }
   useEffect(() => {
     window.studio.setupState().then(setState).catch(e => setError(explain(e)))
@@ -52,6 +64,7 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
   return <div className="modal-backdrop"><section className="settings-modal setup-modal" role="dialog" aria-modal="true" aria-label="Setup checklist">
     <div className="modal-heading"><div><span className="section-kicker">{state?.firstLaunch ? 'WELCOME · FIRST LAUNCH' : 'SETUP CHECKLIST'}</span><h2>Get Character Studio ready</h2></div><button aria-label="Close setup checklist" onClick={() => void close()}><X size={20} /></button></div>
     <p className="panel-description">Studio checked this PC for what Designer and Animator need. Everything runs locally; downloads come only from the pinned sources shown and are verified before use. Nothing here asks for passwords or tokens.</p>
+    {report?.items.find(item => item.id === 'blender' && item.status !== 'done') && <p className="setup-note" data-testid="blender-note">Animator needs Blender to fit, skin and export characters. {task?.action === 'install-blender' ? 'Studio is installing its own isolated, checksum-verified copy from mirror.blender.org now—you can cancel it on the Blender row.' : 'When Studio manages Blender, it installs an isolated, checksum-verified copy automatically; you can also choose an existing Blender.'}</p>}
     <div className="setup-summary" aria-live="polite">
       <div className="setup-meter"><span style={{ width: `${required.length ? (complete / required.length) * 100 : 0}%` }} /></div>
       <span>{report ? `${complete} of ${required.length} required steps complete` : 'Checking this PC…'}</span>
