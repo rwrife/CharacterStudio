@@ -365,7 +365,7 @@ export function AiProvidersPanel({ snapshot, initialStage = 'scene', initialFiel
 export function AiRouteBadge({ snapshot, stage, onClick }: { snapshot: Snapshot; stage: AiStage; onClick?: () => void }) {
   const route = resolveAiRoute(snapshot.ai, stage)
   const native = snapshot.designer?.config
-  const model = route.provider !== 'builtin' ? '' : stage === 'motion' ? snapshot.settings.textEncoder === 'lfm' ? 'Kimodo / LFM bridge' : 'Kimodo / Llama + LLM2Vec' :
+  const model = route.provider !== 'builtin' ? '' : stage === 'motion' ? snapshot.settings.textEncoder === 'lfm' ? 'Kimodo / LFM bridge' : 'Kimodo / Llama + LLM2Vec' : stage === 'capture' ? 'MediaPipe Pose' :
     !native ? '' : stage === 'scene' ? native.checkpoint || imageProfiles[native.imageProfile].label :
     stage === 'tpose' ? tposeEditProfile.label : stage === 'cutout' ? 'BiRefNet' :
     stage === 'mesh' ? meshProfiles[native.meshProfile].label : stage === 'naming' ? native.titleModel : ''

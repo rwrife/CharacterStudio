@@ -56,7 +56,7 @@ try {
   assert.equal(await page.locator('.brand').innerText(), 'characterstudio')
   assert.equal(await page.locator('.brand .version').count(), 0, 'No header subtitle should be rendered.')
   await click('Designer', 'tab')
-  assert.equal((await ui()).elements.some(el => el.name === 'Mocap'), false)
+  assert.equal(find(await ui(), 'Mocap', 'tab').selected, 'false')
   assert.equal(find(await ui(), 'Character & scene', 'button').current, 'step')
   assert.equal(await page.getByRole('dialog', { name: 'Model Settings' }).count(), 0)
   for (const width of [1100, 1440, 1700]) {

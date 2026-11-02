@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type RefObject } from 'react'
 import { FilesetResolver, PoseLandmarker, type NormalizedLandmark, type PoseLandmarkerResult } from '@mediapipe/tasks-vision'
 import {
-  ArrowDownToLine, ArrowRight, Bone, Camera, CameraOff, Check, ChevronDown, CircleAlert, CircleStop, Clapperboard, Download, Film, Info, LoaderCircle,
+  ArrowDownToLine, ArrowRight, Bone, Camera, CameraOff, Check, CircleAlert, CircleStop, Clapperboard, Download, Film, LoaderCircle,
   Maximize, Pause, Play, Plus, ScanLine, Send, ShieldCheck, SkipBack, SkipForward, Trash, Video, Volume2, VolumeX, X
 } from 'lucide-react'
 import type { Character, Snapshot } from '../shared/types'
@@ -11,6 +11,8 @@ import {
   POSE_LINKS, POSE_POINTS, clipFrames, defaultMocapOptions, type MocapCapture, type MocapOptions, type MocapPoseModel, type MocapSubject, type PoseFrame
 } from '../shared/mocap'
 import { AiRouteBadge } from './AiProvidersPanel'
+import { ProcessStepper, WorkspaceLayout } from './WorkspaceLayout'
+import type { ProcessStep } from '../shared/workspace'
 import { PoseSkeleton, poseFloor } from './PoseSkeleton'
 import { Viewport } from './Viewport'
 import './mocap.css'
@@ -29,11 +31,11 @@ interface Clip { start: number; end: number }
 const done = new Set(['complete', 'failed', 'cancelled'])
 const models = Object.keys(MOCAP_MODELS) as MocapPoseModel[]
 const subjects = Object.keys(MOCAP_SUBJECTS) as MocapSubject[]
-const steps: [Step, string, string][] = [
-  [1, 'Import video', 'Import a reference video or record one with your webcam.'],
-  [2, 'Capture motion', 'Set the clip range and subject, then capture motion.'],
-  [3, 'Review', 'Review capture before sending to Animator.'],
-  [4, 'Send to Animator', 'Choose a rigged T-pose character and send the motion to Animator.']
+const steps: { id: string; label: string; kicker: string; detail: string }[] = [
+  { id: 'video', label: 'Import video', kicker: '01 / CHOOSE A PERFORMANCE', detail: 'Import a reference video or record one with your webcam.' },
+  { id: 'capture', label: 'Capture motion', kicker: '02 / CAPTURE THE MOTION', detail: 'Set the clip range and subject, then capture motion on this PC.' },
+  { id: 'review', label: 'Review', kicker: '03 / CHECK THE CAPTURE', detail: 'Play the clip and check the skeleton before applying it to a character.' },
+  { id: 'send', label: 'Send to Animator', kicker: '04 / APPLY TO A CHARACTER', detail: 'Choose a rigged T-pose character, then export the motion to Animator.' }
 ]
 const THUMBNAILS = 6
 const frameTime = 1 / MOCAP_FPS
@@ -253,7 +255,6 @@ export function MocapPanel({ snapshot, visible, animatorBusy, onReviewFit, onPro
   const [duration, setDuration] = useState(0)
   const [thumbnails, setThumbnails] = useState<string[]>([])
   const [captureData, setCaptureData] = useState<MocapCapture>()
-  const [showSaved, setShowSaved] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -291,8 +292,13 @@ export function MocapPanel({ snapshot, visible, animatorBusy, onReviewFit, onPro
   const url = view === 'animation' ? result?.previewUrl : character?.rigged ? character.rigPreviewUrl : character?.previewUrl
   const sent = !!take && snapshot.jobs.some(j => j.kind === 'mocap' && j.stage === 'complete' && j.mocapTakeId === take.id)
   const clipValid = !!take && duration > 0 && clip.end - clip.start >= 2 * frameTime && clip.end <= duration + 0.05 && clip.end - clip.start <= MOCAP_MAX_SECONDS + 0.05
-  const reached: Record<Step, boolean> = { 1: true, 2: !!take, 3: !!captured, 4: !!captured }
-  const status = (n: Step) => n === step ? 'Current step' : (n === 1 ? !!take : n === 2 ? !!captured : n === 3 ? !!captured && step === 4 : sent) ? 'Complete' : 'Pending'
+  const processSteps: ProcessStep[] = [
+    { id: 'video', label: 'Import video', complete: !!take, state: camera ? 'running' : undefined },
+    { id: 'capture', label: 'Capture motion', complete: !!captured, state: capturing || active?.kind === 'capture' ? 'running' : !take ? 'blocked' : undefined },
+    { id: 'review', label: 'Review', complete: !!captured && (step === 4 || sent), state: !captured ? 'blocked' : undefined },
+    { id: 'send', label: 'Send to Animator', complete: sent,
+      state: active?.kind === 'mocap' && active.characterId === characterId ? 'running' : results[0]?.stage === 'failed' ? 'failed' : !captured ? 'blocked' : undefined }
+  ]
   const captureKey = take && captured ? `${take.id}:${captured.model}:${captured.start}:${captured.frames}:${captured.detected}` : ''
   const extension = take?.videoFile.split('.').pop()?.toUpperCase() ?? ''
 
@@ -348,7 +354,7 @@ export function MocapPanel({ snapshot, visible, animatorBusy, onReviewFit, onPro
     video.srcObject = camera ?? null
     if (camera) void video.play().catch(() => undefined)
   }, [camera])
-  useEffect(() => { if (step === 4) videoRef.current?.pause() }, [step])
+  useEffect(() => { if (step === 4 && !capturing) videoRef.current?.pause() }, [step])
   useEffect(() => { if (!visible) { closeCamera(); videoRef.current?.pause() } }, [visible])
   useEffect(() => () => { captureAbort.current?.abort(); closeCamera() }, [])
 
@@ -588,14 +594,16 @@ export function MocapPanel({ snapshot, visible, animatorBusy, onReviewFit, onPro
     if (t) { selectTake(t.id); setNotice('Video imported. Set the clip range and subject, then capture motion.') }
   })
 
+  const selectStep = (id: string) => { const index = steps.findIndex(item => item.id === id); if (index >= 0) setStep(index + 1 as Step) }
   const heading = steps[step - 1]
-  return <div id="mocap-panel" role="tabpanel" aria-labelledby="mocap-tab" hidden={!visible} className="mocap-layout">
-    <aside className="mocap-side" aria-label="Capture motion">
-      <div className="section-kicker">MOCAP</div>
-      <h1>Capture motion</h1>
-      <p className="intro">Turn a reference performance into animation for a rigged T-pose character.</p>
+  const reason = !captured ? 'Capture motion first.' : !character ? 'Import a T-pose character first.' : !character.rigged ? 'Build the skin and rig first.' : ''
+  return <WorkspaceLayout id="mocap-panel" labelledBy="mocap-tab" hidden={!visible} step={heading.id} className="mocap-layout">
+    <aside className="workflow-settings mocap-settings" aria-label="Mocap step settings">
+      <div className="section-kicker">{heading.kicker}</div>
+      <h1>{heading.label}</h1>
+      <p className="panel-description">{heading.detail}</p>
 
-      <div className="mocap-card mocap-video-card">
+      {step < 4 && <div className="mocap-card">
         {take ? <>
           <span className="mocap-card-icon">{take.source === 'webcam' ? <Camera size={18} /> : <Film size={18} />}</span>
           <span className="mocap-card-text"><strong title={take.name}>{take.name}</strong><small>{extension} · {duration ? clock(duration).replace(/\.\d$/, '') : '--:--'} · {megabytes(take.bytes)}</small></span>
@@ -603,94 +611,138 @@ export function MocapPanel({ snapshot, visible, animatorBusy, onReviewFit, onPro
         </> : <>
           <span className="mocap-card-icon"><Film size={18} /></span>
           <span className="mocap-card-text"><strong>No reference video</strong><small>MP4, MOV or WebM · one person, full body</small></span>
-          <button className="secondary" disabled={locked} onClick={importVideo}><Video size={14} /> Import video</button>
         </>}
-      </div>
-      <button className="secondary full mocap-webcam" disabled={locked} onClick={() => void openCamera()}><Camera size={15} /> Record with webcam</button>
+      </div>}
 
-      <div className="mocap-field-group">
-        <span className="field-label">Clip range</span>
-        <div className="mocap-clip-fields">
-          <label><small>Start</small><input aria-label="Clip start" value={clipText.start} disabled={locked || !duration} placeholder="00:00.0"
-            onChange={e => setClipText({ ...clipText, start: e.target.value })} onBlur={() => commitClip('start')} onKeyDown={e => { if (e.key === 'Enter') commitClip('start') }} /></label>
-          <span className="mocap-clip-dash">–</span>
-          <label><small>End</small><input aria-label="Clip end" value={clipText.end} disabled={locked || !duration} placeholder="00:00.0"
-            onChange={e => setClipText({ ...clipText, end: e.target.value })} onBlur={() => commitClip('end')} onKeyDown={e => { if (e.key === 'Enter') commitClip('end') }} /></label>
-        </div>
+      {step === 1 && <>
+        {!take && <button className="primary full" disabled={locked} onClick={importVideo}><Video size={15} /> Import video file</button>}
+        <button className="secondary full" disabled={locked} onClick={() => void openCamera()}><Camera size={15} /> Record with webcam</button>
+        <p className="fine-print">Best results: one person, front-facing, whole body in frame, steady camera and good light. Up to {MOCAP_MAX_SECONDS / 60} minutes are captured per clip.</p>
+        {take && !camera && <button className="primary full" disabled={locked} onClick={() => setStep(2)}>Continue to clip and capture <ArrowRight size={15} /></button>}
+      </>}
+
+      {step === 2 && <>
+        {take ? <>
+          <span className="field-label">Clip range</span>
+          <div className="mocap-clip-fields">
+            <label><small>Start</small><input aria-label="Clip start" value={clipText.start} disabled={locked || !duration} placeholder="00:00.0"
+              onChange={e => setClipText({ ...clipText, start: e.target.value })} onBlur={() => commitClip('start')} onKeyDown={e => { if (e.key === 'Enter') commitClip('start') }} /></label>
+            <span className="mocap-clip-dash">–</span>
+            <label><small>End</small><input aria-label="Clip end" value={clipText.end} disabled={locked || !duration} placeholder="00:00.0"
+              onChange={e => setClipText({ ...clipText, end: e.target.value })} onBlur={() => commitClip('end')} onKeyDown={e => { if (e.key === 'Enter') commitClip('end') }} /></label>
+          </div>
+          <p className="fine-print">Drag the In and Out handles on the timeline or type times as mm:ss.s.</p>
+        </> : <p className="fine-print">Import or record a video in step 1 first.</p>}
         <label className="field-label" htmlFor="mocap-subject">Subject</label>
         <select id="mocap-subject" aria-label="Subject" disabled={locked} value={subject} onChange={e => setSubject(e.target.value as MocapSubject)}>
           {subjects.map(id => <option key={id} value={id}>{MOCAP_SUBJECTS[id]}</option>)}
         </select>
-      </div>
+        <details className="model-advanced mocap-options">
+          <summary>Capture options</summary>
+          {remote ? <p className="fine-print">This provider uses <strong>{aiModelLabel(route) || 'its configured model'}</strong> through a mapped {route.provider === 'api' ? 'Studio API gateway' : 'ComfyUI'} workflow. Change it in Model Settings.</p> : <>
+            <div className="mocap-models" role="radiogroup" aria-label="Pose model">
+              {models.map(id => {
+                const state = data?.models[id]
+                const spec = MOCAP_MODELS[id]
+                return <div key={id} className={`mocap-model ${model === id ? 'selected' : ''}`}>
+                  <label><input type="radio" name="mocap-model" aria-label={`Use ${spec.label}`} checked={model === id} disabled={capturing} onChange={() => setModel(id)} /><span><strong>{spec.label}</strong><small>{spec.detail} {megabytes(spec.bytes)}.</small>
+                    <small className={state?.status === 'failed' ? 'failure-text' : ''} aria-label={`${spec.label} status`}>{state?.status === 'ready' ? 'Downloaded and verified' : state?.status === 'downloading' ? `Downloading ${state.progress ?? 0}% · ${state.message ?? ''}` : state?.message ?? 'Not downloaded'}</small></span></label>
+                  {state?.status !== 'ready' && state?.status !== 'downloading' && <button className="secondary" aria-label={`Download ${spec.label}`} disabled={!!downloading} onClick={() => { setError(''); void window.studio.mocapDownloadModel(id).catch(e => setError(explain(e))) }}><Download size={14} /> Download</button>}
+                  {state?.status === 'downloading' && <button className="secondary" aria-label={`Cancel ${spec.label} download`} onClick={() => void window.studio.mocapCancelDownload()}>Cancel</button>}
+                </div>
+              })}
+            </div>
+            <p className="fine-print">MediaPipe Pose runs on the CPU in this window at {MOCAP_FPS} fps; no GPU is required. Models download from Google's MediaPipe storage (Apache-2.0) and are checked against a pinned SHA-256.</p>
+          </>}
+        </details>
+        <div className="ai-stage-routes" role="group" aria-label="Current step models"><AiRouteBadge snapshot={snapshot} stage="capture" onClick={() => onProviders('capture')} /></div>
+        <button className="primary full" disabled={locked || !take || !clipValid || (!remote && modelState?.status !== 'ready')} onClick={() => void capture()}>
+          <ScanLine size={16} /> {captured ? 'Capture again' : 'Start capture'}</button>
+        {!remote && take && modelState?.status !== 'ready' && <p className="fine-print">Download {MOCAP_MODELS[model].label} under Capture options first.</p>}
+        {captured && <p className="fine-print">Capturing again replaces this take's saved capture. Exported characters are kept.</p>}
+      </>}
 
-      <p className="mocap-info"><Info size={13} /> Capture options depend on the selected provider.</p>
-      <details className="mocap-options">
-        <summary><span>Capture options</span><ChevronDown size={14} /></summary>
-        {remote ? <p className="fine-print">This provider uses <strong>{aiModelLabel(route) || 'its configured model'}</strong> through a mapped {route.provider === 'api' ? 'Studio API gateway' : 'ComfyUI'} workflow. Change it in Model & workflow providers.</p> : <>
-          <div className="mocap-models" role="radiogroup" aria-label="Pose model">
-            {models.map(id => {
-              const state = data?.models[id]
-              const spec = MOCAP_MODELS[id]
-              return <div key={id} className={`mocap-model ${model === id ? 'selected' : ''}`}>
-                <label><input type="radio" name="mocap-model" aria-label={`Use ${spec.label}`} checked={model === id} disabled={capturing} onChange={() => setModel(id)} /><span><strong>{spec.label}</strong><small>{spec.detail} {megabytes(spec.bytes)}.</small>
-                  <small className={state?.status === 'failed' ? 'failure-text' : ''} aria-label={`${spec.label} status`}>{state?.status === 'ready' ? 'Downloaded and verified' : state?.status === 'downloading' ? `Downloading ${state.progress ?? 0}% · ${state.message ?? ''}` : state?.message ?? 'Not downloaded'}</small></span></label>
-                {state?.status !== 'ready' && state?.status !== 'downloading' && <button className="secondary" aria-label={`Download ${spec.label}`} disabled={!!downloading} onClick={() => { setError(''); void window.studio.mocapDownloadModel(id).catch(e => setError(explain(e))) }}><Download size={14} /> Download</button>}
-                {state?.status === 'downloading' && <button className="secondary" aria-label={`Cancel ${spec.label} download`} onClick={() => void window.studio.mocapCancelDownload()}>Cancel</button>}
-              </div>
-            })}
-          </div>
-          <p className="fine-print">MediaPipe Pose runs on the CPU in this window at {MOCAP_FPS} fps; no GPU is required. Models download from Google's MediaPipe storage (Apache-2.0) and are checked against a pinned SHA-256.</p>
+      {step === 3 && (captured ? <>
+        <p className="fine-print" aria-label="Capture summary">{captured.model === 'provider' ? `Captured by ${aiModelLabel(captured.provenance?.route ?? route) || 'the capture provider'}` : `Captured with ${MOCAP_MODELS[captured.model].label}`} · {MOCAP_SUBJECTS[captured.subject ?? 'primary']} · {clock(captured.start ?? 0)} + {((captured.frames - 1) / captured.fps).toFixed(1)}s · person found in {captured.detected} of {captured.frames} frames.</p>
+        <ul className="mocap-checklist">
+          <li>Play the clip: the skeleton follows the source video.</li>
+          <li>Check limbs that leave the frame or hide behind the body.</li>
+          <li>Depth, foot contact and travel are estimated from one camera.</li>
+        </ul>
+        <button className="primary full" disabled={locked} onClick={() => setStep(4)}>Continue to Send to Animator <ArrowRight size={15} /></button>
+        <button className="text-button full" disabled={locked} onClick={() => setStep(2)}>Adjust clip or capture again</button>
+      </> : <p className="fine-print">{take ? 'Capture motion in step 2 to review it here.' : 'Import or record a video in step 1 first.'}</p>)}
+
+      {step === 4 && <>
+        <span className="section-kicker">T-POSE CHARACTER</span>
+        <label className="field-label" htmlFor="mocap-character">Character</label>
+        <select id="mocap-character" aria-label="Character" disabled={locked || !snapshot.characters.length} value={characterId} onChange={e => { const c = snapshot.characters.find(item => item.id === e.target.value); if (c) selectCharacter(c) }}>
+          {!snapshot.characters.length && <option value="">No characters yet</option>}
+          {snapshot.characters.map(c => <option key={c.id} value={c.id}>{c.name} · {c.rigged ? 'skinned humanoid' : 'needs skin + rig'}</option>)}
+        </select>
+        <button className="secondary full" disabled={locked} onClick={() => void perform(async () => { const c = await window.studio.mocapImportCharacter(); if (c) selectCharacter(c) })}><Plus size={15} /> Import T-pose <span className="muted">FBX / GLB</span></button>
+        {character && !character.rigged && <>
+          <p className="fine-print">Mocap needs a validated skin and rig. Joints were auto-fitted on import; review them in Animator for the best result.</p>
+          <button className="primary full" disabled={locked} onClick={() => void perform(async () => { await window.studio.rig(character.id); setView('character'); setNotice('Skin weights validated. This character is ready for mocap.') })}><Bone size={15} /> Build skin + rig</button>
         </>}
+        {character && <button className="text-button full" disabled={locked} onClick={() => onReviewFit(character)}><Bone size={13} /> Review fit in Animator</button>}
+        <div className="panel-rule" />
+        <span className="section-kicker">RETARGET</span>
+        <label className="field-label" htmlFor="mocap-smoothing">Smoothing <span>{Math.round(options.smoothing * 100)}%</span></label>
+        <input id="mocap-smoothing" aria-label="Smoothing" type="range" min="0" max="1" step="0.05" disabled={locked} value={options.smoothing} onChange={e => setOptions({ ...options, smoothing: Number(e.target.value) })} />
+        <label className="field-label" htmlFor="mocap-legs">Legs</label>
+        <select id="mocap-legs" aria-label="Leg tracking" disabled={locked} value={options.legs} onChange={e => setOptions({ ...options, legs: e.target.value as MocapOptions['legs'] })}>
+          <option value="auto">Auto: lock legs when they are out of view</option>
+          <option value="track">Always track legs</option>
+          <option value="lock">Lock legs (upper body only)</option>
+        </select>
+        <label className="checkbox"><input type="checkbox" disabled={locked} checked={options.hipHeight} onChange={e => setOptions({ ...options, hipHeight: e.target.checked })} /> Follow crouches (hip height)</label>
+        <label className="checkbox"><input type="checkbox" disabled={locked} checked={options.mirror} onChange={e => setOptions({ ...options, mirror: e.target.checked })} /> Mirror left and right</label>
+        <p className="fine-print">Motion stays in place: monocular video cannot recover reliable travel, foot contact or hidden limbs. Body only; no fingers or face.</p>
+        <button className="primary full" disabled={locked || !!reason} onClick={() => void sendToAnimator()}><Send size={15} /> Export to Animator <ArrowRight size={15} /></button>
+        <p className="fine-print">{reason || 'Bakes the skinned mesh with this motion in local Blender and exports FBX + GLB, then opens the result in Animator.'}</p>
+        {result && <div className="output-section">
+          <div className="section-kicker">EXPORTED CHARACTER</div>
+          <button className="text-button full" disabled={locked || !character} onClick={() => character && onOpenAnimator(character, result.id)}>Open result in Animator <ArrowRight size={13} /></button>
+          {result.outputFiles?.map(file => <button key={file} className="download" onClick={() => void perform(async () => { const path = await window.studio.saveOutput(result.id, file); if (path) setNotice(`Saved ${path}`) })}><ArrowDownToLine size={16} /><span>{outputLabel(file)}</span></button>)}
+          {result.warnings?.map(w => <p className="fine-print" key={w}>{w}</p>)}
+        </div>}
+      </>}
+
+      <details className="workspace-collection"><summary>Saved captures ({data?.takes.length ?? 0}){take ? ` · ${take.name}` : ''}</summary>
+        <div className="asset-list mocap-list">
+          {data?.takes.map(t => <div key={t.id} className={`mocap-take ${t.id === takeId ? 'active' : ''}`}>
+            <button className={`asset ${t.id === takeId ? 'active' : ''}`} disabled={locked} aria-label={`Use take ${t.name}`} onClick={() => selectTake(t.id)}>
+              <span className="asset-icon">{t.source === 'webcam' ? <Camera size={16} /> : <Clapperboard size={16} />}</span>
+              <span><strong>{t.name}</strong><small>{t.capture ? `Captured · ${t.capture.detected}/${t.capture.frames} frames` : 'Not captured yet'} · {megabytes(t.bytes)}</small></span>
+            </button>
+            {confirmDelete === t.id
+              ? <span className="mocap-take-confirm"><button className="secondary" disabled={locked} aria-label={`Confirm delete ${t.name}`} onClick={() => void perform(async () => { await window.studio.mocapDeleteTake(t.id); setConfirmDelete(''); setNotice('Take deleted. Exported characters were kept.') })}><Trash size={13} /> Delete</button>
+                <button className="text-button" onClick={() => setConfirmDelete('')}>Keep</button></span>
+              : <button className="icon-button" disabled={locked} aria-label={`Delete take ${t.name}`} onClick={() => setConfirmDelete(t.id)}><Trash size={13} /></button>}
+          </div>)}
+          {!data?.takes.length && <div className="empty-assets"><Clapperboard size={22} /><p>No takes yet</p><small>Imported videos and webcam takes appear here.</small></div>}
+        </div>
+        {take && <button className="secondary full" disabled={locked} onClick={() => { importVideo() }}><Plus size={15} /> Import another video</button>}
       </details>
-
-      <div className="mocap-provider">
-        <span className="field-label">Provider</span>
-        <AiRouteBadge snapshot={snapshot} stage="capture" onClick={() => onProviders('capture')} />
-        <button className="text-button" disabled={locked} onClick={() => onProviders('capture')}>Configure capture provider</button>
-      </div>
-
-      <button className="primary full mocap-capture-button" disabled={locked || !take || !clipValid || (!remote && modelState?.status !== 'ready')} onClick={() => void capture()}>
-        <ScanLine size={16} /> {captured ? 'Capture motion again' : 'Capture motion'}</button>
-      {!remote && take && modelState?.status !== 'ready' && <p className="fine-print">Download {MOCAP_MODELS[model].label} under Capture options first.</p>}
-      {captured && <p className="fine-print" aria-label="Capture summary">{captured.model === 'provider' ? `Captured by ${aiModelLabel(captured.provenance?.route ?? route) || 'the capture provider'}` : `Captured with ${MOCAP_MODELS[captured.model].label}`} · {MOCAP_SUBJECTS[captured.subject ?? 'primary']} · {clock(captured.start ?? 0)} + {((captured.frames - 1) / captured.fps).toFixed(1)}s · person found in {captured.detected} of {captured.frames} frames.</p>}
-
-      <button className="mocap-saved-toggle" aria-expanded={showSaved} onClick={() => setShowSaved(!showSaved)}>
-        <span>Saved captures ({data?.takes.length ?? 0})</span><ChevronDown size={14} /></button>
-      {showSaved && <div className="asset-list mocap-list">
-        {data?.takes.map(t => <div key={t.id} className={`mocap-take ${t.id === takeId ? 'active' : ''}`}>
-          <button className="asset" disabled={locked} aria-label={`Use take ${t.name}`} onClick={() => selectTake(t.id)}>
-            <span className="asset-icon">{t.source === 'webcam' ? <Camera size={16} /> : <Clapperboard size={16} />}</span>
-            <span><strong>{t.name}</strong><small>{t.capture ? `Captured · ${t.capture.detected}/${t.capture.frames} frames` : 'Not captured yet'} · {megabytes(t.bytes)}</small></span>
-          </button>
-          {confirmDelete === t.id
-            ? <span className="mocap-take-confirm"><button className="secondary" disabled={locked} aria-label={`Confirm delete ${t.name}`} onClick={() => void perform(async () => { await window.studio.mocapDeleteTake(t.id); setConfirmDelete(''); setNotice('Take deleted. Exported characters were kept.') })}><Trash size={13} /> Delete</button>
-              <button className="text-button" onClick={() => setConfirmDelete('')}>Keep</button></span>
-            : <button className="icon-button" disabled={locked} aria-label={`Delete take ${t.name}`} onClick={() => setConfirmDelete(t.id)}><Trash size={13} /></button>}
-        </div>)}
-        {!data?.takes.length && <div className="empty-assets"><Clapperboard size={22} /><p>No takes yet</p><small>Imported videos and webcam takes appear here.</small></div>}
-      </div>}
 
       <div className="local-note"><ShieldCheck size={19} /><div>{remote
         ? <><strong>Remote capture.</strong><p>After you approve it, the entire selected video is uploaded to {route.endpoint || 'the configured provider'}. Webcam footage stays on this PC until then. Retargeting and export stay local.</p></>
         : <><strong>Captured on this PC.</strong><p>Videos, webcam footage and pose data never leave your machine. Only the pose model is downloaded once.</p></>}</div></div>
     </aside>
 
-    <main className="mocap-stage" aria-label="Mocap stage">
-      <nav className="mocap-stepper" aria-label="Mocap steps">
-        <ol>{steps.map(([n, label]) => {
-          const state = status(n)
-          return <li key={n} className={state === 'Current step' ? 'current' : state === 'Complete' ? 'complete' : ''}>
-            <button aria-current={n === step ? 'step' : undefined} aria-label={`Step ${n}: ${label} (${state})`} disabled={!reached[n] || capturing || !!camera || busy} onClick={() => setStep(n)}>
-              <span className="mocap-step-number">{state === 'Complete' ? <Check size={13} /> : n}</span>
-              <span><strong>{label}</strong><small>{state}</small></span>
-            </button>
-          </li>
-        })}</ol>
-      </nav>
-      <div className="scene-heading mocap-heading"><div><span className="section-kicker">STEP {step} · {heading[1].toUpperCase()}</span><h2>{camera ? 'Live camera' : take?.name ?? 'Choose a performance'}</h2><p>{heading[2]}</p></div></div>
+    <main className="workflow-main mocap-main" aria-label="Mocap scene">
+      <ProcessStepper label="Mocap process" steps={processSteps} current={heading.id} onSelect={selectStep} />
+      <div className="scene-heading"><div><span className="section-kicker">{step === 4 ? 'CHARACTER' : 'PERFORMANCE'}</span>
+        <h2>{camera ? 'Live camera' : step === 4 ? character?.name.replace(/\.(fbx|glb)$/i, '') ?? 'Choose a T-pose character' : take?.name ?? 'Choose a performance'}</h2></div>
+        {step === 4 && !camera && <div className="view-tabs">
+          <button aria-pressed={view === 'character'} className={view === 'character' ? 'active' : ''} disabled={!character} onClick={() => setView('character')}>{character?.rigged ? 'Rigged' : 'Original'}</button>
+          <button aria-pressed={view === 'animation'} className={view === 'animation' ? 'active' : ''} disabled={!result} onClick={() => setView('animation')}>Mocap result</button>
+        </div>}
+      </div>
 
       <div className="mocap-panes">
-        <section className="mocap-pane" aria-label="Source video" hidden={step === 4 && !camera}>
+        <section className="mocap-pane" aria-label="Source video" hidden={step === 4 && !camera && !capturing}>
           <div className="mocap-pane-title"><span>Source video</span>{camera ? <small>Live camera · mirrored preview</small> : take && <small>{extension} · {clock(duration)}</small>}</div>
           <div ref={frameRef} className="mocap-video-frame">
             <video ref={videoRef} aria-label={camera ? 'Live camera preview' : 'Reference video playback'} src={camera ? undefined : take?.videoUrl} crossOrigin="anonymous" playsInline preload="auto" className={camera ? 'mirrored' : ''} />
@@ -710,17 +762,14 @@ export function MocapPanel({ snapshot, visible, animatorBusy, onReviewFit, onPro
         <section className="mocap-pane" aria-label="Motion preview">
           <div className="mocap-pane-title"><span>Motion preview</span><small>{capturing ? 'Live capture' : captureData ? `${captureData.frames.length} frames · ${captureData.fps} fps · world landmarks` : 'Not captured yet'}</small></div>
           <div className="mocap-preview-frame">
-            {visible && (capturing || captureData) ? <PoseSkeleton key={step === 4 ? 'loop' : 'synced'} frame={step === 4 ? loopFrame : previewFrame} floor={captureData ? poseFloor(captureData.frames) : 0.95}
+            {visible && (capturing || captureData) ? <PoseSkeleton key={step === 4 && !capturing ? 'loop' : 'synced'} frame={step === 4 && !capturing ? loopFrame : previewFrame} floor={captureData ? poseFloor(captureData.frames) : 0.95}
               label={capturing ? 'Live pose skeleton' : 'Captured pose skeleton synced to the source video'} />
               : <div className="mocap-empty"><ScanLine size={30} /><p>{take ? 'Capture motion to preview it here.' : 'No motion yet.'}</p><small>The 3D skeleton follows the source video during capture and review.</small></div>}
           </div>
         </section>
 
         {step === 4 && !camera && <section className="mocap-pane" aria-label="Character preview">
-          <div className="mocap-pane-title view-tabs">
-            <button className={view === 'character' ? 'active' : ''} disabled={!character} onClick={() => setView('character')}>{character?.rigged ? 'Rigged' : 'Original'}</button>
-            <button className={view === 'animation' ? 'active' : ''} disabled={!result} onClick={() => setView('animation')}>Mocap result</button>
-          </div>
+          <div className="mocap-pane-title"><span>{view === 'animation' ? 'Mocap result' : 'Character'}</span><small>{view === 'animation' ? 'Animated skinned mesh' : character ? character.rigged ? 'Skinned humanoid' : 'Needs skin + rig' : 'No character selected'}</small></div>
           <div className="mocap-preview-frame">{visible && <Viewport url={url} setup={character?.setup} fit={false} kind={view === 'animation' ? 'animation' : character?.rigged ? 'rig' : 'input'} selected="Hips" onSelect={() => undefined} onMove={() => undefined} />}</div>
         </section>}
       </div>
@@ -731,55 +780,17 @@ export function MocapPanel({ snapshot, visible, animatorBusy, onReviewFit, onPro
       {notice && <div className="banner success" role="status"><Check size={18} /><span>{notice}</span><button aria-label="Dismiss message" onClick={() => setNotice('')}><X size={16} /></button></div>}
 
       {step < 4 && !camera && take && <Timeline videoRef={videoRef} duration={duration} clip={clip} onClip={changeClip} thumbnails={thumbnails} disabled={locked} clipLoop={clipLoop} />}
-      {step === 3 && captured && !camera && <div className="mocap-next"><p>Happy with the motion? Choose a rigged character and send it to Animator.</p><button className="primary" disabled={locked} onClick={() => setStep(4)}>Continue to Send to Animator <ArrowRight size={15} /></button></div>}
 
-      {step === 4 && !camera && <section className="mocap-send" aria-label="Send to Animator">
-        <div className="mocap-send-column">
-          <span className="section-kicker">T-POSE CHARACTER</span>
-          <label className="field-label" htmlFor="mocap-character">Character</label>
-          <select id="mocap-character" aria-label="Character" disabled={locked || !snapshot.characters.length} value={characterId} onChange={e => { const c = snapshot.characters.find(item => item.id === e.target.value); if (c) selectCharacter(c) }}>
-            {!snapshot.characters.length && <option value="">No characters yet</option>}
-            {snapshot.characters.map(c => <option key={c.id} value={c.id}>{c.name} · {c.rigged ? 'skinned humanoid' : 'needs skin + rig'}</option>)}
-          </select>
-          <button className="secondary full" disabled={locked} onClick={() => void perform(async () => { const c = await window.studio.mocapImportCharacter(); if (c) selectCharacter(c) })}><Plus size={15} /> Import T-pose <span className="muted">FBX / GLB</span></button>
-          {character && !character.rigged && <>
-            <p className="fine-print">Mocap needs a validated skin and rig. Joints were auto-fitted on import; review them in Animator for the best result.</p>
-            <button className="primary full" disabled={locked} onClick={() => void perform(async () => { await window.studio.rig(character.id); setView('character'); setNotice('Skin weights validated. This character is ready for mocap.') })}><Bone size={15} /> Build skin + rig</button>
-          </>}
-          {character && <button className="text-button full" disabled={locked} onClick={() => onReviewFit(character)}><Bone size={13} /> Review fit in Animator</button>}
-        </div>
-        <div className="mocap-send-column">
-          <span className="section-kicker">RETARGET</span>
-          <label className="field-label" htmlFor="mocap-smoothing">Smoothing <span>{Math.round(options.smoothing * 100)}%</span></label>
-          <input id="mocap-smoothing" aria-label="Smoothing" type="range" min="0" max="1" step="0.05" disabled={locked} value={options.smoothing} onChange={e => setOptions({ ...options, smoothing: Number(e.target.value) })} />
-          <label className="field-label" htmlFor="mocap-legs">Legs</label>
-          <select id="mocap-legs" aria-label="Leg tracking" disabled={locked} value={options.legs} onChange={e => setOptions({ ...options, legs: e.target.value as MocapOptions['legs'] })}>
-            <option value="auto">Auto: lock legs when they are out of view</option>
-            <option value="track">Always track legs</option>
-            <option value="lock">Lock legs (upper body only)</option>
-          </select>
-          <label className="checkbox"><input type="checkbox" disabled={locked} checked={options.hipHeight} onChange={e => setOptions({ ...options, hipHeight: e.target.checked })} /> Follow crouches (hip height)</label>
-          <label className="checkbox"><input type="checkbox" disabled={locked} checked={options.mirror} onChange={e => setOptions({ ...options, mirror: e.target.checked })} /> Mirror left and right</label>
-          <p className="fine-print">Motion stays in place: monocular video cannot recover reliable travel, foot contact or hidden limbs. Body only; no fingers or face.</p>
-        </div>
-        <div className="mocap-send-column">
-          <span className="section-kicker">EXPORT</span>
-          <button className="primary full mocap-send-button" disabled={locked || !captured || !character?.rigged} onClick={() => void sendToAnimator()}><Send size={15} /> Send to Animator <ArrowRight size={15} /></button>
-          <p className="fine-print">{!character ? 'Import a T-pose character first.' : !character.rigged ? 'Build the skin and rig first.' : 'Bakes the skinned mesh with this motion in local Blender and exports FBX + GLB, then opens the result in Animator.'}</p>
-          <div className="section-heading"><span className="section-kicker">MOCAP RESULTS</span><span className="count">{results.length}</span></div>
-          <div className="take-list mocap-results">{results.map(job => <button key={job.id} className={`take ${resultId === job.id ? 'selected' : ''} ${job.stage}`} disabled={job.stage !== 'complete' || locked} onClick={() => { setResultId(job.id); setView('animation') }}>
-            <span className="take-icon">{job.stage === 'complete' ? <Clapperboard size={16} /> : job.stage === 'failed' ? <CircleAlert size={16} /> : <LoaderCircle size={16} />}</span>
+      {step === 4 && <section className="takes" aria-label="Mocap results">
+        <div className="section-heading"><div><span className="section-kicker">MOCAP RESULTS</span><span className="count">{results.length}</span></div><small>Saved automatically on this PC</small></div>
+        {!results.length ? <div className="no-takes"><span className="take-placeholder"><Clapperboard size={19} /></span><div><strong>No exported characters yet.</strong><p>Exports for the selected character appear here, ready to preview and open in Animator.</p></div></div> :
+          <div className="take-list">{results.map(job => <button key={job.id} className={`take ${resultId === job.id ? 'selected' : ''} ${job.stage}`} disabled={job.stage !== 'complete' || locked} onClick={() => { setResultId(job.id); setView('animation') }}>
+            <span className="take-icon">{job.stage === 'complete' ? <Clapperboard size={17} /> : job.stage === 'failed' ? <CircleAlert size={17} /> : <LoaderCircle size={17} />}</span>
             <span><strong>{job.label || 'Mocap take'}</strong><small>{job.stage === 'complete' ? `${job.mocapOptions?.legs === 'lock' ? 'Upper body · ' : ''}smoothing ${Math.round((job.mocapOptions?.smoothing ?? 0) * 100)}%` : job.stage}</small>{job.stage !== 'complete' && <small className="failure-text">{job.message}</small>}</span>
             <span className="take-time">{new Date(job.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-          </button>)}</div>
-          {result && <>
-            <button className="text-button full" disabled={locked || !character} onClick={() => character && onOpenAnimator(character, result.id)}>Open result in Animator <ArrowRight size={13} /></button>
-            {result.outputFiles?.map(file => <button key={file} className="download" onClick={() => void perform(async () => { const path = await window.studio.saveOutput(result.id, file); if (path) setNotice(`Saved ${path}`) })}><ArrowDownToLine size={16} /><span>{outputLabel(file)}</span></button>)}
-            {result.warnings?.map(w => <p className="fine-print" key={w}>{w}</p>)}
-          </>}
-        </div>
+          </button>)}</div>}
       </section>}
     </main>
     <video ref={thumbRef} src={take?.videoUrl} crossOrigin="anonymous" muted playsInline preload="auto" hidden aria-hidden="true" />
-  </div>
+  </WorkspaceLayout>
 }

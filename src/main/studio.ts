@@ -473,7 +473,7 @@ export class Studio {
       job.outputFiles = ['animated.glb', 'animated.fbx', 'animated.blend', 'mocap-motion.json', 'landmarks.json']
       for (const file of job.outputFiles) if ((await stat(join(dir, file))).size < 50) throw new Error(`Mocap output is empty: ${file}`)
       job.previewUrl = this.asset(`${job.id}-output`, join(dir, 'animated.glb'))
-      job.warnings = [...motion.warnings, ...report.warnings]
+      job.warnings = [...new Set([...motion.warnings, ...report.warnings])]
       await writeFile(join(dir, 'manifest.json'), JSON.stringify({ kind: 'mocap', take: { id: take.id, name: take.name, source: take.source, capture: take.capture },
         poseModel: capture.model, clipStart: capture.start ?? 0, subject: capture.subject ?? 'primary', provenance: take.capture?.provenance, options, legs: motion.legs, detectedFrames: motion.detected, frames: motion.frames, fps: motion.fps, source: character.name, setup, report }, null, 2))
     })
