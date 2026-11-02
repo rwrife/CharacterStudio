@@ -56,6 +56,23 @@ try {
   assert.equal(await page.locator('.brand').innerText(), 'characterstudio')
   assert.equal(await page.locator('.brand .version').count(), 0, 'No header subtitle should be rendered.')
   await click('Designer', 'tab')
+  const modelPanel = page.getByLabel('Designer model profiles', { exact: true })
+  const modelField = find(await ui(), 'Image model family', 'combobox').ref
+  for (const width of [1100, 1440, 1700]) {
+    await page.setViewportSize({ width, height: 1000 })
+    assert.equal(find(await ui(), 'Hide model settings', 'button').expanded, 'true')
+    const expandedWidth = (await page.getByLabel('Designer canvas', { exact: true }).boundingBox()).width
+    await click('Hide model settings')
+    assert.equal(await modelPanel.isVisible(), false)
+    assert.equal(find(await ui(), 'Show model settings', 'button').expanded, 'false')
+    assert.ok((await page.getByLabel('Designer canvas', { exact: true }).boundingBox()).width > expandedWidth + 200)
+    assert.equal((await ui()).elements.some(el => el.name === 'Image model family'), false)
+    const hiddenField = await client.callTool({ name: 'studio_select', arguments: { ref: modelField, values: ['sdxl'] } })
+    assert.equal(hiddenField.isError, true, 'Hidden model controls must not remain agent-operable.')
+    await click('Show model settings')
+    assert.equal(await modelPanel.isVisible(), true)
+  }
+  await page.setViewportSize({ width: 1440, height: 1000 })
   await fill('Character title optional', 'Visible MCP concept')
   await fill('Character & scenario', 'An original stylized robot exploring a garden.')
   await fill('Art style', 'Low-poly colorful game art.')

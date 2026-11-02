@@ -116,7 +116,7 @@ npm run dev
 
 ### First-launch setup checklist
 
-The first time Studio opens with a new workspace, it shows **Get Character Studio ready**. Reopen it any time from **Setup checklist** in the top bar. Studio inspects this PC and groups what it finds:
+The first time Studio opens with a new workspace, it shows **Get Character Studio ready**. Reopen it any time from the task-list icon button (**Setup checklist**) at the right of the top bar. Studio inspects this PC and groups what it finds:
 
 | Group | Detected | One-click actions |
 |---|---|---|
@@ -225,6 +225,12 @@ The server controls **Studio's window only**, not the OS, external browser pages
 ## Designer workflow
 
 Switch to **Designer** in the top bar. The existing character lab remains in **Animator**; switching tabs preserves in-progress briefs, rig edits, and motion settings. These are two workspaces in one desktop app, not two competing inference services. Designer and Animator share one job slot to avoid GPU contention.
+
+Select **Hide model settings** above the canvas to collapse the **Local model profiles** sidebar and give the preview more room; **Show model settings** restores it. Hiding keeps unsaved model choices and the current brief intact, including when switching workspaces. An **Unsaved** indicator remains on the toggle until you reopen the panel and **Save model choices**; generation still requires saved choices. The toggle works during generation and downloads without interrupting them. **Review model settings** on an error reopens the panel and focuses the relevant selector. The panel starts expanded on a fresh app launch.
+
+![Designer with model settings hidden and a Show model settings button above the wider canvas](docs/screenshots/designer-models-collapsed.png)
+
+Actual desktop capture from an isolated UI fixture before generation, not an inference result.
 
 1. Open **Backend connections** and connect the existing local ComfyUI. In Designer, refresh **Local model profiles**, choose installed weights, and **Save model choices**. Supported missing-model warnings offer **Download required models** to install and select the required files after approval. Designer does not require Kimodo's Llama encoder. The shared backend dialog still reports Animator-specific readiness separately.
 2. Choose **Text description** to describe the character, or **Reference image** (local PNG/JPEG/WebP, up to 20 MB and 32 megapixels) to supply a photo and describe what to use from it in **What to use from this photo**. Either way, Designer generates a new scene; a reference photo is conditioning, not a finished scene. Supply **Art style** separately. For example: a Brazilian MMA fighter raised in the jungles of Brazil, rendered as a vibrant 90s game character with exaggerated upper-body muscles.
