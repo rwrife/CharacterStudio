@@ -44,7 +44,7 @@ async function main() {
   const appRoot = platform === 'darwin'
     ? join(paths[0], 'CharacterStudio.app', 'Contents', 'Resources', 'app')
     : join(paths[0], 'resources', 'app')
-  for (const file of ['out/main/index.js', 'out/preload/index.cjs', 'out/renderer/index.html', 'out/renderer/icon.png', 'backend/character.py', 'scripts/mcp-client.mjs'])
+  for (const file of ['out/main/index.js', 'out/preload/index.cjs', 'out/renderer/index.html', 'out/renderer/icon.png', 'backend/character.py', 'backend/skin_weights.py', 'scripts/mcp-client.mjs'])
     await access(join(appRoot, ...file.split('/')))
   await access(bundledBlenderPath(appRoot, platform, arch))
   console.log(`Packaged application with native Blender: ${paths[0]}`)

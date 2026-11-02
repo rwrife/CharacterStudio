@@ -9,6 +9,9 @@ from pathlib import Path
 import bpy
 from mathutils import Matrix, Quaternion, Vector
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from skin_weights import repair_weights
+
 C = Matrix(((1, 0, 0), (0, 0, -1), (0, 1, 0)))
 BONES = [
     ("Hips", "Spine1", None), ("Spine1", "Spine2", "Hips"),
@@ -28,8 +31,8 @@ for side in ("Left", "Right"):
     ]
 
 
-def emit(stage, message, progress=0):
-    print("STUDIO:" + json.dumps({"stage": stage, "message": message, "progress": progress}), flush=True)
+def emit(stage, message, progress=0, code=None):
+    print("STUDIO:" + json.dumps({"stage": stage, "message": message, "progress": progress, "code": code}), flush=True)
 
 
 def write_json(path, value):
@@ -149,6 +152,10 @@ def import_character(req):
     emit("importing", "Character imported. Fit the humanoid landmarks before rigging.", 100)
 
 
+class UnweightedSkinError(ValueError):
+    pass
+
+
 def validate_skin(rig, objects):
     total, unweighted = 0, 0
     influenced = set()
@@ -157,16 +164,20 @@ def validate_skin(rig, objects):
             raise ValueError(f"{obj.name} has no skinning modifier.")
         groups = {g.index: g.name for g in obj.vertex_groups if g.name in rig.data.bones and rig.data.bones[g.name].use_deform}
         for vertex in obj.data.vertices:
+            if any(not math.isfinite(g.weight) or g.weight < 0 for g in vertex.groups if g.group in groups):
+                raise ValueError(f"{obj.name} contains invalid skin weights. Rebuild the rig.")
             weights = [(groups[g.group], g.weight) for g in vertex.groups if g.group in groups and g.weight > 1e-6]
             total += 1
             if not weights:
                 unweighted += 1
             influenced.update(name for name, _ in weights)
     if not total or unweighted:
-        raise ValueError(
+        raise UnweightedSkinError(
             f"Automatic skinning left {unweighted:,} of {total:,} vertices unweighted. "
-            "No successful character result was saved. Fit joints inside the mesh, separate touching limbs, "
-            "and repair non-manifold/intersecting geometry in Blender before reimporting."
+            "No successful character result was saved. Your fitted points are preserved. "
+            "Adjust them and rebuild, or choose Accept points + fallback skinning. "
+            "If fallback still fails or bends incorrectly, separate touching limbs and repair "
+            "non-manifold/intersecting geometry in Blender before reimporting."
         )
     required = {"Hips", "Head", "LeftArm", "RightArm", "LeftLeg", "RightLeg"}
     if required - influenced:
@@ -174,7 +185,34 @@ def validate_skin(rig, objects):
     return {"vertices": total, "weightedVertices": total - unweighted, "deformingBones": len(influenced), "bones": len(rig.data.bones)}
 
 
+def repair_skin(rig, objects, fallback):
+    connected, proximity = 0, 0
+    bones = [(bone.name, tuple(rig.matrix_world @ bone.head_local), tuple(rig.matrix_world @ bone.tail_local))
+             for bone in rig.data.bones if bone.use_deform] if fallback else []
+    for obj in objects:
+        groups = {g.index: g.name for g in obj.vertex_groups if g.name in rig.data.bones and rig.data.bones[g.name].use_deform}
+        if any(not math.isfinite(g.weight) or g.weight < 0 for vertex in obj.data.vertices for g in vertex.groups if g.group in groups):
+            raise ValueError(f"{obj.name} contains invalid skin weights. Rebuild the rig.")
+        weights = [{groups[g.group]: g.weight for g in vertex.groups if g.group in groups and g.weight > 1e-6}
+                   for vertex in obj.data.vertices]
+        updates, repaired, approximated = repair_weights(
+            [tuple(obj.matrix_world @ v.co) for v in obj.data.vertices],
+            [tuple(edge.vertices) for edge in obj.data.edges], weights, bones)
+        for vertex, influence in updates.items():
+            for name, weight in influence.items():
+                group = obj.vertex_groups.get(name)
+                if group is None:
+                    group = obj.vertex_groups.new(name=name)
+                group.add([vertex], weight, "REPLACE")
+        connected += repaired
+        proximity += approximated
+    return {"connectedVertices": connected, "fallbackVertices": proximity}
+
+
 def rig_character(req):
+    skinning = req.get("skinning", "automatic")
+    if skinning not in ("automatic", "fallback"):
+        raise ValueError("Unknown skinning mode.")
     bpy.ops.wm.open_mainfile(filepath=req["input"])
     setup = req["setup"]
     xyz = [math.radians(float(n)) for n in setup["rotation"]]
@@ -205,16 +243,43 @@ def rig_character(req):
     rig.select_set(True)
     bpy.context.view_layer.objects.active = rig
     emit("rigging", "Solving Blender bone-heat skin weights (CPU)", 35)
-    bpy.ops.object.parent_set(type="ARMATURE_AUTO")
+    warnings = []
+    try:
+        bpy.ops.object.parent_set(type="ARMATURE_AUTO")
+    except RuntimeError as exc:
+        if "bone heat weighting: failed to find solution" not in str(exc).lower():
+            raise
+        warnings.append("Blender bone-heat weighting failed; missing-weight recovery was attempted.")
+        emit("rigging", warnings[-1], 45)
+    for obj in objects:
+        if obj.parent != rig:
+            world = obj.matrix_world.copy()
+            obj.parent = rig
+            obj.matrix_world = world
+        if not any(m.type == "ARMATURE" and m.object == rig for m in obj.modifiers):
+            modifier = obj.modifiers.new(name="StudioHumanoid", type="ARMATURE")
+            modifier.object = rig
+    bpy.context.view_layer.update()
+    emit("rigging", "Repairing missing skin weights along connected mesh surfaces", 50)
+    repair = repair_skin(rig, objects, skinning == "fallback")
+    if repair["connectedVertices"]:
+        warnings.append(f"Repaired {repair['connectedVertices']:,} unweighted vertices from connected mesh surfaces. Inspect joint bending; complete weights do not guarantee good deformation.")
+    if repair["fallbackVertices"]:
+        warnings.append(f"Approximate fallback weights assigned to {repair['fallbackVertices']:,} vertices using your fitted bones. Separate pieces or touching limbs can bend incorrectly. Review deformation before using or exporting this character.")
     for obj in objects:
         bpy.context.view_layer.objects.active = obj
+        if not obj.vertex_groups:
+            continue
         bpy.ops.object.vertex_group_limit_total(limit=4)
         bpy.ops.object.vertex_group_normalize_all(lock_active=False)
     report = validate_skin(rig, objects)
-    report["warnings"] = [
+    report["skinning"] = skinning
+    report["repair"] = repair
+    report["warnings"] = warnings + [
         "Guided body rig: fingers, facial controls, and cloth simulation are not generated.",
         "Inspect joint placement and bending. Automatic weights may need artist cleanup.",
     ]
+    rig["studio_skinning_warnings"] = json.dumps(warnings)
     emit("rigging", "Validating skin and saving the actual rigged mesh", 80)
     out = Path(req["output"])
     out.mkdir(parents=True, exist_ok=True)
@@ -336,7 +401,7 @@ def animate_character(req):
         "frames": frames, "fps": fps, "duration": (frames - 1) / fps,
         "sampledMeshDisplacement": displacement,
         "staticHold": displacement < 0.00001,
-        "warnings": ["Foot contact cleanup is not installed; foot sliding can require manual cleanup.", "Body rig only; finger/facial animation is not retargeted."],
+        "warnings": json.loads(rig.get("studio_skinning_warnings", "[]")) + ["Foot contact cleanup is not installed; foot sliding can require manual cleanup.", "Body rig only; finger/facial animation is not retargeted."],
     })
     write_json(out / ("animation-report.json" if prefix == "animated" else f"{prefix}-report.json"), report)
     emit("retargeting", "Animated character exported and mesh deformation verified", 100)
@@ -347,6 +412,6 @@ if __name__ == "__main__":
         request = json.loads(Path(sys.argv[sys.argv.index("--") + 1]).read_text(encoding="utf-8"))
         {"import": import_character, "rig": rig_character, "animate": animate_character}[request["command"]](request)
     except Exception as exc:
-        emit("failed", str(exc))
+        emit("failed", str(exc), code="unweighted-skin" if isinstance(exc, UnweightedSkinError) else None)
         traceback.print_exc()
         sys.exit(1)

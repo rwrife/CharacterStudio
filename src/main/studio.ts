@@ -4,10 +4,10 @@ import { access, copyFile, readdir, stat, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { setTimeout as delay } from 'node:timers/promises'
-import type { Character, Check, GenerateRequest, Job, RigSetup, Settings, Snapshot, MotionPlan, BatchRequest, Batch, MotionNode, GraphContext } from '../shared/types'
+import type { Character, Check, GenerateRequest, Job, RigSetup, SkinningMode, Settings, Snapshot, MotionPlan, BatchRequest, Batch, MotionNode, GraphContext } from '../shared/types'
 import { defaultLandmarks } from '../shared/rig'
 import { createBatchItems } from '../shared/plans'
-import { errorText, generateSchema, settingsSchema, setupSchema, planSchema, batchSchema } from './validation'
+import { errorText, generateSchema, settingsSchema, setupSchema, skinningSchema, planSchema, batchSchema } from './validation'
 import { api, cancelMotion, generateMotion } from './comfy'
 import { runProcess } from './process'
 import { validateCharacterGlb, validateDesignGlb } from './export-validation'
@@ -116,6 +116,7 @@ export class Studio {
     c.setup = setupSchema.parse(value)
     c.rigged = false
     c.rigPreviewUrl = undefined
+    c.rigWarnings = undefined
     this.persist()
     return this.snapshot().characters.find(c => c.id === id)!
   }
@@ -163,6 +164,7 @@ export class Studio {
       onLine: line => {
         if (!line.startsWith('STUDIO:')) return
         const event = JSON.parse(line.slice(7))
+        if (job.kind === 'rig' && event.stage === 'failed' && event.code === 'unweighted-skin') job.rigFailure = 'unweighted'
         if (event.stage !== 'failed') this.update(job, event.stage, event.message, event.progress)
       }
     })
@@ -204,17 +206,20 @@ export class Studio {
     return character
   }
 
-  async rig(id: string, batchOwned = false) {
+  async rig(id: string, batchOwned = false, value: SkinningMode = 'automatic') {
+    const skinning = skinningSchema.parse(value)
     const character = this.character(id)
     await this.job('rig', id, character.name, async (job, signal, settings) => {
       const output = join(this.root, 'jobs', job.id)
-      await this.blender(job, { command: 'rig', input: join(this.root, 'characters', id, 'character.blend'), setup: character.setup, output }, signal, settings)
+      await this.blender(job, { command: 'rig', input: join(this.root, 'characters', id, 'character.blend'), setup: character.setup, skinning, output }, signal, settings)
       await validateCharacterGlb(join(output, 'rigged.glb'), false)
+      const report = JSON.parse(readFileSync(join(output, 'rig-report.json'), 'utf8'))
       signal.throwIfAborted()
       character.rigDirectory = output
       character.rigged = true
       character.rigPreviewUrl = this.asset(`${id}-rig`, join(output, 'rigged.glb'))
-      job.warnings = JSON.parse(readFileSync(join(output, 'rig-report.json'), 'utf8')).warnings
+      character.rigWarnings = report.warnings
+      job.warnings = report.warnings
     }, batchOwned)
   }
 

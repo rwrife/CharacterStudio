@@ -20,6 +20,7 @@ export const settingsSchema = z.object({
 }).strict()
 
 const point = z.tuple([z.number().finite().min(-4).max(4), z.number().finite().min(-4).max(4), z.number().finite().min(-4).max(4)])
+export const skinningSchema = z.enum(['automatic', 'fallback']).default('automatic')
 export const setupSchema = z.object({
   rotation: z.tuple([z.number().min(-180).max(180), z.number().min(-180).max(180), z.number().min(-180).max(180)]),
   landmarks: z.record(z.string(), point)
