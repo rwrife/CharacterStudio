@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { AiConsent as Consent } from '../shared/ai'
-import { aiStages } from '../shared/ai'
+import { aiModelLabel, aiStages } from '../shared/ai'
 
 export function AiConsent() {
   const [request, setRequest] = useState<Consent | null>(null)
@@ -17,7 +17,7 @@ export function AiConsent() {
     <span className="section-kicker">REMOTE EXECUTION / EXPLICIT OPT-IN</span>
     <h2>Send this stage to a remote provider?</h2>
     <p><strong>{aiStages[request.stage]}</strong> will send data to <strong>{request.endpoint}</strong>.</p>
-    <p>Provider: {request.provider}. Model: {request.model || 'Selected workflow / server default'}.</p>
+    <p>Provider: {request.provider}. Model: {aiModelLabel(request) || 'Selected workflow / server default'}.</p>
     <ul>{request.inputs.map(input => <li key={input}>{input}</li>)}</ul>
     <p>This endpoint may process data using other services. Only approve an endpoint and workflow you trust.</p>
     <p><strong>{request.provider === 'tripo' ? 'Tripo is a paid service. API credits are separate from Tripo web subscriptions. ' : ''}Charges may apply. </strong>

@@ -6,7 +6,7 @@ import { once } from 'node:events'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { aiConfigurationSchema, aiRouteSchema, defaultAiConfiguration, localRoute, providerUrl, resolveAiRoute, workflowSchema,
+import { aiConfigurationSchema, aiModelLabel, aiRouteLabel, aiRouteSchema, aiStages, defaultAiConfiguration, localRoute, providerUrl, resolveAiCredentialRoute, resolveAiRoute, tripoImageModels, workflowSchema,
   type AiProvenance, type AiRoute, type AiStage, type WorkflowTemplate } from '../src/shared/ai'
 import { AiProviders, bindWorkflow, hashConfiguration, motionProviderTemplate, nativeTemplate, validateMotionMetadata } from '../src/main/ai-providers'
 import { AiCredentials, type CredentialEncryption } from '../src/main/ai-credentials'
@@ -148,6 +148,43 @@ test('templates have explicit bindings and output contracts, preserve checkpoint
   assert.throws(() => aiConfigurationSchema.parse({ version: 1, stages: { motion: { ...route('https://gpu.example', 'comfyui'), workflow: motion } } }), /ignores inline JSON/)
 })
 
+test('Tripo keys can be saved before choosing a route without changing local defaults or endpoint scopes', async t => {
+  const root = await temp(t), vault = new AiCredentials(root, encryption())
+  const config = structuredClone(defaultAiConfiguration)
+  const chosen = resolveAiCredentialRoute(config, 'tripo')
+  assert.equal(chosen.endpoint, 'https://openapi.tripo3d.ai')
+  assert.equal(chosen.provider, 'tripo')
+  vault.set(chosen, 'test-only-preset-token')
+  assert.equal(vault.get({ ...chosen, model: 'gemini_3.1_flash_image_preview' }), 'test-only-preset-token')
+  assert.equal(vault.has(resolveAiCredentialRoute(config, 'tripo-com')), false)
+  assert.equal(vault.has({ ...chosen, provider: 'api' }), false)
+  assert.deepEqual(config, defaultAiConfiguration)
+  for (const stage of Object.keys(aiStages) as AiStage[]) assert.deepEqual(resolveAiRoute(config, stage), localRoute)
+  const remote = route('https://gpu.example', 'comfyui')
+  const configured = aiConfigurationSchema.parse({ version: 1, stages: { scene: chosen }, globalComfy: remote })
+  assert.equal(vault.get(resolveAiCredentialRoute(configured, 'scene')), 'test-only-preset-token')
+  assert.deepEqual(resolveAiCredentialRoute(configured, 'global'), remote)
+  assert.deepEqual(resolveAiCredentialRoute(configured, 'motion'), remote)
+  assert.throws(() => resolveAiCredentialRoute(config, 'global'), /Save a global/)
+  for (const target of ['https://different.example', 'unknown', { provider: 'tripo', endpoint: 'https://different.example' }])
+    assert.throws(() => resolveAiCredentialRoute(config, target))
+  vault.set(resolveAiCredentialRoute(config, 'tripo-com'), 'test-only-china-token')
+  vault.set(chosen, '')
+  assert.equal(vault.has(chosen), false)
+  assert.equal(vault.get(resolveAiCredentialRoute(config, 'tripo-com')), 'test-only-china-token')
+})
+
+test('Tripo presets use friendly labels without changing stored or custom model IDs', () => {
+  for (const [model, label] of Object.entries(tripoImageModels)) {
+    const chosen = { ...route('https://openapi.tripo3d.ai', 'tripo'), model }
+    assert.equal(aiModelLabel(chosen), label)
+    assert.equal(aiRouteLabel({ version: 1, stages: { scene: chosen } }, 'scene'), `Remote / Tripo (paid) / ${label}`)
+    assert.equal(chosen.model, model)
+  }
+  assert.equal(aiModelLabel({ provider: 'tripo', model: 'custom-image-model' }), 'custom-image-model')
+  assert.equal(aiModelLabel({ provider: 'api', model: 'gemini_3.1_flash_image_preview' }), 'gemini_3.1_flash_image_preview')
+})
+
 test('credentials are encrypted, endpoint-bound, never returned in configuration and fail closed without OS encryption', async t => {
   const root = await temp(t), crypto = encryption(), vault = new AiCredentials(root, crypto)
   const chosen = route('https://gpu.example', 'comfyui')
@@ -193,6 +230,62 @@ test('bounded transport rejects oversized, empty and invalid outputs without ech
   for (const url of ['file:///secret', 'https://127.0.0.1/secret', 'https://tripo3d.ai.attacker.example/a', 'https://user:pass@cdn.tripo3d.ai/a'])
     await assert.rejects(downloadTripoOutput(url, AbortSignal.timeout(100), 20))
   assert.throws(() => new AiNetwork(route('http://lan.example'), 'test-only-token'), /HTTPS/)
+})
+
+test('Tripo HTTP and API rejections retain diagnostic details without leaking credentials or retrying', async t => {
+  const secret = 'test-only-secret+/value'
+  const network = new AiNetwork(route('https://openapi.tripo3d.ai', 'tripo'), secret)
+  const trace = '20516a36-f45c-4454-83c8-45877b75eac8'
+  const payload = {
+    code: 1004, message: `Invalid model parameter; ${secret}; ${encodeURIComponent(secret)}; ${Buffer.from(secret).toString('base64')}`,
+    suggestion: 'Check the image model for this task. Bearer tsk_another-key https://example.com/?token=private',
+    request_id: trace, ignored: { token: secret }
+  }
+  let status = 400, calls = 0, body: unknown = payload
+  t.mock.method(globalThis, 'fetch', async () => {
+    calls++
+    return Response.json(body, { status, headers: { 'X-Tripo-Trace-ID': trace } })
+  })
+  const reject = () => assert.rejects(network.tripo('/v3/generation/text-to-image', AbortSignal.timeout(5000), { prompt: 'fixture' }),
+    (error: Error) => {
+      assert.match(error.message, /Tripo \/v3\/generation\/text-to-image failed/)
+      assert.match(error.message, /code 1004/)
+      assert.match(error.message, /Invalid model parameter/)
+      assert.match(error.message, /Check the image model for this task/)
+      assert.ok(error.message.includes(`Trace ID: ${trace}`))
+      for (const value of [secret, encodeURIComponent(secret), Buffer.from(secret).toString('base64'), 'tsk_another-key', 'token=private'])
+        assert.ok(!error.message.includes(value))
+      if (status === 400) assert.match(error.message, /HTTP 400/)
+      return true
+    })
+  await reject()
+  status = 200
+  await reject()
+  body = { status: 'error', message: 'Request rejected', request_id: trace }
+  await assert.rejects(network.tripo('/v3/account/balance', AbortSignal.timeout(5000)), /Trace ID.*Request rejected/)
+  assert.equal(calls, 3, 'Neither a paid submission nor a failed read is retried automatically.')
+  body = { code: 1004, message: 'Invalid parameter. '.repeat(5000), request_id: trace }
+  await assert.rejects(network.tripo('/v3/account/balance', AbortSignal.timeout(5000)), (error: Error) => {
+    assert.ok(error.message.length <= 1600)
+    assert.ok(error.message.includes(`Trace ID: ${trace}`))
+    return true
+  })
+})
+
+test('Tripo non-JSON, malformed and empty HTTP errors never echo the response body', async t => {
+  const network = new AiNetwork(route('https://openapi.tripo3d.ai', 'tripo'), 'test-only-key')
+  let body = '<html>private-response-test-only-key</html>'
+  t.mock.method(globalThis, 'fetch', async () => new Response(body, { status: 400 }))
+  for (const value of [body, '', '{"message":{"token":"private-response-test-only-key"}}']) {
+    body = value
+    await assert.rejects(network.tripo('/v3/generation/text-to-image', AbortSignal.timeout(5000), { prompt: 'fixture' }),
+      (error: Error) => {
+        assert.match(error.message, /HTTP 400/)
+        assert.ok(!error.message.includes('private-response'))
+        assert.ok(!error.message.includes('test-only-key'))
+        return true
+      })
+  }
 })
 
 interface FixtureJob {
@@ -417,7 +510,7 @@ test('Tripo v3 uses paid credential headers only on API requests, exact routes a
       await assert.rejects(providers.execute({ ...options, image, route: { ...chosen, model } }), /text-only/)
     await assert.rejects(providers.execute({ ...options, image, prompt: 'x'.repeat(1025) }), /1,024/)
     assert.equal(calls.length, 0)
-    for (const model of ['gemini_2.5_flash_image_preview', 'gpt_4o', 'midjourney']) {
+    for (const model of Object.keys(tripoImageModels)) {
       await providers.execute({ ...options, route: { ...chosen, model } })
       assert.deepEqual(calls.findLast(call => call.url.endsWith('/text-to-image'))?.body, { model, prompt: options.prompt })
     }

@@ -19,7 +19,7 @@ import { desktopAdapter } from './mcp-desktop'
 import { DesktopMcpControl } from './mcp-control'
 import { AiCredentials } from './ai-credentials'
 import { RemoteConsent } from './ai-consent'
-import { aiStageSchema, workflowSchema } from '../shared/ai'
+import { resolveAiCredentialRoute, workflowSchema } from '../shared/ai'
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'studio', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }])
 let window: BrowserWindow
@@ -148,22 +148,16 @@ if (ownsWorkspace) app.whenReady().then(async () => {
   handle('studio:snapshot', () => studio.snapshot())
   handle('ai:settings', (value: import('../shared/ai').AiConfiguration) => studio.saveAiSettings(value))
   handle('ai:hardware', () => studio.ai.hardware())
-  const credentialStageSchema = z.union([aiStageSchema, z.literal('global')])
-  const credentialRoute = (value: unknown) => {
-    const stage = credentialStageSchema.parse(value)
-    const route = stage === 'global' ? studio.ai.snapshot().globalComfy : studio.ai.route(stage)
-    if (!route) throw new Error('Save a global ComfyUI endpoint first.')
-    return route
-  }
-  handle('ai:credential-status', (stage: unknown) => studio.ai.credentials!.has(credentialRoute(stage)))
-  handle('ai:credential', (stage: unknown, value: unknown) => {
+  const credentialRoute = (value: unknown) => resolveAiCredentialRoute(studio.ai.snapshot(), value)
+  handle('ai:credential-status', (target: unknown) => studio.ai.credentials!.has(credentialRoute(target)))
+  handle('ai:credential', (target: unknown, value: unknown) => {
     const snapshot = studio.snapshot()
     if (snapshot.jobs.some(job => !['complete', 'failed', 'cancelled'].includes(job.stage)) ||
         snapshot.batches.some(batch => batch.status === 'running') || snapshot.designer?.designs.some(design => design.status === 'running'))
       throw new Error('Wait for generation to finish before changing provider credentials.')
-    studio.ai.credentials!.set(credentialRoute(stage), z.string().max(8192).parse(value))
+    studio.ai.credentials!.set(credentialRoute(target), z.string().max(8192).parse(value))
   })
-  handle('ai:balance', (stage: unknown) => studio.ai.balance(studio.ai.route(aiStageSchema.parse(stage)), lifetime.signal))
+  handle('ai:balance', (target: unknown) => studio.ai.balance(credentialRoute(target), lifetime.signal))
   handle('ai:consent-reply', (id: unknown, approved: unknown) => remoteConsent.reply(z.uuid().parse(id), z.boolean().parse(approved)))
   handle('ai:import-workflow', async () => {
     const choice = await fileDialogs.showOpenDialog(window, {

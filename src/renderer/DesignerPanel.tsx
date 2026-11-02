@@ -45,6 +45,10 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
   const url = design?.[`${preview}Url`]
   const source = design?.sources?.[preview]
   const sceneBlocked = request.description.trim().length < 3 || request.style.trim().length < 3 || input === 'image' && !reference
+  const textureConfigured = resolveAiRoute(snapshot.ai, 'texture').provider !== 'builtin'
+  const visibleRoutes: AiStage[] = preview === 'scene' ? ['scene'] :
+    preview === 'tpose' ? design?.tposeUrl && !design.tposeIsolated ? ['cutout'] : ['tpose', 'cutout'] :
+      textureConfigured ? ['mesh', 'texture'] : ['mesh']
 
   async function perform(action: () => Promise<void>) {
     setBusy(true); setError(''); setNotice('')
@@ -213,16 +217,16 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
       </div>}
       {notice && <div className="banner success" role="status"><Check size={17} /><span>{notice}</span></div>}
       {design && design.status !== 'running' && design.status !== 'failed' && <p className="design-status">{design.message}</p>}
-      {design && <div className="ai-stage-routes">{(['scene', 'tpose', 'cutout', 'mesh'] as const).map(stage =>
-        <div key={stage}><span className="fine-print">{stage === 'mesh' ? '3D' : stage === 'cutout' ? 'Cutout' : stage === 'tpose' ? 'T-pose' : 'Scene'} </span><AiRouteBadge snapshot={snapshot} stage={stage} onClick={() => onProviders(stage)} /></div>)}</div>}
+      {design && <div className="ai-stage-routes" role="group" aria-label="Current step models">{visibleRoutes.map(stage =>
+        <div key={stage}><span className="fine-print">{stage === 'mesh' ? '3D' : stage === 'texture' ? 'PBR texturing' : stage === 'cutout' ? 'Cutout' : stage === 'tpose' ? 'T-pose' : 'Scene'} </span><AiRouteBadge snapshot={snapshot} stage={stage} onClick={() => onProviders(stage)} /></div>)}</div>}
       {design && <div className="design-actions">
         <button className="primary" disabled={locked || settingsDirty || sceneBlocked} onClick={() => void run('scene')}><RefreshCw size={15} /> {design.sceneUrl ? 'Regenerate scene' : 'Generate scene'}</button>
         {design.sceneUrl && (!design.tposeUrl || design.tposeIsolated) && <button className="primary" disabled={locked || settingsDirty} onClick={() => void run('tpose')}><Check size={15} /> {design.tposeUrl ? 'Regenerate T-pose' : 'Use scene & generate T-pose'} <ArrowRight size={15} /></button>}
         {design.tposeUrl && !design.tposeIsolated && <button className="primary" disabled={locked || settingsDirty} onClick={() => void run('tpose')}><RefreshCw size={15} /> Remove T-pose background</button>}
         {design.tposeIsolated && <button className="primary" disabled={locked || settingsDirty} onClick={() => void run('model')}><Box size={15} /> {design.modelUrl ? 'Regenerate 3D' : 'Use T-pose & generate 3D'} <ArrowRight size={15} /></button>}
         {design.modelUrl && <button className="primary" disabled={locked} onClick={() => void perform(async () => onAnimate(await window.studio.designerAnimate(design.id)))}><ArrowRight size={15} /> {design.characterId ? 'Open in Animator' : 'Send to Animator'}</button>}
-        {design.modelUrl && (['texture', 'rig'] as const).map(stage => <div key={stage}>
-          <AiRouteBadge snapshot={snapshot} stage={stage} onClick={() => onProviders(stage)} />
+        {design.modelUrl && preview === 'model' && (['texture', 'rig'] as const).map(stage => <div key={stage}>
+          {(stage === 'rig' || !textureConfigured) && <AiRouteBadge snapshot={snapshot} stage={stage} onClick={() => onProviders(stage)} />}
           <button className="secondary" disabled={locked || resolveAiRoute(snapshot.ai, stage).provider === 'builtin'} onClick={() => void perform(async () => {
             const next = await window.studio.designerProcessModel(design.id, stage)
             setId(next); setPreview('model')

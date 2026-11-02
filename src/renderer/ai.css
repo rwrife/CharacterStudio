@@ -1,6 +1,9 @@
 .ai-modal { width: min(880px, 94vw); }
 .ai-modal h3 { margin-top: 24px; }
 .ai-modal .settings-actions { flex-wrap: wrap; }
+.ai-key-setup { background: #1b2221; border: 1px solid #415345; border-radius: 10px; padding: 14px 18px; margin: 20px 0; }
+.ai-modal .ai-key-setup h3 { margin-top: 0; }
+.ai-key-setup .field-label { margin-top: 14px; }
 .ai-hardware { background: #1b2221; border: 1px solid #35433e; border-radius: 10px; padding: 14px 18px; margin: 20px 0; }
 .ai-hardware p { font-size: 12px; line-height: 1.6; margin: 4px 0; }
 .ai-warning { background: #302b1c; border: 1px solid #62512b; border-radius: 8px; padding: 12px; font-size: 12px; line-height: 1.6; margin: 12px 0; }

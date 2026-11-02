@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { ArrowDownToLine, Check, RefreshCw, X } from 'lucide-react'
-import { aiConfigurationSchema, aiRouteLabel, aiStages, aiStageSchema, defaultAiConfiguration, localRoute, resolveAiRoute, tripoImageModels, workflowSchema,
-  type AiConfiguration, type AiHardware, type AiRoute, type AiStage } from '../shared/ai'
+import { aiConfigurationSchema, aiModelLabel, aiRouteLabel, aiStages, aiStageSchema, defaultAiConfiguration, localRoute, resolveAiRoute, tripoCredentialEndpoints, tripoImageModels, workflowSchema,
+  type AiConfiguration, type AiHardware, type AiRoute, type AiStage, type TripoCredentialTarget } from '../shared/ai'
 import { imageProfiles, meshProfiles } from '../shared/designer'
 import type { Snapshot } from '../shared/types'
 import './ai.css'
@@ -12,10 +12,62 @@ const choices: Record<string, { label: string; provider: AiRoute['provider']; lo
   'remote-comfyui': { label: 'Remote ComfyUI (opt-in)', provider: 'comfyui', location: 'remote', endpoint: 'https://' },
   'local-api': { label: 'Local Studio API gateway', provider: 'api', location: 'local', endpoint: 'http://127.0.0.1:8000' },
   'remote-api': { label: 'Remote Studio API gateway (opt-in)', provider: 'api', location: 'remote', endpoint: 'https://' },
-  tripo: { label: 'Tripo v3 (remote / paid API credits)', provider: 'tripo', location: 'remote', endpoint: 'https://openapi.tripo3d.ai' }
+  tripo: { label: 'Tripo v3 (remote / paid API credits)', provider: 'tripo', location: 'remote', endpoint: tripoCredentialEndpoints.tripo }
 }
 const future = new Set<AiStage>(['segmentation', 'landmarks', 'cloth'])
 const explain = (error: unknown) => (error instanceof Error ? error.message : String(error)).replace(/^Error invoking remote method '[^']+': Error: /, '')
+
+function TripoKeySetup({ target, disabled, onBusy }: {
+  target?: TripoCredentialTarget; disabled: boolean; onBusy: (busy: boolean) => void
+}) {
+  const [secret, setSecret] = useState('')
+  const [hasSecret, setHasSecret] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  useEffect(() => {
+    let current = true
+    setSecret(''); setHasSecret(false); setError(''); setNotice(''); setLoading(!!target)
+    if (target) void window.studio.aiCredentialStatus(target)
+      .then(value => { if (current) setHasSecret(value) })
+      .catch(error => { if (current) setError(explain(error)) })
+      .finally(() => { if (current) setLoading(false) })
+    return () => { current = false }
+  }, [target])
+  async function perform(work: (target: TripoCredentialTarget) => Promise<void>) {
+    if (!target) { setError('Use an official Tripo endpoint before saving a key.'); return }
+    onBusy(true); setError(''); setNotice('')
+    try { await work(target) } catch (error) { setError(explain(error)) } finally { onBusy(false) }
+  }
+  return <section className="ai-key-setup" aria-label="Tripo API key setup">
+    <h3>Tripo API key</h3>
+    <p className="fine-print">Tripo is the default key provider. Paste your key now; you do not need to choose or save a generation provider first. Saving a key does not enable remote generation.</p>
+    {target ? <p className="fine-print">Key endpoint: <strong>{tripoCredentialEndpoints[target]}</strong></p> :
+      <p role="alert">Use Tripo's official HTTPS .ai or .com endpoint in the provider settings below.</p>}
+    <label className="field-label" htmlFor="ai-tripo-secret">Tripo API key / token <span>OS-encrypted</span></label>
+    <input id="ai-tripo-secret" type="password" autoComplete="off" spellCheck={false} maxLength={8192}
+      disabled={disabled || !target} value={secret} onChange={event => setSecret(event.target.value)} />
+    <p className="fine-print" role="status">{loading ? 'Checking saved Tripo key...' :
+      hasSecret ? 'An encrypted Tripo API key is saved for this endpoint. Its value is never returned.' : 'No Tripo API key saved for this endpoint.'}</p>
+    <div className="settings-actions">
+      <button className="primary" disabled={disabled || loading || !target || !secret.trim()} onClick={() => void perform(async target => {
+        await window.studio.aiCredential(target, secret)
+        setSecret(''); setHasSecret(true); setNotice('Tripo API key encrypted using OS-backed storage. Generation selections are unchanged.')
+      })}>Save Tripo API key</button>
+      <button className="secondary" disabled={disabled || loading || !target || !hasSecret} onClick={() => void perform(async target => {
+        await window.studio.aiCredential(target, '')
+        setSecret(''); setHasSecret(false); setNotice('Tripo API key removed.')
+      })}>Remove Tripo API key</button>
+      <button className="secondary" disabled={disabled || loading || !target || !hasSecret} onClick={() => void perform(async target => {
+        const balance = await window.studio.aiBalance(target)
+        setNotice(`Tripo API credit balance: ${balance.balance}; frozen: ${balance.frozen}. Generation is a paid option.`)
+      })}>Check Tripo API credits</button>
+    </div>
+    <p className="fine-print">Tripo is a paid service with separate API credits. Your key is stored only in the machine's encrypted vault, not in project settings.</p>
+    {error && <p className="modal-error" role="alert">{error}</p>}
+    {notice && <p className="banner success" role="status">{notice}</p>}
+  </section>
+}
 
 export function AiProvidersPanel({ snapshot, initialStage = 'scene', locked, onClose }: {
   snapshot: Snapshot; initialStage?: AiStage; locked: boolean; onClose: () => void
@@ -28,6 +80,7 @@ export function AiProvidersPanel({ snapshot, initialStage = 'scene', locked, onC
   const [notice, setNotice] = useState('')
   const [secret, setSecret] = useState('')
   const [hasSecret, setHasSecret] = useState(false)
+  const [customTripoModel, setCustomTripoModel] = useState(false)
   const [workflowText, setWorkflowText] = useState(() => {
     const workflow = resolveAiRoute(snapshot.ai, initialStage).workflow
     return workflow ? JSON.stringify(workflow, null, 2) : ''
@@ -42,6 +95,11 @@ export function AiProvidersPanel({ snapshot, initialStage = 'scene', locked, onC
     workflowText !== (route.workflow ? JSON.stringify(route.workflow, null, 2) : '') ||
     JSON.stringify(native) !== JSON.stringify(snapshot.designer?.config) || encoder !== (snapshot.settings.textEncoder ?? 'llm2vec')
   const disabled = locked || busy
+  const tripoImage = route.provider === 'tripo' && ['scene', 'tpose'].includes(stage)
+  const customModel = tripoImage && (customTripoModel || !Object.hasOwn(tripoImageModels, route.model))
+  const tripoEndpoint = route.provider === 'tripo' ? route.endpoint.replace(/\/+$/, '') : tripoCredentialEndpoints.tripo
+  const tripoTarget = tripoEndpoint === tripoCredentialEndpoints.tripo ? 'tripo' :
+    tripoEndpoint === tripoCredentialEndpoints['tripo-com'] ? 'tripo-com' : undefined
   const free = Math.max(0, ...(hardware?.devices.map(device => device.freeGB) ?? []))
   async function perform(work: () => Promise<void>) {
     setBusy(true); setError(''); setNotice('')
@@ -66,12 +124,12 @@ export function AiProvidersPanel({ snapshot, initialStage = 'scene', locked, onC
   }
   function switchStage(value: string) {
     const next = value === 'global' ? 'global' : aiStageSchema.parse(value)
-    setStage(next); setError(''); setNotice('')
+    setStage(next); setError(''); setNotice(''); setCustomTripoModel(false)
     const workflow = next === 'global' ? config.globalComfy?.workflow : resolveAiRoute(config, next).workflow
     setWorkflowText(workflow ? JSON.stringify(workflow, null, 2) : '')
   }
   function choice(value: string) {
-    setWorkflowText(''); setSecret('')
+    setWorkflowText(''); setSecret(''); setCustomTripoModel(false)
     if (value === 'inherit') { changeRoute(); return }
     if (stage === 'global' && value === 'builtin') { changeRoute(); return }
     const item = choices[value]
@@ -101,6 +159,7 @@ export function AiProvidersPanel({ snapshot, initialStage = 'scene', locked, onC
     <div className="modal-heading"><div><span className="section-kicker">LOCAL FIRST / PER-STAGE CONTROL</span><h2>Model & workflow providers</h2></div>
       <button aria-label="Close provider settings" disabled={busy} onClick={onClose}><X size={20} /></button></div>
     <p className="panel-description">Choose hardware-fit local presets or opt in to a remote server. No model is switched automatically and no generation starts when you save.</p>
+    <TripoKeySetup target={tripoTarget} disabled={disabled} onBusy={setBusy} />
     <div className="ai-hardware" aria-label="Local hardware">
       <div className="section-heading"><strong>This machine</strong><button className="text-button" disabled={disabled} onClick={() => void perform(async () => setHardware(await window.studio.aiHardware()))}><RefreshCw size={14} /> Detect local hardware</button></div>
       {hardware ? <><p>{hardware.platform} / {hardware.architecture} / {hardware.cpu}</p><p>{hardware.freeRamGB.toFixed(1)} GiB free / {hardware.ramGB.toFixed(1)} GiB system RAM</p>
@@ -127,19 +186,27 @@ export function AiProvidersPanel({ snapshot, initialStage = 'scene', locked, onC
       <label className="field-label" htmlFor="ai-endpoint">Provider endpoint <span>no key in URL</span></label>
       <input id="ai-endpoint" disabled={disabled || inherited} maxLength={2048} value={route.endpoint} onChange={event => changeRoute({ ...route, endpoint: event.target.value })} />
       {stage !== 'global' && <>
-        {route.provider === 'tripo' && ['scene', 'tpose'].includes(stage) && <>
+        {tripoImage && <>
           <label className="field-label" htmlFor="ai-tripo-image">Tripo image model</label>
-          <select id="ai-tripo-image" disabled={disabled || inherited} value={Object.hasOwn(tripoImageModels, route.model) ? route.model : 'custom'} onChange={event => {
+          <select id="ai-tripo-image" disabled={disabled || inherited} value={customModel ? 'custom' : route.model} onChange={event => {
+            setCustomTripoModel(event.target.value === 'custom')
             if (event.target.value !== 'custom') changeRoute({ ...route, model: event.target.value })
           }}>
             {Object.entries(tripoImageModels).map(([value, label]) => <option key={value} value={value} disabled={stage === 'tpose' && ['midjourney', 'flux.1_dev'].includes(value)}>{label}</option>)}
-            <option value="custom">Custom ID below</option>
+            <option value="custom">Custom model ID (advanced)</option>
           </select>
-          <p className="fine-print">Midjourney and FLUX.1 dev accept text only. They cannot edit a scene into a T-pose or use a reference image; Studio rejects that combination instead of switching models. Tripo image prompts are limited to 1,024 characters.</p>
+          <p className="fine-print">{['midjourney', 'flux.1_dev'].includes(route.model) ?
+            `${aiModelLabel(route)} cannot use a reference image or edit a scene into a T-pose. Studio rejects those requests instead of switching models. ` :
+            customModel ? 'Use a Tripo-supported image model ID; reference-image support depends on that model. ' :
+              `${aiModelLabel(route)} supports text prompts and reference-image editing. `}Tripo image prompts are limited to 1,024 characters.</p>
         </>}
-        <label className="field-label" htmlFor="ai-model">Provider model / checkpoint ID</label>
-        <input id="ai-model" disabled={disabled || inherited} maxLength={200} value={route.model} onChange={event => changeRoute({ ...route, model: event.target.value })} />
-        <p className="fine-print">Use an ID your provider actually supports. ComfyUI uses installed checkpoint names (including subfolders); changing architectures may require a custom template.</p>
+        {(!tripoImage || customModel) && <>
+          <label className="field-label" htmlFor="ai-model">Provider model / checkpoint ID</label>
+          <input id="ai-model" disabled={disabled || inherited} maxLength={200} value={route.model} onChange={event => changeRoute({ ...route, model: event.target.value })} />
+          <p className="fine-print">{route.provider === 'comfyui' ?
+            'Use installed checkpoint names (including subfolders); changing architectures may require a custom template.' :
+            'Use a model ID your provider actually supports.'}</p>
+        </>}
       </>}
       {route.provider === 'tripo' && <div className="ai-warning"><strong>Paid Tripo API credits</strong><p>Use your own Tripo API key or token. API credit balance is separate from web subscriptions. Tripo hosts the image models above; its H3 v3.1 mesh model is not a verified Tencent Hunyuan 3.1 integration. Check current availability and prices in your Tripo account. No API key is included.</p></div>}
       {route.provider === 'api' && <p className="ai-warning">This endpoint must implement the documented Studio API gateway v1 contract, not an arbitrary vendor REST API. A gateway can route to Nano Banana, GPT Image, Midjourney or Hunyuan 3.1 using the model ID above. These are not bundled vendor integrations.</p>}
@@ -155,7 +222,7 @@ export function AiProvidersPanel({ snapshot, initialStage = 'scene', locked, onC
         <textarea id="ai-workflow" className="ai-code" rows={6} maxLength={1024 * 1024} disabled={disabled} value={workflowText} onChange={event => setWorkflowText(event.target.value)} placeholder="Optional for native image/3D workflows. Paste a Studio workflow envelope: version, prompt, bindings, outputs." />
         <p className="fine-print">Use ComfyUI API-format nodes wrapped with the bindings and output mappings documented in README. No JavaScript or shell mapping. Do not put credentials in JSON. Native routed motion requires the supplied studio_provider_nodes extension on that server; custom motion must return SOMA-77 NPZ/BVH + metadata and accept inline constraints.</p>
       </>}
-      <div className="panel-rule" />
+      {route.provider !== 'tripo' && <><div className="panel-rule" />
       <label className="field-label" htmlFor="ai-secret">API key / bearer token <span>OS-encrypted</span></label>
       <input id="ai-secret" type="password" autoComplete="off" spellCheck={false} maxLength={8192} disabled={disabled || dirty || inherited} value={secret} onChange={event => setSecret(event.target.value)} />
       <p className="fine-print">{dirty ? 'Save the endpoint first to bind this credential to that exact provider.' : hasSecret ? 'An encrypted credential is saved for this endpoint. Its value is never returned.' : 'No credential saved for this endpoint.'} HTTPS is required for keys. A changed endpoint never inherits a key from another endpoint.</p>
@@ -166,11 +233,7 @@ export function AiProvidersPanel({ snapshot, initialStage = 'scene', locked, onC
         <button className="secondary" disabled={disabled || dirty || inherited || !hasSecret} onClick={() => void perform(async () => {
           await window.studio.aiCredential(stage, ''); setSecret(''); setHasSecret(false); setNotice('Credential removed.')
         })}>Remove credential</button>
-        {route.provider === 'tripo' && stage !== 'global' && <button className="secondary" disabled={disabled || dirty || !hasSecret} onClick={() => void perform(async () => {
-          const balance = await window.studio.aiBalance(stage)
-          setNotice(`Tripo API credit balance: ${balance.balance}; frozen: ${balance.frozen}. Generation is a paid option.`)
-        })}>Check Tripo API credits</button>}
-      </div>
+      </div></>}
     </>}
     {route.provider === 'builtin' && native && <>
       <h3>Built-in local model choices</h3>

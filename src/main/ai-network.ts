@@ -1,17 +1,13 @@
 import { z } from 'zod'
 import type { AiRoute } from '../shared/ai'
 
-export async function boundedBody(response: Response, limit: number): Promise<Buffer> {
-  if (!response.ok) {
-    await response.body?.cancel()
-    throw new Error(`Provider returned HTTP ${response.status}. Check endpoint, authentication, credits and model availability.`)
-  }
+async function responseBody(response: Response, limit: number): Promise<Buffer> {
   if (Number(response.headers.get('content-length')) > limit) {
     await response.body?.cancel()
     throw new Error('Provider response exceeds the permitted size.')
   }
   const reader = response.body?.getReader()
-  if (!reader) throw new Error('Provider returned an empty response.')
+  if (!reader) return Buffer.alloc(0)
   const chunks: Uint8Array[] = []
   let size = 0
   try {
@@ -23,9 +19,21 @@ export async function boundedBody(response: Response, limit: number): Promise<Bu
       chunks.push(value)
     }
   } finally { await reader.cancel() }
-  if (!size) throw new Error('Provider returned an empty response.')
   return Buffer.concat(chunks)
 }
+export async function boundedBody(response: Response, limit: number): Promise<Buffer> {
+  if (!response.ok) {
+    await response.body?.cancel()
+    throw new Error(`Provider returned HTTP ${response.status}. Check endpoint, authentication, credits and model availability.`)
+  }
+  const bytes = await responseBody(response, limit)
+  if (!bytes.length) throw new Error('Provider returned an empty response.')
+  return bytes
+}
+const tripoEnvelope = z.object({
+  code: z.number().int().optional(), status: z.string().optional(), data: z.unknown().optional(),
+  message: z.string().optional(), suggestion: z.string().optional(), request_id: z.string().optional()
+})
 export class AiNetwork {
   constructor(readonly route: AiRoute, private token?: string) {
     if (token && !route.endpoint.startsWith('https:')) throw new Error('Credentials may only be sent over HTTPS.')
@@ -39,6 +47,13 @@ export class AiNetwork {
       body: body === undefined ? undefined : form ? body : JSON.stringify(body),
       redirect: 'error', signal: AbortSignal.any([signal, AbortSignal.timeout(120_000)])
     })
+    if (!response.ok && this.route.provider === 'tripo') {
+      const bytes = await responseBody(response, Math.min(limit, 64 * 1024))
+      let payload: unknown
+      try { payload = bytes.length ? JSON.parse(bytes.toString('utf8')) : {} }
+      catch { throw this.tripoError(path, { message: 'Tripo returned a non-JSON error response.' }, response.status, response.headers.get('X-Tripo-Trace-ID')) }
+      throw this.tripoError(path, payload, response.status, response.headers.get('X-Tripo-Trace-ID'))
+    }
     return boundedBody(response, limit)
   }
   async json(path: string, signal: AbortSignal, body?: unknown, method?: string, limit?: number): Promise<unknown> {
@@ -46,10 +61,30 @@ export class AiNetwork {
     try { return JSON.parse(bytes.toString('utf8')) } catch { throw new Error('Provider returned invalid JSON. Check the endpoint and API contract.') }
   }
   async tripo(path: string, signal: AbortSignal, body?: unknown): Promise<unknown> {
-    const envelope = z.object({ code: z.number().optional(), data: z.unknown() }).parse(await this.json(path, signal, body))
-    if (envelope.code !== undefined && envelope.code !== 0)
-      throw new Error(`Tripo API rejected the request (code ${envelope.code}). Check model support, API credits and account permissions in Tripo.`)
+    const envelope = tripoEnvelope.parse(await this.json(path, signal, body))
+    if (envelope.code !== undefined && envelope.code !== 0 || envelope.status === 'error')
+      throw this.tripoError(path, envelope)
     return envelope.data
+  }
+  private tripoError(path: string, payload: unknown, status?: number, trace?: string | null): Error {
+    const parsed = tripoEnvelope.safeParse(payload)
+    const details = parsed.success ? parsed.data : undefined
+    const identifiers = [status === undefined ? '' : `HTTP ${status}`, details?.code === undefined ? '' : `code ${details.code}`].filter(Boolean)
+    const traceId = z.uuid().safeParse(trace ?? details?.request_id)
+    const reason = [details?.message, details?.suggestion].filter(Boolean).join(' ') ||
+      'Check model support, request parameters, API credits and account permissions in Tripo.'
+    let message = `Tripo ${path} failed${identifiers.length ? ` (${identifiers.join('; ')})` : ''}.`
+    if (traceId.success) message += ` Trace ID: ${traceId.data}.`
+    message += ` ${reason}`
+    if (this.token) {
+      for (const secret of [this.token, encodeURIComponent(this.token), Buffer.from(this.token).toString('base64')])
+        message = message.replaceAll(secret, '[redacted]')
+    }
+    message = message.replace(/\bBearer\s+\S+/gi, 'Bearer [redacted]')
+      .replace(/\btsk_[a-zA-Z0-9_.-]+/g, '[redacted]')
+      .replace(/https?:\/\/\S+/gi, '[URL omitted]')
+      .replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, ' ')
+    return new Error(message.length > 1600 ? message.slice(0, 1597) + '...' : message)
   }
 }
 export function decodeBase64(value: unknown, maxBytes: number): Buffer {

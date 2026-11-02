@@ -26,6 +26,13 @@ export const tripoImageModels = {
   'flux.1_dev': 'FLUX.1 dev (text-only)'
 } as const
 export const aiStageSchema = z.enum(Object.keys(aiStages) as [AiStage, ...AiStage[]])
+export const tripoCredentialEndpoints = {
+  tripo: 'https://openapi.tripo3d.ai',
+  'tripo-com': 'https://openapi.tripo3d.com'
+} as const
+export type TripoCredentialTarget = keyof typeof tripoCredentialEndpoints
+export const aiCredentialTargetSchema = z.union([aiStageSchema, z.enum(['global', 'tripo', 'tripo-com'])])
+export type AiCredentialTarget = z.infer<typeof aiCredentialTargetSchema>
 export const workflowParameters = ['prompt', 'image', 'mesh', 'seed', 'steps', 'seconds', 'prefix', 'model', 'textEncoder', 'constraints', 'referenceStrength'] as const
 export type WorkflowParameter = typeof workflowParameters[number]
 export type Workflow = Record<string, { class_type: string; inputs: Record<string, unknown> }>
@@ -101,7 +108,7 @@ export const aiRouteSchema = z.object({
     const endpoint = providerUrl(route.endpoint)
     if (route.location === 'local' && !isLoopback(endpoint))
       throw new Error('Local routes must use loopback. Select Remote explicitly for LAN or cloud endpoints.')
-    if (route.provider === 'tripo' && (route.location !== 'remote' || !['https://openapi.tripo3d.ai', 'https://openapi.tripo3d.com'].includes(endpoint)))
+    if (route.provider === 'tripo' && (route.location !== 'remote' || !Object.values(tripoCredentialEndpoints).some(origin => origin === endpoint)))
       throw new Error('Tripo requires its official HTTPS v3 endpoint and Remote execution.')
   } catch (error) { ctx.addIssue({ code: 'custom', message: error instanceof Error ? error.message : 'Invalid provider endpoint.' }) }
   if (route.provider !== 'comfyui' && route.workflow)
@@ -147,9 +154,20 @@ export const defaultAiConfiguration: AiConfiguration = { version: 1, stages: {} 
 export function resolveAiRoute(config: AiConfiguration | undefined, stage: AiStage): AiRoute {
   return config?.stages[stage] ?? (['scene', 'tpose', 'cutout', 'mesh', 'motion'].includes(stage) ? config?.globalComfy : undefined) ?? localRoute
 }
+export function resolveAiCredentialRoute(config: AiConfiguration | undefined, value: unknown): AiRoute {
+  const target = aiCredentialTargetSchema.parse(value)
+  if (target === 'tripo' || target === 'tripo-com')
+    return { provider: 'tripo', location: 'remote', endpoint: tripoCredentialEndpoints[target], model: '', minVramGB: 0 }
+  const route = target === 'global' ? config?.globalComfy : resolveAiRoute(config, target)
+  if (!route) throw new Error('Save a global ComfyUI endpoint first.')
+  return route
+}
 export function aiRouteLabel(config: AiConfiguration | undefined, stage: AiStage): string {
   const route = resolveAiRoute(config, stage)
-  return `${route.location === 'remote' ? 'Remote' : 'Local'} / ${route.provider === 'builtin' ? 'built-in' : route.provider === 'api' ? 'custom API' : route.provider === 'tripo' ? 'Tripo (paid)' : 'ComfyUI'}${route.model ? ` / ${route.model}` : ''}`
+  return `${route.location === 'remote' ? 'Remote' : 'Local'} / ${route.provider === 'builtin' ? 'built-in' : route.provider === 'api' ? 'custom API' : route.provider === 'tripo' ? 'Tripo (paid)' : 'ComfyUI'}${route.model ? ` / ${aiModelLabel(route)}` : ''}`
+}
+export function aiModelLabel(route: Pick<AiRoute, 'provider' | 'model'>): string {
+  return route.provider === 'tripo' ? Object.entries(tripoImageModels).find(([id]) => id === route.model)?.[1] ?? route.model : route.model
 }
 export interface AiProvenance {
   stage: AiStage

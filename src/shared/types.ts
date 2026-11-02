@@ -154,9 +154,9 @@ export interface StudioApi {
   aiSettings(config: import('./ai').AiConfiguration): Promise<void>
   aiHardware(): Promise<import('./ai').AiHardware>
   aiImportWorkflow(): Promise<import('./ai').WorkflowTemplate | null>
-  aiCredentialStatus(stage: import('./ai').AiStage | 'global'): Promise<boolean>
-  aiCredential(stage: import('./ai').AiStage | 'global', value: string): Promise<void>
-  aiBalance(stage: import('./ai').AiStage): Promise<{ balance: number; frozen: number }>
+  aiCredentialStatus(target: import('./ai').AiCredentialTarget): Promise<boolean>
+  aiCredential(target: import('./ai').AiCredentialTarget, value: string): Promise<void>
+  aiBalance(target: import('./ai').AiCredentialTarget): Promise<{ balance: number; frozen: number }>
   onAiConsent(callback: (request: import('./ai').AiConsent | null) => void): () => void
   aiConsentReply(id: string, approved: boolean): Promise<void>
   designerProcessModel(id: string, stage: 'rig' | 'texture'): Promise<string>
