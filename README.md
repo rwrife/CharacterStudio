@@ -377,6 +377,7 @@ Import warnings name any joint that needs attention. If fitting is impossible, t
 ![Animator Fit the humanoid rig panel after Auto-fit landmarks to mesh, with every joint marker inside a textured TRELLIS.2 basketball-player mesh and the confirmation "Landmarks fitted to the mesh"](docs/screenshots/landmark-autofit.png)
 
 Auto-fit on a saved TRELLIS.2 Designer mesh, captured in an isolated workspace. That workspace's backend is not configured, which is why the header shows **Setup needs attention**. Before auto-fit, the template put this character's feet and leg joints below the mesh and its hands beyond the fingertips. The capture shows joint placement only: it is not a completed rig and does not show deformation quality.
+
 **Auto-fit landmarks to mesh** in **Fit & skin** refits the selected character for the orientation shown in the panel. Use it after correcting the facing, or to replace template landmarks saved before this feature. It changes only the unsaved landmark edits. Review the joints in the front and side views, then choose **Save fit without rigging** or **Build skin + rig**, which saves them first. If auto-fit can't place the joints, your current landmarks are kept and the error explains what was missing.
 
 Auto-fit is a geometric heuristic. It expects a single standing humanoid in a T- or A-pose, with arms clear of the torso and legs separated. It doesn't handle:
@@ -386,7 +387,9 @@ Auto-fit is a geometric heuristic. It expects a single standing humanoid in a T-
 - Quadrupeds or props.
 - Wide skirts or robes that join the legs.
 
-Shoulders, elbows and knees are estimated from proportions and cross-sections, so check bending before animating. With auto-fitted landmarks, the bundled Blender backend produced complete 22-bone skins for two saved TRELLIS.2 Designer meshes and the Bruiser sample: every vertex was weighted and no repair was needed. Complete weights don't establish deformation quality.
+Shoulders, elbows and knees are estimated from proportions and cross-sections, so check bending before animating. With auto-fitted landmarks, the bundled Blender backend produced complete 22-bone skins for two saved TRELLIS.2 Designer meshes and the Bruiser sample: every vertex was weighted and no repair was needed.
+
+A 759,039-vertex textured character from another image-to-3D generator was also tested. It was imported with a −90° suggested rotation. After auto-fit, **Build skin + rig** weighted every vertex automatically in about two minutes. In one posed test render it bent cleanly at the hips, knees, elbows and neck. Complete weights and a single test pose don't establish animation quality.
 
 ### Recovering from incomplete skinning
 
