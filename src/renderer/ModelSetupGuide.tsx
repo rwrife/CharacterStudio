@@ -81,7 +81,7 @@ export function ModelSetupGuide({ comfyRoot, needsSetup, checking, textEncoder =
         <p>An already-authorized copy in the Hugging Face cache used by ComfyUI can be reused without requesting access again.
           A complete installation also needs the tokenizer, configuration, and both LLM2Vec adapters;
           Studio does not currently have an arbitrary local-model-folder selector.</p>
-        <p>Studio also offers an experimental <strong>LFM bridge</strong> encoder in Backend connections.
+        <p>Studio also offers an experimental <strong>LFM bridge</strong> encoder in Model Settings under Motion.
           It avoids the Llama approval request while keeping Kimodo, but approximates its trained conditioning and can change motion details.
           vLLM, Ollama and generic chat embeddings are not compatible replacements.</p>
         <p>You can still import FBXs, fit and build rigs, and save configurations while access is pending. New text-generated motions remain unavailable.</p>
