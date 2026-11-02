@@ -8,7 +8,7 @@ import { once } from 'node:events'
 
 const output = resolve('artifacts', 'desktop-smoke')
 await mkdir(output, { recursive: true })
-const app = await electron.launch({ args: ['.'], env: { ...process.env, STUDIO_SKIP_SETUP_CHECKLIST: '1', STUDIO_DATA_DIR: resolve('artifacts', 'validation-state') }, timeout: 60000 })
+const app = await electron.launch({ args: ['.'], env: { ...process.env, STUDIO_SKIP_SETUP_CHECKLIST: '1', STUDIO_NO_AUTO_INSTALL: '1', STUDIO_DATA_DIR: resolve('artifacts', 'validation-state') }, timeout: 60000 })
 const unavailableBackend = createServer((_req, res) => { res.setHeader('Content-Type', 'application/json'); res.end('{}') })
 unavailableBackend.listen(0, '127.0.0.1'); await once(unavailableBackend, 'listening')
 let originalSettings
@@ -21,6 +21,7 @@ try {
   page.on('console', msg => { if (msg.type() === 'error') errors.push(msg.text()) })
   await page.getByRole('heading', { name: 'Character lab' }).waitFor()
   await page.getByRole('button', { name: 'Motion library & batches' }).click()
+  await page.getByText('Saved graphs & templates', { exact: true }).click()
   await page.getByRole('button', { name: 'Crouch branching template' }).click()
   await page.getByLabel('In-place root motion', { exact: true }).check()
   await page.getByRole('button', { name: 'Save graph', exact: true }).click()
@@ -41,6 +42,7 @@ try {
   await page.getByRole('button', { name: 'Export configuration JSON' }).click()
   await page.getByRole('status').filter({ hasText: 'Configuration saved to' }).waitFor()
   assert.deepEqual(JSON.parse(await readFile(exported, 'utf8')).plan, plan)
+  await page.getByRole('button', { name: 'Configure batch', exact: true }).click()
   await page.getByRole('button', { name: 'Generate graph · 3 variants' }).click()
   await expect.poll(async () => {
     const batch = (await page.evaluate(() => window.studio.snapshot())).batches[0]

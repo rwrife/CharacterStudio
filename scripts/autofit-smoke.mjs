@@ -56,8 +56,9 @@ try {
   const stored = async id => (await call('studio_get_state')).characters.find(c => c.id === id).setup
   const until = async probe => expect.poll(probe, { timeout: 20000, intervals: [100, 250] }).toBeTruthy()
   const prepare = async (name, landmark) => {
+    await click('Import character')
     await click(new RegExp(`^${name}`))
-    await click('Fit character first')
+    await click('Fit & skin')
     await call('studio_select', { ref: (await control('Selected landmark')).ref, values: [landmark] })
   }
 
