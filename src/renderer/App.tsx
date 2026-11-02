@@ -7,6 +7,7 @@ import { ModelSetupGuide } from './ModelSetupGuide'
 import { DesignerPanel } from './DesignerPanel'
 import { SetupWizard } from './SetupWizard'
 import { FileDialog } from './FileDialog'
+import { LaunchCheck } from './LaunchCheck'
 import { defaultLandmarks } from '../shared/rig'
 import { recommendTextEncoder } from '../shared/text-encoder'
 
@@ -45,6 +46,7 @@ export function App() {
   const [libraryNew, setLibraryNew] = useState(false)
   const [parentJobId, setParentJobId] = useState('')
   const [setupOpen, setSetupOpen] = useState(false)
+  const [launchCheck, setLaunchCheck] = useState(false)
   const character = snapshot?.characters.find(c => c.id === characterId)
   const jobs = snapshot?.jobs.filter(j => j.characterId === characterId && j.kind === 'generate') ?? []
   const completed = jobs.filter(j => j.stage === 'complete')
@@ -71,13 +73,16 @@ export function App() {
       if (s.characters.length) selectCharacter(s.characters[0])
     }).catch(e => setError(explain(e)))
     const remove = window.studio.onUpdate(setSnapshot)
-    window.studio.setupState().then(state => { if (state.firstLaunch || state.showOnLaunch) setSetupOpen(true) }).catch(e => setError(explain(e)))
+    window.studio.setupState().then(state => { if (state.firstLaunch || state.showOnLaunch) setSetupOpen(true); else if (state.checkOnLaunch) setLaunchCheck(true) }).catch(e => setError(explain(e)))
     const removeMcp = window.studio.onDesktopControlChanged(setMcpEnabled)
     void refreshChecks()
     return () => { remove(); removeMcp() }
   }, [])
   function closeSetup() {
     setSetupOpen(false)
+    reloadAfterSetup()
+  }
+  function reloadAfterSetup() {
     window.studio.snapshot().then(s => { setSnapshot(s); setSettings(s.settings) }).catch(e => setError(explain(e)))
     void refreshChecks()
   }
@@ -282,6 +287,7 @@ export function App() {
     </section></div>}
     {setupOpen && window.studio && <SetupWizard onClose={closeSetup} />}
     <FileDialog />
+    {launchCheck && !setupOpen && window.studio && <LaunchCheck onClose={() => { setLaunchCheck(false); reloadAfterSetup() }} onOpenChecklist={() => setSetupOpen(true)} />}
   </div>
 }
 

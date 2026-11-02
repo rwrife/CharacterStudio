@@ -60,6 +60,8 @@ const api: StudioApi = {
   setupRun: request => ipcRenderer.invoke('setup:run', request),
   setupCancel: () => ipcRenderer.invoke('setup:cancel'),
   setupPreferences: value => ipcRenderer.invoke('setup:preferences', value),
+  setupLaunchCheck: () => ipcRenderer.invoke('setup:launch-check'),
+  setupCancelLaunchCheck: () => ipcRenderer.invoke('setup:cancel-launch-check'),
   onSetupUpdate: callback => {
     const listener = (_: Electron.IpcRendererEvent, state: SetupState) => callback(state)
     ipcRenderer.on('setup:update', listener)

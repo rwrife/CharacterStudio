@@ -45,6 +45,10 @@ export interface SetupState {
   firstLaunch: boolean
   showOnLaunch: boolean
   completedAt?: string
+  /** Validate dependencies on launches that do not open the full checklist. */
+  checkOnLaunch: boolean
+  /** Items the user chose not to be warned about at launch until they are working again. */
+  ignoredAtLaunch: SetupItemId[]
   task?: SetupTask
   /** Last finished task, so the checklist can report success or failure after it closes. */
   result?: { item: SetupItemId; ok: boolean; message: string }
@@ -54,6 +58,8 @@ export interface SetupReport {
   ready: { designer: boolean; animator: boolean }
   checkedAt: string
 }
+/** Outcome of the cancellable dependency check run on later launches. */
+export type LaunchCheck = { cancelled: true } | { cancelled: false; report: SetupReport; issues: SetupItem[] }
 
 export interface SetupModel {
   id: SetupModelId
@@ -141,6 +147,11 @@ export const setupLinks = {
 export function summarizeSetup(items: SetupItem[]): SetupReport['ready'] {
   const ready = (workspace: 'designer' | 'animator') => items.every(item => !item.requiredFor.includes(workspace) || item.status === 'done')
   return { designer: ready('designer'), animator: ready('animator') }
+}
+
+/** Required dependencies that are not working, minus those the user ignored at launch. */
+export function launchIssues(items: SetupItem[], ignored: readonly string[]): SetupItem[] {
+  return items.filter(item => item.requiredFor.length > 0 && item.status !== 'done' && !ignored.includes(item.id))
 }
 
 export function formatBytes(bytes: number): string {

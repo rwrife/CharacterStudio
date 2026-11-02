@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { ArrowRight, Check, Circle, CircleAlert, Download, ExternalLink, LoaderCircle, RefreshCw, X } from 'lucide-react'
 import { formatBytes, type SetupAction, type SetupGroup, type SetupItem, type SetupReport, type SetupState } from '../shared/setup'
 
-const explain = (e: unknown) => (e instanceof Error ? e.message : String(e)).replace(/^Error invoking remote method '[^']+': Error: /, '')
+export const explain = (e: unknown) => (e instanceof Error ? e.message : String(e)).replace(/^Error invoking remote method '[^']+': Error: /, '')
 const groups: { id: SetupGroup; title: string; detail: string }[] = [
   { id: 'core', title: 'Core requirements', detail: 'Local tools both workspaces rely on.' },
   { id: 'animator', title: 'Animator', detail: 'Motion generation with Kimodo inside ComfyUI.' },
@@ -74,14 +74,17 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
       </section>
     })}
     <div className="setup-footer">
-      <label className="setup-toggle"><input type="checkbox" checked={state?.showOnLaunch ?? false} onChange={e => void window.studio.setupPreferences({ showOnLaunch: e.target.checked }).then(setState).catch(err => setError(explain(err)))} /> Show this checklist at launch</label>
+      <div className="setup-toggles">
+        <label className="setup-toggle"><input type="checkbox" checked={state?.showOnLaunch ?? false} onChange={e => void window.studio.setupPreferences({ showOnLaunch: e.target.checked }).then(setState).catch(err => setError(explain(err)))} /> Show this checklist at launch</label>
+        <label className="setup-toggle"><input type="checkbox" checked={state?.checkOnLaunch ?? true} onChange={e => void window.studio.setupPreferences({ checkOnLaunch: e.target.checked }).then(setState).catch(err => setError(explain(err)))} /> Otherwise, check dependencies at launch</label>
+      </div>
       <button className="primary" onClick={() => void close()}>{report?.ready.designer && report.ready.animator ? 'Start creating' : 'Continue to Studio'} <ArrowRight size={15} /></button>
     </div>
     <p className="fine-print">You can reopen this checklist from <strong>Setup checklist</strong> in the top bar. Readiness here is a setup check, not proof that every model loads or generates on your GPU; each stage still validates its inputs when it runs. Model licenses are set by their publishers—review them before commercial use.</p>
   </section></div>
 }
 
-function SetupRow({ item, task, busy, onAction, onCancel }: { item: SetupItem; task?: SetupState['task']; busy: boolean; onAction: (action: SetupAction) => void; onCancel: () => void }) {
+export function SetupRow({ item, task, busy, onAction, onCancel, extra }: { item: SetupItem; task?: SetupState['task']; busy: boolean; onAction: (action: SetupAction) => void; onCancel: () => void; extra?: ReactNode }) {
   const icon = item.status === 'done' ? <Check size={16} /> : item.status === 'optional' ? <Circle size={16} /> : <CircleAlert size={16} />
   return <div className={`setup-item ${item.status}`} data-item={item.id}>
     <span className="setup-icon" aria-label={item.status === 'done' ? 'Done' : item.status === 'optional' ? 'Optional' : 'Needs action'}>{icon}</span>
@@ -95,6 +98,7 @@ function SetupRow({ item, task, busy, onAction, onCancel }: { item: SetupItem; t
         item.actions.map(action => <button key={action.id + (action.model ?? '')} className={action.primary ? 'primary' : 'secondary'} disabled={(busy && !external.has(action.id)) || !!action.disabled} title={action.disabled} onClick={() => onAction(action)}>
           {action.label}{external.has(action.id) && <ExternalLink size={12} />}
         </button>)}
+      {!task && extra}
     </div>
   </div>
 }
