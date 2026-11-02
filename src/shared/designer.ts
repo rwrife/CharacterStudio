@@ -18,7 +18,12 @@ export interface DesignerConfig {
   meshVision?: string
   meshShapeVae?: string
   meshTextureVae?: string
+  meshShapeDetail?: MeshShapeDetail
+  meshTextureSize?: MeshTextureSize
+  meshFaceCount?: number
 }
+export type MeshShapeDetail = 512 | 1024 | 1536
+export type MeshTextureSize = 1024 | 2048 | 4096
 export interface DesignRequest {
   title: string
   description: string
@@ -94,8 +99,39 @@ export const meshTextureProfile = {
   shapeVae: 'trellis_2_shape_vae_bf16.safetensors', textureVae: 'trellis_2_texture_vae_bf16.safetensors',
   textureSize: 1024, faceCount: 50000
 }
+// Missing values keep the original 512 / 1K / 50k output so existing designs validate unchanged.
+export const meshQualityOptions = {
+  shapeDetail: [
+    { value: 512, label: 'Standard: 512 single pass' },
+    { value: 1024, label: 'High: 1024 refinement pass' },
+    { value: 1536, label: 'Maximum: 1536 refinement pass' }
+  ] as { value: MeshShapeDetail; label: string }[],
+  textureSize: [1024, 2048, 4096] as MeshTextureSize[],
+  faceCount: [25000, 50000, 100000, 150000, 200000]
+}
+export function texturedMeshSettings(config: Pick<DesignerConfig, 'meshShapeDetail' | 'meshTextureSize' | 'meshFaceCount'>) {
+  const shapeDetail = config.meshShapeDetail ?? 512
+  return {
+    shapeDetail,
+    textureSize: config.meshTextureSize ?? meshTextureProfile.textureSize,
+    faceCount: config.meshFaceCount ?? meshTextureProfile.faceCount,
+    remesh: shapeDetail > 1024 ? 768 : 512
+  }
+}
 export const tposeEditProfile = {
   label: 'FLUX.2 klein 4B (image edit)', gb: 14, steps: 4,
   model: 'flux-2-klein-4b-fp8.safetensors', textEncoder: 'qwen_3_4b.safetensors', vae: 'flux2-vae.safetensors'
 }
 export const tposeEditPrompt = 'Put this character in a T-pose, remove the background, only show the character. Preserve the same face, hairstyle, clothing, colors, body proportions and art style. Full body, front view, both arms straight out horizontally, hands and feet fully visible with a clear margin. Both hands flat with palms facing down, fingers straight and held together side by side, thumbs resting naturally alongside. No splayed or curled fingers and no fists. Do not redesign the character or add clothing, accessories or scenery.'
+// Built-in anatomy default appended to generation prompts but not shown in the UI.
+export const handAnatomyPrompt = 'Humanoid characters have exactly five fingers on each hand: four fingers and one thumb.'
+export const handAnatomyNegative = 'extra fingers, missing fingers, fused fingers, six fingers'
+export function specifiesHandAnatomy(request: Pick<DesignRequest, 'description' | 'style'>): boolean {
+  return /\b(fingers?|fingered|digits?|thumbs?|claws?|clawed|talons?|paws?|pincers?|tentacles?)\b/i.test(`${request.description} ${request.style}`)
+}
+export function scenePrompt(request: Pick<DesignRequest, 'description' | 'style'>): string {
+  return `Character and scene: ${request.description}. Art style: ${request.style}. Full body character concept illustration in their environment, clear character silhouette, no text or lettering.${specifiesHandAnatomy(request) ? '' : ` ${handAnatomyPrompt}`}`
+}
+export function tposePrompt(request: Pick<DesignRequest, 'description' | 'style'>): string {
+  return specifiesHandAnatomy(request) ? tposeEditPrompt : `${tposeEditPrompt} ${handAnatomyPrompt}`
+}

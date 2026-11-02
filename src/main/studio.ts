@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, createWriteStream } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { access, copyFile, readdir, stat, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
@@ -11,7 +11,7 @@ import { errorText, generateSchema, settingsSchema, setupSchema, skinningSchema,
 import { api, cancelMotion, generateMotion } from './comfy'
 import { runProcess } from './process'
 import { validateCharacterGlb, validateDesignGlb } from './export-validation'
-import { meshTextureProfile } from '../shared/designer'
+import { texturedMeshSettings } from '../shared/designer'
 import { Designer } from './designer'
 import { bundledBlenderPath, comfyPythonPath, defaultComfyRoot } from './native-runtime'
 import { AiProviders, hashConfiguration, motionProviderTemplate } from './ai-providers'
@@ -212,7 +212,7 @@ export class Studio {
     }
     const design = this.designer.snapshot().designs.find(design => design.id === id)
     const character = await this.importCharacter(this.designer.output(id, 'model'), this.designer.title(id),
-      design?.modelTextured && !design.ai?.length && design.sources?.model?.kind === 'generated' && design.config.meshProfile === 'textured' ? meshTextureProfile.textureSize : undefined)
+      design?.modelTextured && !design.ai?.length && design.sources?.model?.kind === 'generated' && design.config.meshProfile === 'textured' ? texturedMeshSettings(design.config).textureSize : undefined)
     this.designer.assign(id, character.id)
     return character
   }
@@ -586,21 +586,21 @@ export class Studio {
     try { await api(settings.comfyUrl, '/system_stats'); return } catch { /* Start is explicitly requested when the service is offline. */ }
     if (this.managedComfy && this.managedComfy.exitCode === null) throw new Error('The app-owned backend is still starting. Wait and refresh checks.')
     this.startingComfy = true
-    const log = createWriteStream(join(this.root, 'comfy-server.log'), { flags: 'a' })
+    // ComfyUI writes straight to the log file, not to pipes owned by this process, so an
+    // app-started backend that outlives the app keeps a valid console instead of failing samplers.
+    const log = openSync(join(this.root, 'comfy-server.log'), 'a')
     try {
       const child = spawn(comfyPythonPath(settings.comfyRoot), [
         '-u', join(settings.comfyRoot, 'main.py'), '--listen', '127.0.0.1',
         '--port', new URL(settings.comfyUrl).port || '80', '--disable-auto-launch'
       ], {
-        cwd: settings.comfyRoot, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+        cwd: settings.comfyRoot, windowsHide: true, stdio: ['ignore', log, log],
         env: { ...process.env, TEXT_ENCODER_MODE: 'local', TEXT_ENCODER: 'llm2vec', PYTHONUNBUFFERED: '1' }
       })
       this.managedComfy = child
       let failure: Error | undefined
       child.on('error', error => { failure = error })
-      child.stdout.pipe(log, { end: false })
-      child.stderr.pipe(log, { end: false })
-      child.on('close', () => { log.end(); if (this.managedComfy === child) this.managedComfy = undefined })
+      child.on('close', () => { if (this.managedComfy === child) this.managedComfy = undefined })
       const deadline = Date.now() + 180_000
       while (Date.now() < deadline) {
         if (failure) throw failure
@@ -608,7 +608,7 @@ export class Studio {
         try { await api(settings.comfyUrl, '/system_stats'); return } catch { await delay(2000) }
       }
       throw new Error('ComfyUI is still starting after three minutes. Inspect comfy-server.log and refresh checks.')
-    } finally { this.startingComfy = false }
+    } finally { closeSync(log); this.startingComfy = false }
   }
 
   output(jobId: string, file: string): string {

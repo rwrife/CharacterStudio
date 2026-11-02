@@ -2,7 +2,18 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
-import { generateMotion, cancelMotion } from '../src/main/comfy'
+import { generateMotion, cancelMotion, comfyFailure } from '../src/main/comfy'
+
+test('orphaned ComfyUI console failures explain how to recover', () => {
+  const orphaned = comfyFailure({ node_type: 'KSampler', exception_message: '[Errno 22] Invalid argument\n',
+    traceback: ['  File "tqdm\\std.py", line 446, in status_printer\n', '  File "app\\logger.py", line 73, in flush\n'] }, 'fallback')
+  assert.match(orphaned, /^KSampler: \[Errno 22\] Invalid argument\. The running ComfyUI lost its console output/)
+  assert.match(orphaned, /Start local ComfyUI/)
+  assert.equal(comfyFailure({ node_type: 'SaveImage', exception_message: '[Errno 22] Invalid argument: \'C:\\\\bad:name.png\'', traceback: ['File "nodes.py", in save_images\n'] }, 'fallback'),
+    'SaveImage: [Errno 22] Invalid argument: \'C:\\\\bad:name.png\'')
+  assert.equal(comfyFailure(undefined, 'fallback'), 'fallback')
+  assert.equal(comfyFailure({ exception_message: 'out of memory' }, 'fallback'), 'ComfyUI: out of memory')
+})
 
 test('Comfy API submits exact graph, polls matching history and cancels only its own ID', async () => {
   let id = '', cancelled = '', submitted: Record<string, unknown> = {}

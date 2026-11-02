@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { access, mkdir, mkdtemp, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { arch, homedir, platform, release, totalmem } from 'node:os'
-import { basename, join, sep } from 'node:path'
+import { basename, join, resolve, sep } from 'node:path'
 import { z } from 'zod'
 import type { DesignerConfig } from '../shared/designer'
 import type { Settings } from '../shared/types'
@@ -11,7 +11,7 @@ import {
 } from '../shared/setup'
 import { api } from './comfy'
 import { downloadVerified, ensureSpace, freeBytes } from './download'
-import { blenderDistribution, comfyPythonPath, defaultComfyRoot } from './native-runtime'
+import { blenderDistribution, blenderVersion, bundledBlenderPath, comfyPythonPath, defaultComfyRoot } from './native-runtime'
 import { runProcess } from './process'
 import { errorText } from './validation'
 import { resolveAiRoute, type AiConfiguration, type AiStage } from '../shared/ai'
@@ -22,6 +22,8 @@ export interface SetupHost {
   firstLaunch: boolean
   /** Suppresses launch-time prompts (used by automated smoke checks). */
   quietLaunch?: boolean
+  /** Set false to never start installs on the user's behalf (used by automated smoke checks). */
+  autoInstall?: boolean
   settings(): Settings
   aiConfiguration?(): AiConfiguration
   saveSettings(value: Settings): Settings
@@ -129,6 +131,8 @@ export class SetupAssistant {
   private controller?: AbortController
   private launchController?: AbortController
   private result?: SetupState['result']
+  /** Actions already started this session; an automatic install is never retried after it fails or is cancelled. */
+  private attempted = new Set<SetupActionId>()
   private readonly file: string
 
   constructor(private host: SetupHost) {
@@ -185,6 +189,15 @@ export class SetupAssistant {
 
   cancelLaunchCheck() { this.launchController?.abort() }
 
+  /** True when the Blender path is Studio's bundled or Studio-installed copy rather than one the user chose. */
+  private managedBlender(path: string) {
+    let bundled: string
+    try { bundled = bundledBlenderPath(this.host.appRoot) } catch { return false }
+    const normal = (value: string) => { const full = resolve(value); return process.platform === 'win32' ? full.toLowerCase() : full }
+    const target = normal(path)
+    return target === normal(bundled) || target.startsWith(normal(join(this.host.root, 'tools')) + sep)
+  }
+
   async report(cancel?: AbortSignal): Promise<SetupReport> {
     const settings = this.host.settings()
     const signals = [this.host.signal, cancel].filter((s): s is AbortSignal => !!s)
@@ -219,11 +232,17 @@ export class SetupAssistant {
 
     let distribution: ReturnType<typeof blenderDistribution> | undefined
     try { distribution = blenderDistribution() } catch { distribution = undefined }
+    // Only Studio's own Blender is installed automatically; a broken user-chosen Blender is reported, never replaced silently.
+    const managed = this.managedBlender(settings.blenderPath)
+    const automatic = !blender.ok && !!distribution && managed && this.host.autoInstall !== false && !this.attempted.has('install-blender')
     items.push({
       id: 'blender', group: 'core', title: 'Blender (rigging & export)', requiredFor: ['animator'],
       status: blender.ok ? 'done' : 'todo',
       detail: blender.ok ? `${blender.detail} · ${displayPath(settings.blenderPath)}` :
-        `Native Blender is needed to fit, skin and export characters. Studio installs an isolated, checksum-verified copy that never touches ComfyUI.`,
+        `Animator uses Blender ${blenderVersion} to fit, skin and export characters. ` +
+        (managed ? `Studio ${automatic ? 'installs' : 'can install'} an isolated, checksum-verified copy (needs about 2 GB free) that never touches ComfyUI or other Blender installs.`
+          : `The chosen Blender at ${displayPath(settings.blenderPath)} did not start. Choose another, or install Studio's own isolated copy.`),
+      automatic: automatic ? 'install-blender' : undefined,
       actions: blender.ok ? [{ id: 'browse-blender', label: 'Change' }] : [
         { id: 'install-blender', label: distribution ? `Install Blender ${distribution.directory.split('-')[1]}` : 'Install Blender', primary: true, disabled: distribution ? undefined : 'No official build is pinned for this platform.' },
         { id: 'browse-blender', label: 'Choose existing' }
@@ -350,6 +369,7 @@ export class SetupAssistant {
     if (request.action === 'open-model-license') { await this.host.openExternal(setupModel(request.model ?? '').licenseUrl); return this.state() }
     if (this.task) throw new Error(`Wait for “${this.task.label}” to finish or cancel it.`)
     const item = request.item as SetupItemId
+    this.attempted.add(request.action)
     this.controller = new AbortController()
     const signal = this.host.signal ? AbortSignal.any([this.controller.signal, this.host.signal]) : this.controller.signal
     this.task = { item, action: request.action, label: labelFor(request.action, request.model), message: 'Starting…' }

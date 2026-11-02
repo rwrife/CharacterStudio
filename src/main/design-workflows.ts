@@ -1,16 +1,18 @@
 import type { DesignRequest, DesignerConfig } from '../shared/designer'
-import { imageProfiles, meshProfiles, meshTextureProfile, tposeEditProfile, tposeEditPrompt } from '../shared/designer'
+import { handAnatomyNegative, imageProfiles, meshProfiles, scenePrompt, specifiesHandAnatomy, texturedMeshSettings, tposeEditProfile, tposePrompt } from '../shared/designer'
 
 export type Workflow = Record<string, { class_type: string; inputs: Record<string, unknown> }>
 
 export function imageWorkflow(config: DesignerConfig, request: DesignRequest, prefix: string, reference = ''): Workflow {
   const size = imageProfiles[config.imageProfile].size
   const identity = !!reference && !!config.ipadapter && !!config.clipVision
-  const text = `Character and scene: ${request.description}. Art style: ${request.style}. Full body character concept illustration in their environment, clear character silhouette, no text or lettering.`
+  const defaultHands = !specifiesHandAnatomy(request)
+  const text = scenePrompt(request)
+  const negative = `cropped, extra limbs, ${defaultHands ? `${handAnatomyNegative}, ` : ''}malformed anatomy, duplicate character, crowd, extra people, watermark, logo, lettering`
   const workflow: Workflow = {
     '1': { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: config.checkpoint } },
     '2': { class_type: 'CLIPTextEncode', inputs: { clip: ['1', 1], text } },
-    '3': { class_type: 'CLIPTextEncode', inputs: { clip: ['1', 1], text: 'cropped, extra limbs, extra fingers, malformed anatomy, duplicate character, watermark, lettering' } },
+    '3': { class_type: 'CLIPTextEncode', inputs: { clip: ['1', 1], text: negative } },
     '4': { class_type: 'EmptyLatentImage', inputs: { width: size, height: size, batch_size: 1 } },
     '5': { class_type: 'KSampler', inputs: { model: ['1', 0], positive: ['2', 0], negative: ['3', 0], latent_image: ['4', 0], seed: request.seed, steps: request.steps, cfg: 7, sampler_name: 'dpmpp_2m', scheduler: 'karras', denoise: reference && !identity ? 1 - request.referenceStrength : 1 } },
     '6': { class_type: 'VAEDecode', inputs: { samples: ['5', 0], vae: ['1', 2] } },
@@ -18,7 +20,8 @@ export function imageWorkflow(config: DesignerConfig, request: DesignRequest, pr
   }
   if (reference) {
     workflow['8'] = { class_type: 'LoadImage', inputs: { image: reference } }
-    workflow['9'] = { class_type: 'ImageScale', inputs: { image: ['8', 0], width: size, height: size, crop: 'disabled', upscale_method: 'lanczos' } }
+    // Center-crop instead of stretching so faces and bodies in non-square photos keep their proportions.
+    workflow['9'] = { class_type: 'ImageScale', inputs: { image: ['8', 0], width: size, height: size, crop: 'center', upscale_method: 'lanczos' } }
     if (identity) {
       workflow['13'] = { class_type: 'IPAdapterModelLoader', inputs: { ipadapter_file: config.ipadapter } }
       workflow['14'] = { class_type: 'CLIPVisionLoader', inputs: { clip_name: config.clipVision } }
@@ -40,7 +43,7 @@ export function tposeWorkflow(config: DesignerConfig, request: DesignRequest, pr
     '5': { class_type: 'ImageScaleToTotalPixels', inputs: { image: ['4', 0], upscale_method: 'lanczos', megapixels: 1, resolution_steps: 16 } },
     '6': { class_type: 'VAEEncode', inputs: { pixels: ['5', 0], vae: ['3', 0] } },
     '7': { class_type: 'SaveImage', inputs: { images: ['23', 0], filename_prefix: prefix } },
-    '8': { class_type: 'CLIPTextEncode', inputs: { clip: ['2', 0], text: tposeEditPrompt } },
+    '8': { class_type: 'CLIPTextEncode', inputs: { clip: ['2', 0], text: tposePrompt(request) } },
     '9': { class_type: 'ConditioningZeroOut', inputs: { conditioning: ['8', 0] } },
     '10': { class_type: 'ReferenceLatent', inputs: { conditioning: ['8', 0], latent: ['6', 0] } },
     '11': { class_type: 'ReferenceLatent', inputs: { conditioning: ['9', 0], latent: ['6', 0] } },
@@ -96,7 +99,8 @@ export function meshWorkflow(config: DesignerConfig, request: DesignRequest, pre
 }
 
 function texturedMeshWorkflow(config: DesignerConfig, request: DesignRequest, prefix: string, image: string): Workflow {
-  return {
+  const quality = texturedMeshSettings(config)
+  const workflow: Workflow = {
     '1': { class_type: 'UNETLoader', inputs: { unet_name: config.meshTextureModel, weight_dtype: 'default' } },
     '2': { class_type: 'LoadImage', inputs: { image } },
     '3': { class_type: 'CLIPVisionLoader', inputs: { clip_name: config.meshVision } },
@@ -120,11 +124,19 @@ function texturedMeshWorkflow(config: DesignerConfig, request: DesignRequest, pr
     '21': { class_type: 'Trellis2TextureStage', inputs: { positive: ['16', 0], negative: ['16', 1], shape_latent: ['19', 0] } },
     '22': { class_type: 'KSampler', inputs: { model: ['1', 0], positive: ['21', 0], negative: ['21', 1], latent_image: ['21', 2], seed: request.seed, steps: 12, cfg: 1, sampler_name: 'euler', scheduler: 'normal', denoise: 1 } },
     '23': { class_type: 'VaeDecodeTextureTrellis', inputs: { samples: ['22', 0], vae: ['5', 0], shape_subdivides: ['20', 1] } },
-    '24': { class_type: 'DecimateMesh', inputs: { mesh: ['29', 0], target_face_count: meshTextureProfile.faceCount, placement_mode: 'midpoint' } },
-    '25': { class_type: 'UnwrapMesh', inputs: { mesh: ['24', 0], segmenter: 'pec', resolution: meshTextureProfile.textureSize, padding: 2, weld_distance: 0.0002 } },
-    '26': { class_type: 'BakeTextureFromVoxel', inputs: { mesh: ['25', 0], voxel_colors: ['23', 0], texture_size: meshTextureProfile.textureSize, reference_mesh: ['20', 0] } },
+    '24': { class_type: 'DecimateMesh', inputs: { mesh: ['29', 0], target_face_count: quality.faceCount, placement_mode: 'midpoint' } },
+    '25': { class_type: 'UnwrapMesh', inputs: { mesh: ['24', 0], segmenter: 'pec', resolution: quality.textureSize, padding: 2, weld_distance: 0.0002 } },
+    '26': { class_type: 'BakeTextureFromVoxel', inputs: { mesh: ['25', 0], voxel_colors: ['23', 0], texture_size: quality.textureSize, reference_mesh: ['20', 0] } },
     '27': { class_type: 'ApplyTextureToMesh', inputs: { mesh: ['25', 0], base_color: ['26', 0], metallic: ['26', 1], roughness: ['26', 2] } },
     '28': { class_type: 'MeshSmoothNormals', inputs: { mesh: ['27', 0], crease_angle: 180 } },
-    '29': { class_type: 'RemeshMesh', inputs: { mesh: ['20', 0], resolution: 512, sign_mode: 'solid', 'sign_mode.fill': 20, 'sign_mode.qef': false, band: 1, project_back: 0, fix_poles: false, smooth_iters: 3, drop_small_components: 0.01, precluster_max_verts: 20000000 } }
+    '29': { class_type: 'RemeshMesh', inputs: { mesh: ['20', 0], resolution: quality.remesh, sign_mode: 'solid', 'sign_mode.fill': 20, 'sign_mode.qef': false, band: 1, project_back: 0, fix_poles: false, smooth_iters: 3, drop_small_components: 0.01, precluster_max_verts: 20000000 } }
   }
+  if (quality.shapeDetail > 512) {
+    // Refine the 512 shape latent before decoding; texture generation then follows the refined shape.
+    workflow['30'] = { class_type: 'Trellis2UpsampleStage', inputs: { positive: ['16', 0], negative: ['16', 1], shape_latent: ['19', 0], vae: ['4', 0], target_resolution: quality.shapeDetail } }
+    workflow['31'] = { class_type: 'KSampler', inputs: { model: ['18', 0], positive: ['30', 0], negative: ['30', 1], latent_image: ['30', 2], seed: request.seed, steps: 12, cfg: 7.5, sampler_name: 'euler', scheduler: 'simple', denoise: 1 } }
+    workflow['20'].inputs.samples = ['31', 0]
+    workflow['21'].inputs = { positive: ['30', 0], negative: ['30', 1], shape_latent: ['31', 0] }
+  }
+  return workflow
 }

@@ -29,6 +29,18 @@ export async function api<T>(base: string, path: string, body?: unknown, signal?
   return (text ? JSON.parse(text) : {}) as T
 }
 
+// A ComfyUI process whose launching app closed keeps serving HTTP, but its console
+// pipes are gone, so the first progress-bar flush raises a Windows "Invalid argument".
+export function comfyFailure(data: Record<string, unknown> | undefined, fallback: string): string {
+  if (!data) return fallback
+  const message = `${data.node_type ?? 'ComfyUI'}: ${String(data.exception_message ?? 'Generation interrupted').trim()}`
+  const trace = Array.isArray(data.traceback) ? data.traceback.join('') : ''
+  if (/Errno 22/.test(String(data.exception_message)) && /\b(flush|status_printer|logger\.py)\b/.test(trace))
+    return `${message}. The running ComfyUI lost its console output, usually because the app session that started it closed. ` +
+      'Stop that ComfyUI process (python main.py), then use Start local ComfyUI in Backend connections and retry.'
+  return message
+}
+
 interface HistoryEntry {
   status: { completed: boolean; status_str: string; messages: [string, Record<string, unknown>][] }
   outputs: Record<string, { motion_json?: string[] }>
@@ -66,7 +78,7 @@ export async function generateMotion(options: {
         if (data?.prompt_id !== promptId) return
         if (message.type === 'executing' && data.node) progress(labels[data.node] ?? `Executing node ${data.node}`, 35)
         if (message.type === 'progress' && data.max > 0) progress(`Denoising ${data.value}/${data.max}`, 35 + 35 * data.value / data.max)
-        if (message.type === 'execution_error') wsError = new Error(`${data.node_type}: ${data.exception_message}`)
+        if (message.type === 'execution_error') wsError = new Error(comfyFailure(data, 'ComfyUI generation failed.'))
       } catch (error) {
         wsError = new Error(`Invalid ComfyUI progress response: ${String(error)}`)
       }
@@ -97,7 +109,7 @@ export async function generateMotion(options: {
       const item = history[promptId]
       if (item?.status?.status_str === 'error') {
         const failure = item.status.messages.find(([type]) => type === 'execution_error' || type === 'execution_interrupted')
-        throw new Error(failure ? `${failure[1].node_type ?? 'ComfyUI'}: ${failure[1].exception_message ?? 'Generation interrupted'}` : 'ComfyUI generation failed. Open the ComfyUI log for details.')
+        throw new Error(comfyFailure(failure?.[1], 'ComfyUI generation failed. Open the ComfyUI log for details.'))
       }
       if (item?.status?.completed) {
         const metadata = item.outputs['6']?.motion_json?.[0]

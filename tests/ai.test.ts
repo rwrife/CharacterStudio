@@ -459,6 +459,8 @@ test('routed Designer stages complete without local inference and preserve origi
   assert.deepEqual(remote.jobs.map(job => job.stage), ['naming', 'scene', 'tpose', 'cutout', 'mesh'])
   assert.equal(Buffer.from(remote.jobs[2].inputs[0].base64, 'base64').toString(), 'fixture-image')
   assert.ok(remote.jobs[2].prompt.includes('T-pose'))
+  for (const job of remote.jobs.filter(job => ['scene', 'tpose'].includes(job.stage)))
+    assert.ok(job.prompt.includes('exactly five fingers'), 'Routed prompts must retain the shared anatomy default.')
   assert.ok(!remote.jobs[2].prompt.includes(brief.description), 'T-pose edit must not reinterpret the character brief.')
   assert.ok(decoded.some(item => item.cutout))
   const original = studio.designer.snapshot().designs.find(design => design.id === id)!

@@ -123,7 +123,7 @@ const configure = async (stage, provider, model = 'fixture-image') => {
   await save()
 }
 try {
-  app = await electron.launch({ args: ['.', '--mcp'], env: { ...process.env, STUDIO_SKIP_SETUP_CHECKLIST: '1', STUDIO_DATA_DIR: directory }, timeout: 60000 })
+  app = await electron.launch({ args: ['.', '--mcp'], env: { ...process.env, STUDIO_SKIP_SETUP_CHECKLIST: '1', STUDIO_NO_AUTO_INSTALL: '1', STUDIO_DATA_DIR: directory }, timeout: 60000 })
   const page = await app.firstWindow()
   page.on('pageerror', error => errors.push(error.message))
   await page.getByRole('heading', { name: 'Character lab' }).waitFor()
@@ -310,6 +310,7 @@ try {
   assert.equal(await page.getByLabel('Maximum triangles', { exact: true }).inputValue(), '20000')
   await click('Close provider settings')
   pending = true
+  await click(/Character & scene/)
   await click('Generate scene')
   await click('Approve this remote stage')
   await until(() => jobs.length === 6, 'pending gateway job')
@@ -516,7 +517,7 @@ try {
   assert.deepEqual(saved.configuration.stages.mesh.tripoMesh, { maxTriangles: 20000, smartLowPoly: true })
   assert.ok(saved.history.length >= 8)
   assert.equal(Object.keys(JSON.parse(await readFile(join(directory, 'ai-credentials.json'), 'utf8'))).length, 0)
-  app = await electron.launch({ args: ['.', '--mcp'], env: { ...process.env, STUDIO_SKIP_SETUP_CHECKLIST: '1', STUDIO_DATA_DIR: directory }, timeout: 60000 })
+  app = await electron.launch({ args: ['.', '--mcp'], env: { ...process.env, STUDIO_SKIP_SETUP_CHECKLIST: '1', STUDIO_NO_AUTO_INSTALL: '1', STUDIO_DATA_DIR: directory }, timeout: 60000 })
   const reopened = await app.firstWindow()
   reopened.on('pageerror', error => errors.push(error.message))
   await reopened.getByRole('heading', { name: 'Character lab' }).waitFor()

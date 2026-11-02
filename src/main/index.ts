@@ -127,7 +127,7 @@ if (ownsWorkspace) app.whenReady().then(async () => {
   const lifetime = new AbortController()
   app.once('before-quit', () => lifetime.abort())
   const setup = new SetupAssistant({
-    root: app.getPath('userData'), appRoot: app.getAppPath(), firstLaunch, quietLaunch, signal: lifetime.signal,
+    root: app.getPath('userData'), appRoot: app.getAppPath(), firstLaunch, quietLaunch, autoInstall: process.env.STUDIO_NO_AUTO_INSTALL !== '1', signal: lifetime.signal,
     settings: () => studio.snapshot().settings,
     aiConfiguration: () => studio.ai.snapshot(),
     saveSettings: value => studio.saveSettings(value),

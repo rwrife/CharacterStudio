@@ -8,7 +8,7 @@ import assert from 'node:assert/strict'
 const data = await mkdtemp(join(tmpdir(), 'kimodo-first-launch-'))
 const output = resolve('artifacts', 'desktop-smoke')
 await mkdir(output, { recursive: true })
-const launch = () => electron.launch({ args: ['.'], env: { ...process.env, STUDIO_SKIP_SETUP_CHECKLIST: '', STUDIO_DATA_DIR: data }, timeout: 60000 })
+const launch = () => electron.launch({ args: ['.'], env: { ...process.env, STUDIO_SKIP_SETUP_CHECKLIST: '', STUDIO_NO_AUTO_INSTALL: '1', STUDIO_DATA_DIR: data }, timeout: 60000 })
 
 let app = await launch()
 try {
@@ -39,7 +39,7 @@ try {
   await dialog.getByRole('button', { name: /Continue to Studio|Start creating/ }).click()
   await expect(dialog).toBeHidden()
   await page.getByRole('button', { name: 'Setup checklist' }).click()
-  await expect(dialog.getByText('SETUP CHECKLIST', { exact: true })).toBeVisible()
+  await expect(dialog.getByRole('heading', { name: 'Get Character Studio ready' })).toBeVisible()
   await dialog.getByRole('button', { name: 'Close setup checklist' }).click()
   assert.deepEqual(errors, [])
   await app.close()
