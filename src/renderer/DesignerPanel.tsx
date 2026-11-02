@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ArrowDownToLine, ArrowRight, Box, Check, CircleAlert, ImagePlus, LoaderCircle, Palette, Plus, RefreshCw, ShieldCheck, Sparkles } from 'lucide-react'
+import { ArrowDownToLine, ArrowRight, Box, Check, CircleAlert, ImagePlus, LoaderCircle, Palette, PanelRightClose, PanelRightOpen, Plus, RefreshCw, ShieldCheck, Sparkles } from 'lucide-react'
 import type { Character, Snapshot } from '../shared/types'
 import type { DesignRequest, DesignerConfig, DesignerReadiness, DesignStage } from '../shared/designer'
 import { imageProfiles, meshProfiles, meshTextureProfile, tposeEditProfile, tposeEditPrompt } from '../shared/designer'
@@ -25,6 +25,8 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
   const [notice, setNotice] = useState('')
   const [preview, setPreview] = useState<DesignStage>('scene')
   const [isolated, setIsolated] = useState(false)
+  const [modelsOpen, setModelsOpen] = useState(true)
+  const [reviewTarget, setReviewTarget] = useState('')
   const design = data?.designs.find(d => d.id === id)
   const active = data?.designs.find(d => d.status === 'running')
   const download = data?.modelDownload
@@ -51,6 +53,13 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
   }
   useEffect(() => { if (visible) void refresh() }, [visible, snapshot.settings.comfyUrl])
   useEffect(() => { if (!config && data?.config) setConfig(data.config) }, [data?.config])
+  useEffect(() => {
+    if (!modelsOpen || !reviewTarget) return
+    const field = document.getElementById(reviewTarget)
+    field?.scrollIntoView({ block: 'center' })
+    field?.focus()
+    setReviewTarget('')
+  }, [modelsOpen, reviewTarget])
 
   const stages: { key: DesignStage; label: string; detail: string }[] = [
     { key: 'scene', label: 'Character & scene', detail: 'Identity, story and art direction' },
@@ -81,13 +90,12 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
     })
   }
   function reviewModels() {
-    const field = document.getElementById(recovery?.package === 'background' ? 'design-background' :
+    setModelsOpen(true)
+    setReviewTarget(recovery?.package === 'background' ? 'design-background' :
       recovery?.package === 'edit' ? 'design-editModel' : 'image-profile')
-    field?.scrollIntoView({ block: 'center' })
-    field?.focus()
   }
 
-  return <div id="designer-panel" role="tabpanel" aria-labelledby="designer-tab" hidden={!visible} className="designer-layout">
+  return <div id="designer-panel" role="tabpanel" aria-labelledby="designer-tab" hidden={!visible} className={`designer-layout${modelsOpen ? '' : ' models-hidden'}`}>
     <aside className="design-brief" aria-label="Designer brief">
       <div className="section-kicker">01 / IMAGINE A CHARACTER</div>
       <h1>Character designer</h1>
@@ -133,7 +141,13 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
       </div>
     </aside>
     <main className="design-workspace" aria-label="Designer canvas">
-      <div className="scene-heading"><div><span className="section-kicker">DESIGN CANVAS</span><h2>{design?.title || 'A character waiting to happen'}</h2></div><Palette size={21} /></div>
+      <div className="scene-heading"><div><span className="section-kicker">DESIGN CANVAS</span><h2>{design?.title || 'A character waiting to happen'}</h2></div>
+        <button className="secondary design-model-toggle" aria-expanded={modelsOpen} aria-controls="designer-model-profiles" onClick={() => setModelsOpen(!modelsOpen)}>
+          {modelsOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
+          {modelsOpen ? 'Hide model settings' : 'Show model settings'}
+          {settingsDirty && <span className="design-model-unsaved">Unsaved</span>}
+        </button>
+      </div>
       <div className="design-stages">
         {stages.map((stage, index) => {
           const complete = !!design?.[`${stage.key}Url`] && (stage.key !== 'tpose' || design.tposeIsolated)
@@ -202,7 +216,7 @@ export function DesignerPanel({ snapshot, visible, animatorBusy, onAnimate, onSe
       {design && <p className="fine-print">Generate again after changing the brief, seed or saved model choices. Reruns create a saved variation and keep only the references needed for that stage; earlier outputs and Animator characters stay unchanged. Identical settings and seeds may reproduce the same result.</p>}
       <div className="design-limits"><ShieldCheck size={17} /><p>Review each stage before continuing. 3D uses only the validated T-pose foreground, not the original scene. Hunyuan3D produces geometry only; TRELLIS.2 generates new geometry plus embedded textures from the same reference. It does not repaint an existing Hunyuan mesh. Both are <strong>unrigged</strong>. Review unseen surfaces, texture seams, anatomy and hands before Animator.</p></div>
     </main>
-    <aside className="design-models" aria-label="Designer model profiles">
+    <aside id="designer-model-profiles" className="design-models" aria-label="Designer model profiles" hidden={!modelsOpen}>
       <div className="section-heading"><span className="section-kicker">LOCAL MODEL PROFILES</span><button aria-label="Refresh designer models" disabled={checking || locked} onClick={() => void refresh()}><RefreshCw size={14} className={checking ? 'spin' : ''} /></button></div>
       <h2>Built around your GPU</h2>
       <div className="design-hardware">
