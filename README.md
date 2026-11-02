@@ -112,7 +112,7 @@ npm run dev
 
 ### First-launch setup checklist
 
-The first time Studio opens with a new workspace, it shows **Get Character Studio ready**. Reopen it any time from **Setup checklist** in the top bar. Studio inspects this PC and groups what it finds:
+The first time Studio opens with a new workspace, it shows **Get Character Studio ready**. Reopen it any time from the task-list icon button (**Setup checklist**) at the right of the top bar. Studio inspects this PC and groups what it finds:
 
 | Group | Detected | One-click actions |
 |---|---|---|

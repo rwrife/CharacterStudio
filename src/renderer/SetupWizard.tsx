@@ -80,7 +80,7 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
       </div>
       <button className="primary" onClick={() => void close()}>{report?.ready.designer && report.ready.animator ? 'Start creating' : 'Continue to Studio'} <ArrowRight size={15} /></button>
     </div>
-    <p className="fine-print">You can reopen this checklist from <strong>Setup checklist</strong> in the top bar. Readiness here is a setup check, not proof that every model loads or generates on your GPU; each stage still validates its inputs when it runs. Model licenses are set by their publishers—review them before commercial use.</p>
+    <p className="fine-print">You can reopen this checklist from the <strong>Setup checklist</strong> button (task-list icon) in the top bar. Readiness here is a setup check, not proof that every model loads or generates on your GPU; each stage still validates its inputs when it runs. Model licenses are set by their publishers—review them before commercial use.</p>
   </section></div>
 }
 

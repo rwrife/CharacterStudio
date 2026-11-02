@@ -156,7 +156,7 @@ export function App() {
         <span className="module-divider" aria-hidden="true">|</span>
         <button id="animator-tab" role="tab" tabIndex={workspace === 'animator' ? 0 : -1} aria-selected={workspace === 'animator'} aria-controls="animator-panel" className={workspace === 'animator' ? 'active' : ''} onClick={() => setWorkspace('animator')}>Animator</button>
       </nav>
-      <div className="topbar-actions"><button aria-label="Setup checklist" className="connection" onClick={() => setSetupOpen(true)}><ListChecks size={14} />Setup checklist</button>
+      <div className="topbar-actions"><button aria-label="Setup checklist" title="Setup checklist" className="connection icon-only" onClick={() => setSetupOpen(true)}><ListChecks size={16} /></button>
       <button aria-label="Backend connections" className={`connection ${blocked.length ? 'warning' : ''}`} onClick={() => setSettingsOpen(true)}><span className="tiny-dot" />{checking ? 'Checking backends' : blocked.length ? 'Setup needs attention' : checks.length ? 'Local backends ready' : 'Backend settings'}<Settings2 size={14} /></button></div>
     </header>
     {snapshot && <DesignerPanel snapshot={snapshot} visible={workspace === 'designer'} animatorBusy={busy || !!active || !!activeBatch} onSettings={() => setSettingsOpen(true)} onAnimate={c => { selectCharacter(c); setFit(true); setWorkspace('animator') }} />}
