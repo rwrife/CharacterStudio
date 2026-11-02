@@ -3,7 +3,7 @@
 .topbar>.brand{justify-self:start}
 .brand-name{display:flex;flex-direction:column;gap:3px}
 .brand-name .version{margin-left:0;padding-left:0;border-left:0;letter-spacing:.45px}
-.topbar>.connection{justify-self:end}
+.topbar>.connection,.topbar>.topbar-actions{justify-self:end}.connection.icon-only{padding:8px;aspect-ratio:1}
 .workspace-tabs{display:flex;align-items:center;gap:18px;justify-self:center}
 .workspace-tabs button{padding:7px 0;border:0;border-radius:0;background:transparent;color:#7f8984;font-size:23px;font-weight:350;letter-spacing:-.5px}
 .workspace-tabs button.active{background:transparent;color:#f0f2ed}
