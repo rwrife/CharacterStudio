@@ -3,10 +3,27 @@ import type { StudioApi, Snapshot } from '../shared/types'
 import type { SetupState } from '../shared/setup'
 
 const api: StudioApi = {
+  desktopControlEnabled: () => ipcRenderer.invoke('studio:mcp-enabled'),
+  setDesktopControlEnabled: enabled => ipcRenderer.invoke('studio:mcp-set-enabled', enabled),
+  onDesktopControlChanged: callback => {
+    const listener = (_: Electron.IpcRendererEvent, enabled: boolean) => callback(enabled)
+    ipcRenderer.on('studio:mcp-changed', listener)
+    return () => ipcRenderer.removeListener('studio:mcp-changed', listener)
+  },
+  onFileDialog: callback => {
+    const listener = (_: Electron.IpcRendererEvent, request: import('../shared/file-dialog').FileDialogRequest | null) => callback(request)
+    ipcRenderer.on('studio:file-dialog', listener)
+    return () => ipcRenderer.removeListener('studio:file-dialog', listener)
+  },
+  fileDialogReply: (id, paths, overwrite) => ipcRenderer.invoke('studio:file-dialog-reply', id, paths, overwrite),
+  fileDialogBrowse: id => ipcRenderer.invoke('studio:file-dialog-browse', id),
   designerReadiness: () => ipcRenderer.invoke('designer:readiness'),
+  designerInstallModels: id => ipcRenderer.invoke('designer:install-models', id),
+  designerCancelDownload: () => ipcRenderer.invoke('designer:cancel-download'),
   designerSettings: config => ipcRenderer.invoke('designer:settings', config),
   designerReference: () => ipcRenderer.invoke('designer:reference'),
   designerCreate: request => ipcRenderer.invoke('designer:create', request),
+  designerVariation: (id, stage, request) => ipcRenderer.invoke('designer:variation', id, stage, request),
   designerImport: request => ipcRenderer.invoke('designer:import', request),
   designerRun: (id, stage) => ipcRenderer.invoke('designer:run', id, stage),
   designerCancel: () => ipcRenderer.invoke('designer:cancel'),

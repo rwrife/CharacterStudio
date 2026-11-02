@@ -145,10 +145,19 @@ export interface Snapshot {
   designer?: import('./designer').DesignerSnapshot
 }
 export interface StudioApi {
+  desktopControlEnabled(): Promise<boolean>
+  setDesktopControlEnabled(enabled: boolean): Promise<boolean>
+  onDesktopControlChanged(callback: (enabled: boolean) => void): () => void
+  onFileDialog(callback: (dialog: import('./file-dialog').FileDialogRequest | null) => void): () => void
+  fileDialogReply(id: string, paths: string[] | null, overwrite: boolean): Promise<void>
+  fileDialogBrowse(id: string): Promise<string[] | null>
   designerReadiness(): Promise<import('./designer').DesignerReadiness>
+  designerInstallModels(id: import('./designer-models').DesignerModelPackage): Promise<import('./designer').DesignerConfig | null>
+  designerCancelDownload(): Promise<void>
   designerSettings(config: import('./designer').DesignerConfig): Promise<void>
   designerReference(): Promise<import('./designer').DesignReference | null>
   designerCreate(request: import('./designer').DesignRequest): Promise<string>
+  designerVariation(id: string, stage: import('./designer').DesignStage, request: import('./designer').DesignRequest): Promise<string>
   designerImport(request: import('./designer').DesignImportRequest): Promise<string | null>
   designerRun(id: string, stage: import('./designer').DesignStage): Promise<void>
   designerCancel(): Promise<void>

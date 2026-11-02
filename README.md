@@ -14,7 +14,7 @@ Local Windows ARM64 desktop app with **Designer** and **Animator** workspaces. D
 | [Staged character design](#designer-workflow) | Describe a character, scenario, and art style, or condition a concept with a local reference image. Review each scene, transparent T-pose, and GLB before continuing. |
 | [Textured models](#local-textured-models) | Select native TRELLIS.2 to generate geometry and embedded base-color/metallic/roughness textures together from the T-pose. Hunyuan remains the lower-memory geometry-only option. |
 | [External inputs](#start-from-external-inputs) | Skip ahead with an existing T-pose or embedded GLB instead of regenerating earlier stages. Scenes are always generated from a description or a reference photo plus description. Preserve originals and distinguish imported artifacts from generated results. |
-| [Local model profiles](#offline-models-and-memory-profiles) | Choose installed SD 1.5/SDXL scene weights, FLUX.2 klein image editing, BiRefNet, optional scene IP-Adapter, Hunyuan3D geometry or TRELLIS.2 textured generation, with GPU-memory readiness checks. Optional local Ollama naming is separate from motion generation. |
+| [Local model profiles](#offline-models-and-memory-profiles) | Choose installed weights or use **Download required models** on supported missing-model warnings. Approve the download, then Studio verifies and selects the files for local inference. GPU-memory checks still apply; optional IP-Adapter and Ollama naming need separate setup. |
 | [Guided humanoid rigging](#animator-workflow) | Import FBX assets or send Designer meshes to Animator. Inspect the character in 3D, adjust mirrored joint landmarks and orientation, and build a Blender-skinned body rig. |
 | [Natural-language animation](#animator-workflow) | Generate motion takes with duration, seed, denoising steps, and in-place controls. Branch from a completed take's actual endpoint; preview with playback, scrubbing, orbit, zoom, and wireframe. |
 | [Motion encoder choice](#experimental-lfm-setup-no-llama-approval) | Use the original local Llama/LLM2Vec encoder or explicitly select the experimental ungated LFM bridge. Readiness checks and GPU guidance surface setup requirements without silently switching models. |
@@ -22,6 +22,7 @@ Local Windows ARM64 desktop app with **Designer** and **Animator** workspaces. D
 | [Configurations and batches](#repeatability-and-collections) | Save or exchange configuration JSON, import FBX collections, and generate sequential batches with identical motion per path context or deterministic seed variations. Rerun immutable batch snapshots. |
 | [Character exports](#animator-workflow) | Save animated skinned GLB, FBX, and editable Blender scenes, plus separately labeled motion-only BVH/NPZ. Export completed batch results with manifests; failed outputs are not presented as completed characters. |
 | [Local workspace persistence](#data-and-reproducibility) | Keep original assets, designs, rig fits, settings, jobs, and outputs on this PC. Cancel app-owned work and retain completed results across restarts. |
+| [Visible desktop MCP control](#desktop-mcp-control) | Let a trusted local agent operate the actual desktop window: Designer, Animator, fitting, graphs, batches, settings, import/export, playback and viewport gestures. Watch the same controls, progress and errors as when working manually. |
 
 **Current boundaries:** Designer outputs are unrigged until prepared in Animator. Hunyuan outputs are untextured; TRELLIS.2 can infer textures but cannot guarantee accurate unseen surfaces or seam-free UVs. Rigging is guided and body-only, not universal auto-rigging. Motion and graph joins require review; endpoint checks do not guarantee seamless animation or game-engine readiness. Models and local backend setup are prerequisites, not bundled capabilities.
 
@@ -73,6 +74,16 @@ This saved desktop run used the experimental local LFM bridge and produced a lea
 
 Arrange reusable states and actions, connect transitions, and edit motion instructions and generation settings. This graph-editor screenshot predates the Designer workspace; it illustrates graph authoring, not successful learned graph generation.
 
+### MCP: agent control of the visible desktop
+
+![Actual desktop animation graph authored and saved through the local MCP server](docs/screenshots/mcp-desktop-control.png)
+
+The MCP smoke run used the real stdio client and desktop UI to author, move, save, export and reimport this graph. This is graph authoring without a character or learned generation, not evidence of rigging, inference or motion quality.
+
+![Visible MCP-enabled save dialog with an editable file path and explicit overwrite control](docs/screenshots/mcp-file-selection.png)
+
+The same desktop export action opens an in-app file picker an agent can operate while the user watches. The initial suggested filename is shown before choosing a destination; no private path or credential is included.
+
 ## Launch
 
 Open `release\CharacterStudio-win32-arm64\CharacterStudio.exe`, or run `Start-CharacterStudio.ps1`. The old `Start-KimodoStudio.ps1` launcher forwards to the new launcher for compatibility. Kimodo remains the name of the local motion-generation backend.
@@ -122,11 +133,80 @@ Local packaging uses `npm run setup:blender` followed by `npm run package`; `npm
 
 **Release limitations:** Windows and macOS apps are unsigned, and macOS apps are not notarized. Code-signing credentials are not collected or required by this workflow. These are portable archives, not installers or automatic updates. Windows ARM64 remains the locally exercised workflow; Linux and macOS packaging does not establish full rigging, inference, or export compatibility. On those platforms, ComfyUI defaults to `~/ComfyUI` and requires an existing `venv/bin/python`; select the actual backend/output folders in **Backend connections**. On Windows, the existing `%LOCALAPPDATA%\ComfyUI` and `venv\Scripts\python.exe` defaults remain unchanged. ComfyUI, GPU drivers, custom nodes, and model weights must still be configured separately; Windows-specific LFM setup and integration scripts are not made cross-platform by these releases.
 
+## Desktop MCP control
+
+The app includes an **opt-in local MCP server** that controls the running desktop, not a headless copy of Studio. It uses the existing React controls, Electron bridge, validation, job queue and persistence. Manual edits and agent edits affect the same window and workspace. All application workflows are reachable through the UI tools below; there is deliberately no second set of backend-only generation/import/export handlers.
+
+### Start and connect
+
+Open **Backend connections** and turn on **Enable MCP control**. New workspaces default to off. The toggle starts or stops the listener immediately, saves the choice independently of backend settings, and stays available during running jobs. Disabling disconnects clients and removes their connection file without cancelling work; re-enabling creates a fresh endpoint/token and requires clients to reconnect. The header has no MCP subtitle.
+
+Start the app normally and use that toggle, or use the optional command-line override:
+
+```powershell
+npm run build
+npm start
+# Optional: enable MCP for this launch without first opening settings.
+npm run start:mcp
+# Or, for the Windows ARM64 portable distribution:
+& ".\release\CharacterStudio-win32-arm64\CharacterStudio.exe" --mcp
+```
+
+For development, use `npm run dev` and the in-app toggle, or `npm run dev:mcp`. The MCP scripts pass `--mcp` through electron-vite's argument separator to Electron; the flag enables MCP for that launch even if the saved preference is off. Close an existing instance before using the flag, or just change its in-app toggle instead. **Backend connections** shows the live enabled/disabled status.
+
+When enabled, a random-port HTTP listener binds only to `127.0.0.1`; its fresh bearer token and endpoint are written to `mcp-connection.json` in the current Studio data directory. On Windows this is `%APPDATA%\KimodoStudio`. The saved toggle lives in `mcp-settings.json`; neither file is packaged or tracked in Git. A custom `STUDIO_DATA_DIR` changes workspace, preference and connection-file locations. The connection file is removed on shutdown, but the toggle preference survives. Restarting an enabled app rotates the endpoint/token, so restart connected MCP clients too.
+
+Configure a trusted MCP host with this **stdio** server entry, replacing the example path with this checkout's absolute path. Node.js 22+ must be installed separately, including for portable builds. The client attaches to an already-running desktop; it never launches or hides one.
+
+```json
+{
+  "mcpServers": {
+    "character-studio": {
+      "command": "node",
+      "args": ["C:\\path\\to\\CharacterStudio\\scripts\\mcp-client.mjs"]
+    }
+  }
+}
+```
+
+For a portable distribution, point `args` to `scripts\mcp-client.mjs` under its `resources\app` folder (on macOS, `CharacterStudio.app\Contents\Resources\app`). The packaged client includes its MCP SDK dependency. For a custom workspace, append `"--connection", "C:\\path\\to\\data\\mcp-connection.json"` to `args`. The development shortcut is `npm run mcp -- --connection <absolute-path>`, but configure MCP hosts with `node` directly so npm's console banners do not corrupt stdio. Hosts supporting Streamable HTTP can instead use the exact URL and `Authorization: Bearer <token>` from the connection file; do not copy the token into committed configuration.
+
+### Tools and workflow coverage
+
+| Tool | Visible desktop operation |
+|---|---|
+| `studio_get_ui` | Read current text, alerts, modal, control labels, element refs, enabled states, values, dropdown options, and CSS-pixel bounds. Hidden workspace controls are excluded. |
+| `studio_get_state` | Read persisted settings, designs/references, characters/rig setups, jobs, plans and batches to track asynchronous work. Does not mutate UI or run workflows. |
+| `studio_click` | Activate a visible enabled control: switch workspace, select designs/characters/takes, create/run/cancel design or motion work, hand a mesh to Animator, build/save/reset a fit, refresh readiness, save settings, start ComfyUI, edit/save/apply graphs, run/rerun/cancel/export batches, open import/export dialogs, and use viewport/playback buttons. |
+| `studio_set_value` | Edit briefs/style, sampling, prompts, numeric joint coordinates, node/graph/transition fields, backend paths, file paths and playback ranges through their actual input handlers. |
+| `studio_select` | Choose returned option values for model profiles/weights/encoder, rotation/joint, branch parent, node type, incoming context, connection destination and batch seed variation. |
+| `studio_set_checked` | Set mirrored fitting, isolated T-pose, in-place motion, state looping/entry, batch targets/auto-rig, explicit file overwrite, and the MCP enable toggle (disabling it disconnects the agent). |
+| `studio_press_key` | Focus a returned element and send a single character or navigation key, optionally with Shift/Control/Alt/Meta. |
+| `studio_pointer` | Click, double-click, move or drag within the app: orbit/pan 3D, drag joint gizmos, arrange graph nodes, connect handles, select edges. Coordinates are CSS pixels from `studio_get_ui`; drag accepts a path of points. |
+| `studio_scroll` | Scroll a returned panel ref to reach additional controls. |
+| `studio_wheel` | Send a wheel event at a CSS-pixel point for 3D/graph zoom or ordinary panel scrolling. |
+| `studio_screenshot` | Return the current app content as an MCP PNG image, including canvases and the visible file picker. |
+| `studio_show_window` | Restore/show the actual desktop so the user can watch. |
+
+Start with `studio_get_ui`, then pass an element's returned `ref` to an action. Re-inspect after navigation, modal changes or asynchronous updates; do not invent refs. For example, click the **Designer** tab, fill **Character title**, **Character & scenario** and **Art style**, then click **Create character concept** when enabled. The visible app updates exactly as for manual input. Disabled prerequisites and modal boundaries are enforced rather than bypassed.
+
+With MCP enabled, app file pickers appear as **visible in-app dialogs**. Fill the absolute local file/folder path (one path per line for collections) and click **Use selected paths** or **Save selected file**. The main process checks existing files/folders, supported extensions, collection limits and destination parents before using the existing import/export validation. Overwriting an existing export requires the visible **Replace existing file** checkbox. **Cancel file selection** leaves the existing workflow unchanged. A person can still use **Browse on this PC** for a native picker; the MCP tools do not control that separate OS window. With MCP disabled, new file selections use the normal native dialogs.
+
+Generation, rigging, readiness checks and batch work remain asynchronous. An action result means the control was activated, **not** that the work succeeded. Poll `studio_get_state` and re-inspect visible progress/errors; use the existing **Cancel**/**Cancel design** controls when needed. Existing local ComfyUI, model, GPU, Blender and input-asset prerequisites still apply.
+
+### Trust and limits
+
+Enable this only for agents you trust with **all of the app's local user privileges**: importing local assets, changing backend paths, starting app-owned work, exporting/overwriting selected files, opening the app's fixed external help/download links, and viewing assets/paths in snapshots and screenshots. Loopback is not a sandbox or a per-tool permission system. The bearer file is owner-only on POSIX; on Windows it inherits the data folder's ACL, so keep that folder private. Never publish the connection file or token, forward its port, or expose it through a proxy. Requests require the exact loopback Host and bearer token; browser Origin headers are rejected. Tool arguments are schema-validated. No arbitrary JavaScript, shell, private IPC or general filesystem tools are exposed; Electron context isolation and sandboxing remain enabled.
+
+The server controls **Studio's window only**, not the OS, external browser pages, authentication prompts, ComfyUI's separate UI, or other desktop applications. Model access, downloads and third-party authentication remain subject to the existing manual setup guidance. The user can continue interacting with the same window; coordinate edits to avoid conflicting selections. Turn off **Enable MCP control** to revoke access immediately, including when launched with `--mcp`. A stale connection file after a crash is not a running server; restart Studio rather than reusing its token.
+
+`npm run test:mcp` builds and exercises the real stdio-to-HTTP-to-Electron path in an isolated workspace under ignored `artifacts\mcp-smoke`: visible Designer fields and cancellation, graph edits and dragging, save/import/export with overwrite checks, backend settings and folder selection, stale refs, keyboard/scrolling, screenshots, in-app disable/re-enable with revoked credentials, saved-toggle restoration, cleanup and a default-off launch. It also runs the generation-rerun regression below in a temporary workspace with a deterministic local ComfyUI fixture. It needs no model weights, Blender or third-party character. It does not establish successful learned generation, rigging, motion quality, or cross-platform GUI compatibility.
+
 ## Designer workflow
 
 Switch to **Designer** in the top bar. The existing character lab remains in **Animator**; switching tabs preserves in-progress briefs, rig edits, and motion settings. These are two workspaces in one desktop app, not two competing inference services. Designer and Animator share one job slot to avoid GPU contention.
 
-1. Open **Backend connections** and connect the existing local ComfyUI. In Designer, refresh **Local model profiles**, choose installed weights, and **Save model choices**. Designer does not require Kimodo's Llama encoder. The shared backend dialog still reports Animator-specific readiness separately.
+1. Open **Backend connections** and connect the existing local ComfyUI. In Designer, refresh **Local model profiles**, choose installed weights, and **Save model choices**. Supported missing-model warnings offer **Download required models** to install and select the required files after approval. Designer does not require Kimodo's Llama encoder. The shared backend dialog still reports Animator-specific readiness separately.
 2. Choose **Text description** to describe the character, or **Reference image** (local PNG/JPEG/WebP, up to 20 MB and 32 megapixels) to supply a photo and describe what to use from it in **What to use from this photo**. Either way, Designer generates a new scene; a reference photo is conditioning, not a finished scene. Supply **Art style** separately. For example: a Brazilian MMA fighter raised in the jungles of Brazil, rendered as a vibrant 90s game character with exaggerated upper-body muscles.
 3. Enter an optional title, or select an already-installed local Ollama instruction model for automatic naming. Ollama is restricted to `http://127.0.0.1:11434`, runs the naming model on CPU, and unloads it afterward. Cloud-backed models are rejected. Without a title or an available local naming model, generation stops with instructions rather than inventing a placeholder title.
 4. **Create character concept** generates a character-and-scene image using both descriptions. Image input is actual reference conditioning, not an ignored attachment. Select an installed **IP-Adapter Plus** and its matching **CLIP Vision** model to carry visual identity without copying scene pixels; otherwise the workflow uses basic img2img. **Reference influence** controls conditioning strength.
@@ -135,15 +215,17 @@ Switch to **Designer** in the top bar. The existing character lab remains in **A
 
 The T-pose edit also explicitly requests **flat hands, palms down, straight fingers held together side by side, and thumbs resting naturally alongside**, with no splayed/curled fingers or fists. This is prompt guidance, not an anatomical validator; inspect hands before generating the mesh.
 
+Generation controls stay available after completion: **Regenerate scene**, **Regenerate T-pose** and **Regenerate 3D** use the current brief/sampling fields and saved model choices. A rerun creates and selects a saved variation, copying only the preceding references needed for that stage; it never replaces completed outputs or an existing Animator character. Changing an earlier stage does not carry forward stale T-poses or meshes. T-pose regeneration requires a scene; an imported isolated T-pose can generate 3D repeatedly without one. Scene prompts affect scenes, while T-pose editing keeps its fixed instruction and 3D uses the validated T-pose. Change the seed for a different sample; identical models, inputs and seeds may reproduce the same result. Controls remain locked during active work and until model-choice edits are saved. Animator's **Generate animation**, graph generation and batch reruns also remain repeatable, preserving completed takes and batch snapshots.
+
 ### Local textured models
 
-Before generating 3D, choose **TRELLIS.2 (textured)** in **3D model profile**, select the four installed weights below, and **Save model choices**. Use **Use T-pose & generate 3D** as usual. This alternative generates both geometry and textures from the same validated T-pose. It does **not** paint an existing Hunyuan mesh: to try it on an already-completed design, save and import that design's T-pose as a new design, preserving the original mesh.
+Before generating 3D, choose **TRELLIS.2 (textured)** in **3D model profile**, select the four installed weights below, and **Save model choices**. Use **Use T-pose & generate 3D**, or **Regenerate 3D** on an already-completed design. This alternative generates both geometry and textures from the same validated T-pose in a new variation, preserving the original mesh. It does **not** paint an existing Hunyuan mesh.
 
 The native ComfyUI graph generates structure, shape and texture latents in sequence, remeshes the decoded surface before simplification and UV unwrapping, then bakes a **1024 x 1024 base-color atlas plus metallic/roughness maps**. Remeshing avoids the fragmented UV islands and faceted appearance observed when simplifying the raw decoder output directly. Sampling uses fixed 12/20/12 steps and a 512 shape/remesh profile, independently of the scene/Hunyuan step field. Mesh simplification targets 50,000 faces; this is not game-ready retopology. TRELLIS conditioning uses only the alpha-masked foreground on black, as required by its native workflow; Hunyuan's foreground remains on white. Neither sees the hidden original scenery.
 
 **Save textured GLB** exports one self-contained file with UVs and embedded textures. **Send to Animator** preserves the original GLB and checks that generated texture maps survive Blender import. Missing weights, unsupported native nodes, absent textures, incomplete UVs, corrupt PNGs or wrong-sized generated atlases fail explicitly; they are not published as completed textured models. Review all sides: back surfaces are inferred from one image, and clothing details, fingers, texture seams and lighting baked into color maps may need manual repair.
 
-This profile uses the TRELLIS.2 branch of the [official native texture workflow](https://github.com/Comfy-Org/workflow_templates/blob/main/templates/3d_pixal3d_trellis2_image_to_model.json), without Pixal3D or cloud/API nodes. Install these approximately **8.5 GB** of weights separately:
+This profile uses the TRELLIS.2 branch of the [official native texture workflow](https://github.com/Comfy-Org/workflow_templates/blob/main/templates/3d_pixal3d_trellis2_image_to_model.json), without Pixal3D or cloud/API nodes. Install these approximately **8.5 GB** of weights manually or use **Download required models** when the stage reports missing weights:
 
 | Selector | Required file | ComfyUI folder |
 |---|---|---|
@@ -170,7 +252,21 @@ Each import creates a **new design**, preserves a byte-for-byte original, and re
 
 ### Offline models and memory profiles
 
-Models must already be installed before going offline. Studio never downloads models or installs custom nodes/packages while generating; downloads happen only when you choose them in the [setup checklist](#first-launch-setup-checklist). Weight selectors come from the connected ComfyUI, not a fictitious installed-model list. Model licenses, GPU architecture, drivers, precision, and available system RAM still matter.
+Models must already be installed before going offline. Studio never downloads models or installs custom nodes/packages **during generation**. After a missing-model failure, **Download required models** starts a separate, explicitly approved setup operation; the [setup checklist](#first-launch-setup-checklist) can also download pinned Designer weights when you choose. Weight selectors come from the connected ComfyUI, not a fictitious installed-model list. Model licenses, GPU architecture, drivers, precision, and available system RAM still matter.
+
+#### Download models from a warning
+
+![Actual Designer missing-BiRefNet warning with Download required models, Review model settings and Backend connections buttons](docs/screenshots/model-download-action.png)
+
+Actual desktop capture from a controlled missing-model setup fixture, not an inference result.
+
+Use **Download required models** on a supported warning. The confirmation lists the files, maximum transfer size, upstream model pages and license information, and destination under the saved **ComfyUI backend folder**. Review those terms before choosing **Download & select**. Studio downloads only public, pinned safetensors from the listed upstream sources; it does not upload your character assets, collect credentials, or change Python packages.
+
+The download panel shows byte progress and **Cancel download**. Files are checked against pinned sizes and SHA-256 hashes before publication. Existing verified files are reused; conflicting files are never overwritten. An interrupted or corrupt transfer is not treated as installed. Cancellation keeps previously verified files but leaves model selections unchanged. A later retry reuses those files; partial downloads are not resumed.
+
+On completion, Studio refreshes ComfyUI, selects and saves the required models automatically, and leaves generation stopped. Click the stage's original action to retry. Downloads share the local job slot with Designer and Animator. If files are not visible to ComfyUI, Studio reports that setup is incomplete and does not change selections: check **Backend connections** against the actual running backend folder, check its native nodes, and restart ComfyUI if necessary before retrying.
+
+Automatic packages cover BiRefNet, the FLUX.2 klein 4B edit components plus BiRefNet, DreamShaper 8 for SD 1.5, SDXL base 1.0, standard Hunyuan3D 2, and TRELLIS.2. Already-selected compatible weights are preserved. Hunyuan3D 2mini, other checkpoints, optional IP-Adapter, Ollama naming, native nodes and gated Animator models still require their documented setup. **Review model settings** and **Backend connections** remain available for those cases; Studio never silently switches profiles or accepts model access terms for you.
 
 | Stage | Supported profile | Estimated available GPU budget | Setup |
 |---|---|---|---|
@@ -199,13 +295,13 @@ Use the [official native Hunyuan3D setup](https://docs.comfy.org/tutorials/3d/hu
 
 The standard native checkpoint is [`hunyuan3d-dit-v2_fp16.safetensors`](https://huggingface.co/Comfy-Org/hunyuan3D_2.0_repackaged/tree/main/split_files), approximately 4.9 GB, placed in `ComfyUI\models\checkpoints`. Review its [Tencent Hunyuan Community License](https://huggingface.co/Comfy-Org/hunyuan3D_2.0_repackaged/blob/main/LICENSE) before use. Select **Hunyuan3D 2 (geometry)** and this checkpoint, then save model choices.
 
-Background removal uses [Comfy-Org's native BiRefNet weights](https://huggingface.co/Comfy-Org/BiRefNet), also listed in the official `utility_birefnet_remove_background` workflow. Download the approximately 424 MiB safetensors separately, select it after refreshing Designer models, and all subsequent cutout processing is local/offline. A missing segmentation model blocks T-pose completion, not scene generation.
+Background removal uses [Comfy-Org's native BiRefNet weights](https://huggingface.co/Comfy-Org/BiRefNet), also listed in the official `utility_birefnet_remove_background` workflow. Its missing-model warning can download the approximately 424 MiB safetensors into `models\background_removal`, verify it, refresh ComfyUI and select it automatically. Manual installation remains supported. Subsequent cutout processing is local/offline. A missing segmentation model blocks T-pose completion, not scene generation.
 
 Observed Designer runs have exercised DreamShaper 8 scene generation, FLUX.2 klein scene-image editing, BiRefNet isolation, and standard native Hunyuan3D 2 geometry with Blender/Animator handoff. A separate native TRELLIS.2 run started from that edited cutout and produced a textured GLB with embedded 1K material maps, which survived export and Blender/Animator import. The earlier SD/OpenPose T-pose path was replaced because it changed clothing and identity. These runs do not establish successful skinning or animation of the generated meshes, compatibility on other machines, or production quality. Automatic naming still requires a separately installed local Ollama model and has not been exercised with real naming weights.
 
 **Scope:** native Hunyuan3D produces **untextured, unrigged geometry**; it does not bake the reference's colors onto the mesh. TRELLIS.2 adds local texture synthesis, but its output is also unrigged. Neither profile guarantees retopology, fingers/faces, precise pose, faithful unseen surfaces or production-ready game assets. Review and potentially repair the mesh before guided humanoid rigging.
 
-Designs, reference copies, settings snapshots, and API workflow JSON live under `%APPDATA%\KimodoStudio\designs` with an independent `designer.json` index. Generated stages publish only a validated output from their own completed ComfyUI history entry; imports are labeled separately, and opaque T-poses remain blocked from 3D until cleanup. Cancellation targets only that prompt; restart marks interrupted stages failed while keeping earlier completed references. Failed stages can be retried after fixing setup, and completed stages cannot be overwritten. Model choices can be corrected for an unfinished stage; completed generated image stages retain their original image model family.
+Designs, reference copies, settings snapshots, and API workflow JSON live under `%APPDATA%\KimodoStudio\designs` with an independent `designer.json` index. Generated stages publish only a validated output from their own completed ComfyUI history entry; imports are labeled separately, and opaque T-poses remain blocked from 3D until cleanup. Cancellation targets only that prompt; restart marks interrupted stages failed while keeping earlier completed references. Failed stages can be retried after fixing setup. Completed stages can be regenerated as new saved variations, never overwritten. Current saved model choices apply to the stage being generated; copied references retain their original workflow manifests and image model family.
 
 ## Animator workflow
 
@@ -334,6 +430,8 @@ The actual supplied `Bruiser_base.fbx` has 198,581 vertices and no existing rig.
 npm test
 npm run typecheck
 npm run test:desktop
+npm run test:mcp
+node --import tsx scripts\generation-smoke.mjs
 node scripts\designer-smoke.mjs
 node scripts\designer-smoke.mjs --generate
 node scripts\designer-smoke.mjs --textured --input artifacts\designer-smoke\tpose-cutout.png
@@ -344,6 +442,7 @@ node scripts\graph-smoke.mjs
 node scripts\graph-smoke.mjs --packaged
 node scripts\packaged-smoke.mjs
 node scripts\model-setup-smoke.mjs
+node scripts\model-download-smoke.mjs
 & "$env:LOCALAPPDATA\ComfyUI\venv\Scripts\python.exe" tests\test_preflight.py
 node --import tsx scripts\batch-integration.ts
 node --import tsx scripts\graph-integration.ts
@@ -352,6 +451,10 @@ node --import tsx scripts\check-local-backends.ts
 ```
 
 The FBX integration scripts expect the user-supplied copy at `artifacts\Bruiser_base.fbx`; no character asset is fetched from third parties. Blender's redistribution/license files remain bundled with its runtime.
+
+`model-download-smoke.mjs` runs against the built app with an isolated workspace and a controlled local model catalog. It exercises the real missing-BiRefNet warning and declined native confirmation, then fixture transfer progress, cancellation, failure and automatic selection. It downloads no weights and performs no inference. Backend tests separately exercise byte transfer, verification, file preservation and saved configuration.
+
+`generation-smoke.mjs` uses the real desktop MCP controls with a deterministic loopback ComfyUI fixture to complete and rerun scene, T-pose and 3D stages. It checks prompt/seed/model changes, busy and unsaved-setting locks, failed-run retry, persistence and preservation of earlier outputs. It requires the built app but no weights or Blender, and is not evidence of learned inference or asset quality.
 
 The Designer smoke command without flags checks layout, the existing local model list, and external image entry points using explicitly test-only image fixtures. `--generate` starts a temporary app-owned ComfyUI on a free loopback port, uses installed DreamShaper, FLUX.2 klein 4B/Qwen 3/FLUX.2 VAE, BiRefNet and standard native Hunyuan3D 2 weights, and runs the real scene-to-edited-cutout-to-mesh pipeline without restarting the user's service. It requires actual GLB generation and Blender/Animator handoff, checks external GLB import, and preserves real references, `character.glb` and screenshots in `artifacts\designer-smoke`. It does not treat fixtures as learned output or populate the user's workspace with test records. `--packaged` runs the same check against the portable Character Studio executable.
 

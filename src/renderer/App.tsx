@@ -6,6 +6,7 @@ import { LibraryPanel } from './LibraryPanel'
 import { ModelSetupGuide } from './ModelSetupGuide'
 import { DesignerPanel } from './DesignerPanel'
 import { SetupWizard } from './SetupWizard'
+import { FileDialog } from './FileDialog'
 import { defaultLandmarks } from '../shared/rig'
 import { recommendTextEncoder } from '../shared/text-encoder'
 
@@ -15,6 +16,8 @@ const humanOutline = 'M59.9 40.15A19.8 19.8 0 1 0 40.1 40.15Q41.2 44.5 34.5 46.5
 
 export function App() {
   const [snapshot, setSnapshot] = useState<Snapshot>()
+  const [mcpEnabled, setMcpEnabled] = useState(false)
+  const [mcpChanging, setMcpChanging] = useState(false)
   const [workspace, setWorkspace] = useState<'designer' | 'animator'>('animator')
   const [characterId, setCharacterId] = useState('')
   const [setup, setSetup] = useState<RigSetup>({ rotation: [0, 0, 0], landmarks: defaultLandmarks() })
@@ -48,7 +51,7 @@ export function App() {
   const output = completed.find(j => j.id === jobId)
   const active = snapshot?.jobs.find(j => !done.has(j.stage))
   const activeBatch = snapshot?.batches.find(b => b.status === 'running')
-  const locked = busy || !!active || !!activeBatch || !!snapshot?.designer?.designs.some(d => d.status === 'running')
+  const locked = busy || !!active || !!activeBatch || !!snapshot?.designer?.designs.some(d => d.status === 'running') || snapshot?.designer?.modelDownload?.status === 'running'
   const blocked = checks.filter(c => c.status === 'blocked')
   const gpu = checks.find(check => check.gpu)?.gpu
   const encoderAdvice = recommendTextEncoder(gpu)
@@ -62,14 +65,16 @@ export function App() {
   }
   useEffect(() => {
     if (!window.studio) { setError('The native desktop bridge is unavailable. Start CharacterStudio.exe or run npm run dev.'); return }
+    window.studio.desktopControlEnabled().then(setMcpEnabled).catch(e => setError(explain(e)))
     window.studio.snapshot().then(s => {
       setSnapshot(s); setSettings(s.settings)
       if (s.characters.length) selectCharacter(s.characters[0])
     }).catch(e => setError(explain(e)))
     const remove = window.studio.onUpdate(setSnapshot)
     window.studio.setupState().then(state => { if (state.firstLaunch || state.showOnLaunch) setSetupOpen(true) }).catch(e => setError(explain(e)))
+    const removeMcp = window.studio.onDesktopControlChanged(setMcpEnabled)
     void refreshChecks()
-    return remove
+    return () => { remove(); removeMcp() }
   }, [])
   function closeSetup() {
     setSetupOpen(false)
@@ -147,7 +152,7 @@ export function App() {
     </header>
     {snapshot && <DesignerPanel snapshot={snapshot} visible={workspace === 'designer'} animatorBusy={busy || !!active || !!activeBatch} onSettings={() => setSettingsOpen(true)} onAnimate={c => { selectCharacter(c); setFit(true); setWorkspace('animator') }} />}
     <div id="animator-panel" role="tabpanel" aria-labelledby="animator-tab" hidden={workspace !== 'animator'} className="studio-layout">
-      <aside className="left-panel">
+      <aside className="left-panel" aria-label="Animator character library">
         <div className="section-kicker">YOUR WORKSPACE</div><h1>Character lab</h1>
         <p className="intro">From static mesh to something<br />with a little more life.</p>
         <button className="import-button" disabled={locked} onClick={importFbx}><Plus size={18} /> Import FBX <span>LOCAL FILE</span></button>
@@ -171,7 +176,7 @@ export function App() {
         <button className="text-button data-button" onClick={() => void perform(() => window.studio.revealData())}><FolderOpen size={14} /> Open workspace files</button>
       </aside>
 
-      <main className="center-panel">
+      <main className="center-panel" aria-label="Animator scene">
         <div className="scene-heading">
           <div><span className="section-kicker">SCENE</span><h2>{character?.name.replace(/\.fbx$/i, '') ?? 'Untitled character'}<span className="file-tag">{mode === 'animation' ? 'ANIMATED' : character?.rigged && !dirty ? 'RIGGED' : 'FBX'}</span></h2></div>
           <div className="view-tabs">
@@ -193,7 +198,7 @@ export function App() {
         </section>
       </main>
 
-      <aside className="right-panel">
+      <aside className="right-panel" aria-label="Animator motion controls">
         {fit && character ? <>
           <div className="section-kicker">02 / PREPARE CHARACTER</div><h2>Fit the humanoid rig</h2><p className="panel-description">Use a full-body T- or A-pose. Point the character forward (+Z), then place joints inside the mesh.</p>
           <label className="field-label">Orientation <span>degrees</span></label>
@@ -242,6 +247,14 @@ export function App() {
     {settingsOpen && settings && <div className="modal-backdrop"><section className="settings-modal" role="dialog" aria-modal="true" aria-label="Local backend settings">
       <div className="modal-heading"><div><span className="section-kicker">LOCAL INFRASTRUCTURE</span><h2>Backend connections</h2></div><button aria-label="Close settings" onClick={() => setSettingsOpen(false)}><X size={20} /></button></div>
       <p className="panel-description">Blender runs independently on CPU. The existing ComfyUI GPU environment is reused, never reinstalled or downgraded.</p>
+      <h3>Agent control</h3>
+      <label className="checkbox"><input type="checkbox" checked={mcpEnabled} disabled={mcpChanging} onChange={event => {
+        const enabled = event.target.checked
+        setMcpChanging(true); setError('')
+        void window.studio.setDesktopControlEnabled(enabled).then(setMcpEnabled).catch(e => setError(explain(e))).finally(() => setMcpChanging(false))
+      }} /> Enable MCP control</label>
+      <p className="fine-print" role="status" aria-label="MCP control status">{mcpChanging ? 'Changing MCP control...' : mcpEnabled ? 'Enabled. Trusted local agents can operate this desktop.' : 'Disabled. MCP connections are blocked.'}</p>
+      <p className="fine-print">This takes effect immediately and is saved independently of backend settings, even during a job. Only enable it for agents you trust with your local assets, settings and exports. Disabling disconnects MCP clients without cancelling running work; re-enabling requires clients to reconnect.</p>
       <label className="field-label" htmlFor="text-encoder">Kimodo text encoder</label>
       <select id="text-encoder" aria-describedby="encoder-memory-guidance" disabled={locked || starting} value={settings.textEncoder ?? 'llm2vec'} onChange={e => setSettings({ ...settings, textEncoder: e.target.value === 'lfm' ? 'lfm' : 'llm2vec' })}>
         <option value="llm2vec">Llama + LLM2Vec (original, ~16 GB weights){encoderAdvice.encoder === 'llm2vec' ? ' - Recommended for available memory' : ''}</option>
@@ -268,6 +281,7 @@ export function App() {
       <p className="fine-print">Both encoders run locally inside ComfyUI. LFM uses an explicit experimental Kimodo loader; it never falls back to Llama or remote inference. The original Llama loader uses TEXT_ENCODER_MODE=local when Studio starts ComfyUI; use that setting for an externally started backend. Hugging Face supplies downloads only. Closing Studio stops only the ComfyUI process it started.</p>
     </section></div>}
     {setupOpen && window.studio && <SetupWizard onClose={closeSetup} />}
+    <FileDialog />
   </div>
 }
 

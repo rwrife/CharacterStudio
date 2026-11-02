@@ -56,11 +56,13 @@ export interface Design {
   modelTextured?: boolean
   characterId?: string
   sources?: Partial<Record<DesignStage, DesignSource>>
+  recovery?: import('./designer-models').DesignRecovery
 }
 export interface DesignerSnapshot {
   config: DesignerConfig
   references: DesignReference[]
   designs: Design[]
+  modelDownload?: import('./designer-models').ModelDownload
 }
 export interface DesignerReadiness {
   devices: { name: string; totalGB: number; freeGB: number }[]
