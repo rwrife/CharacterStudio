@@ -590,6 +590,8 @@ Drag nodes to arrange the graph; drag an output dot to an input dot to connect n
 
 Graph instructions are treated as one clip per node; punctuation does not create extra segments. Older configurations migrate without changing their prompts, seeds or period-separated segment durations, using direct-pose connections. Selecting a node type explicitly opts a legacy node into the new single-clip behavior.
 
+**Endpoint failures:** **Generated motion did not honor its endpoint pose** means the sampled clip failed the 2cm/5-degree join check, not that the preceding PyTorch deprecation warning stopped generation. Conditioning does not guarantee an exact pose match: the built-in graph exports the Kimodo sampler's motion without running its optional motion-correction stage. A different node seed or more denoising steps in a **new batch** may help, but does not guarantee success. **Run same batch again** preserves the original snapshot, including seeds and steps. Failed joins remain failed; installing an optional correction package alone does not enable a correction stage in Studio.
+
 ## Repeatability and collections
 
 Open **Motion library & batches**, or **Save this configuration** beside the current prompt.
