@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ArrowDownToLine, Check, RefreshCw, X } from 'lucide-react'
-import { aiConfigurationSchema, aiModelLabel, aiRouteLabel, aiStages, aiStageSchema, defaultAiConfiguration, localRoute, resolveAiRoute, tripoCredentialEndpoints, tripoImageModelId, tripoImageModels, unavailableTripoImageModels, workflowSchema,
+import { aiConfigurationSchema, aiModelLabel, aiRouteLabel, aiStages, aiStageSchema, defaultAiConfiguration, localRoute, resolveAiRoute, tripoCredentialEndpoints, tripoImageModelId, tripoImageModels, tripoMeshLimits, unavailableTripoImageModels, workflowSchema,
   type AiConfiguration, type AiHardware, type AiRoute, type AiStage, type TripoCredentialTarget } from '../shared/ai'
 import { imageProfiles, meshProfiles } from '../shared/designer'
 import type { Snapshot } from '../shared/types'
@@ -98,6 +98,7 @@ export function AiProvidersPanel({ snapshot, initialStage = 'scene', locked, onC
   const tripoImage = route.provider === 'tripo' && ['scene', 'tpose'].includes(stage)
   const tripoModel = tripoImageModelId(route.model)
   const customModel = tripoImage && (customTripoModel || !Object.hasOwn(tripoImageModels, tripoModel))
+  const meshLimits = tripoMeshLimits(route.model, route.tripoMesh?.smartLowPoly)
   const tripoEndpoint = route.provider === 'tripo' ? route.endpoint.replace(/\/+$/, '') : tripoCredentialEndpoints.tripo
   const tripoTarget = tripoEndpoint === tripoCredentialEndpoints.tripo ? 'tripo' :
     tripoEndpoint === tripoCredentialEndpoints['tripo-com'] ? 'tripo-com' : undefined
@@ -128,6 +129,12 @@ export function AiProvidersPanel({ snapshot, initialStage = 'scene', locked, onC
     setStage(next); setError(''); setNotice(''); setCustomTripoModel(false)
     const workflow = next === 'global' ? config.globalComfy?.workflow : resolveAiRoute(config, next).workflow
     setWorkflowText(workflow ? JSON.stringify(workflow, null, 2) : '')
+  }
+  function changeTripoMesh(next: NonNullable<AiRoute['tripoMesh']>) {
+    const nextRoute = { ...route }
+    if (next.maxTriangles !== undefined || next.smartLowPoly) nextRoute.tripoMesh = next
+    else delete nextRoute.tripoMesh
+    changeRoute(nextRoute)
   }
   function choice(value: string) {
     setWorkflowText(''); setSecret(''); setCustomTripoModel(false)
@@ -212,6 +219,23 @@ export function AiProvidersPanel({ snapshot, initialStage = 'scene', locked, onC
             'Use a model ID your provider actually supports.'}</p>
         </>}
       </>}
+      {route.provider === 'tripo' && stage === 'mesh' && <section className="ai-mesh-settings" aria-label="Tripo mesh settings">
+        <h3>Triangle reduction</h3>
+        <label className="field-label" htmlFor="ai-tripo-triangles">Maximum triangles</label>
+        <input id="ai-tripo-triangles" type="number" min={meshLimits.min} max={meshLimits.max} step={1}
+          aria-describedby="ai-tripo-triangles-help" disabled={disabled || inherited}
+          placeholder="Automatic (Tripo default)" value={route.tripoMesh?.maxTriangles ?? ''}
+          onChange={event => changeTripoMesh({ ...route.tripoMesh, maxTriangles: event.target.value === '' ? undefined : event.target.valueAsNumber })} />
+        <button className="text-button" disabled={disabled || inherited || route.tripoMesh?.maxTriangles === undefined}
+          onClick={() => changeTripoMesh({ ...route.tripoMesh, maxTriangles: undefined })}>Use automatic triangle count</button>
+        <p className="fine-print" id="ai-tripo-triangles-help">Leave blank for automatic density. Enter {meshLimits.min.toLocaleString('en-US')}-{meshLimits.max.toLocaleString('en-US')} triangles.
+          This is a maximum, not an exact target. Custom models may impose stricter limits.</p>
+        <label className="checkbox"><input type="checkbox" checked={route.tripoMesh?.smartLowPoly ?? false} disabled={disabled || inherited}
+          onChange={event => changeTripoMesh({ ...route.tripoMesh, smartLowPoly: event.target.checked || undefined })} /> Smart low-poly</label>
+        <p className="fine-print">Generate simplified topology for simpler shapes. With a triangle budget, use 500-20,000.
+          Complex characters may fail or lose detail. {meshLimits.smartLowPolySupported ? '' : 'Not supported by this model; use H3 v3.0/v3.1 or leave it off.'}</p>
+        <p className="fine-print">Applies to new 3D generations, not existing meshes. Output stays triangular GLB; no quad/FBX conversion is enabled.</p>
+      </section>}
       {route.provider === 'tripo' && <div className="ai-warning"><strong>Paid Tripo API credits</strong><p>Use your own Tripo API key or token. API credit balance is separate from web subscriptions. Tripo hosts the image models above; its H3 v3.1 mesh model is not a verified Tencent Hunyuan 3.1 integration. Check current availability and prices in your Tripo account. No API key is included.</p></div>}
       {route.provider === 'api' && <p className="ai-warning">This endpoint must implement the documented Studio API gateway v1 contract, not an arbitrary vendor REST API. A gateway can route to Nano Banana, GPT Image, Midjourney or Hunyuan 3.1 using the model ID above. These are not bundled vendor integrations.</p>}
       {route.provider === 'comfyui' && stage !== 'global' && !inherited && <>

@@ -100,14 +100,36 @@ export function providerUrl(value: string): string {
   return url.origin + url.pathname.replace(/\/+$/, '')
 }
 
+export function tripoMeshLimits(model: string, smartLowPoly = false) {
+  return {
+    min: smartLowPoly ? 500 : 1,
+    max: smartLowPoly ? 20_000 : model === 'v2.5-20250123' ? 500_000 : model === 'v3.0-20250812' ? 1_000_000 : 1_500_000,
+    smartLowPolySupported: !['v2.5-20250123', 'P1-20260311'].includes(model)
+  }
+}
+
 export const aiRouteSchema = z.object({
   provider: z.enum(['builtin', 'comfyui', 'api', 'tripo']),
   location: z.enum(['local', 'remote']),
   endpoint: z.string().max(2048).default(''),
   model: z.string().trim().max(200).default(''),
   minVramGB: z.number().finite().min(0).max(192).default(0),
+  tripoMesh: z.object({
+    maxTriangles: z.number().finite().int('Maximum triangles must be a whole number.').optional(),
+    smartLowPoly: z.boolean().optional()
+  }).strict().optional(),
   workflow: workflowSchema.optional()
 }).strict().superRefine((route, ctx) => {
+  if (route.tripoMesh) {
+    if (route.provider !== 'tripo')
+      ctx.addIssue({ code: 'custom', message: 'Triangle reduction settings require the Tripo provider.' })
+    const { min, max, smartLowPolySupported } = tripoMeshLimits(route.model, route.tripoMesh.smartLowPoly)
+    const count = route.tripoMesh.maxTriangles
+    if (count !== undefined && (count < min || count > max))
+      ctx.addIssue({ code: 'custom', message: `Maximum triangles must be between ${min.toLocaleString('en-US')} and ${max.toLocaleString('en-US')} for this Tripo model and mode.` })
+    if (route.tripoMesh.smartLowPoly && !smartLowPolySupported)
+      ctx.addIssue({ code: 'custom', message: 'Smart low-poly is not supported by this Tripo model. Turn it off or choose H3 v3.0/v3.1.' })
+  }
   if (route.provider === 'builtin') {
     if (route.location !== 'local' || route.endpoint || route.workflow || route.model)
       ctx.addIssue({ code: 'custom', message: 'Built-in local selections use the existing Designer profiles and Kimodo encoder controls.' })
@@ -135,6 +157,8 @@ export const aiConfigurationSchema = z.object({
   if (config.globalComfy && (config.globalComfy.provider !== 'comfyui' || config.globalComfy.workflow || config.globalComfy.model))
     ctx.addIssue({ code: 'custom', message: 'The global ComfyUI connection cannot have a stage-specific model or template.' })
   for (const [stage, route] of Object.entries(config.stages)) {
+    if (route.tripoMesh && stage !== 'mesh')
+      ctx.addIssue({ code: 'custom', message: 'Tripo triangle reduction settings apply only to 3D mesh generation.' })
     if (route.provider === 'tripo' && !['scene', 'tpose', 'mesh', 'texture', 'rig', 'segmentation'].includes(stage))
       ctx.addIssue({ code: 'custom', message: `Tripo is not a provider for ${stage}. Select a compatible ComfyUI workflow or API gateway.` })
     if (route.provider === 'comfyui' && ['naming', 'rig', 'texture', 'segmentation', 'landmarks', 'cloth'].includes(stage) && !route.workflow)

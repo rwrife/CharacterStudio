@@ -279,6 +279,36 @@ try {
   await click('Save selected file')
   await until(() => readFile(riggedExport).then(bytes => bytes.equals(modelFixture(true, true)), () => false), 'byte-preserving rigged mesh export')
   assert.deepEqual((await state()).designer.designs.find(design => design.id === designId), completed)
+  await click('Model & workflow providers')
+  await select('AI stage', 'mesh')
+  await select('Execution provider', 'tripo')
+  assert.equal(await page.getByLabel('Maximum triangles', { exact: true }).inputValue(), '')
+  await expect(page.getByRole('checkbox', { name: 'Smart low-poly', exact: true })).not.toBeChecked()
+  await fill('Maximum triangles', '50000')
+  await save()
+  assert.deepEqual((await state()).ai.stages.mesh.tripoMesh, { maxTriangles: 50000 })
+  await click('Smart low-poly', 'checkbox')
+  await click('Save provider selections')
+  await until(async () => (await ui()).text.includes('between 500 and 20,000'), 'incompatible low-poly budget rejected visibly')
+  assert.deepEqual((await state()).ai.stages.mesh.tripoMesh, { maxTriangles: 50000 }, 'Invalid edits must not overwrite saved settings.')
+  await fill('Maximum triangles', '20000')
+  await save()
+  await click('Use automatic triangle count')
+  await save()
+  assert.deepEqual((await state()).ai.stages.mesh.tripoMesh, { smartLowPoly: true })
+  await click('Smart low-poly', 'checkbox')
+  await save()
+  assert.equal((await state()).ai.stages.mesh.tripoMesh, undefined, 'Clearing both controls restores unchanged provider defaults.')
+  await fill('Maximum triangles', '20000')
+  await click('Smart low-poly', 'checkbox')
+  await save()
+  for (const stage of ['scene', 'tpose', 'texture', 'rig']) {
+    await select('AI stage', stage)
+    assert.ok(!(await ui()).elements.some(item => item.name === 'Maximum triangles' || item.name === 'Smart low-poly'))
+  }
+  await select('AI stage', 'mesh')
+  assert.equal(await page.getByLabel('Maximum triangles', { exact: true }).inputValue(), '20000')
+  await click('Close provider settings')
   pending = true
   await click('Generate scene')
   await click('Approve this remote stage')
@@ -343,10 +373,11 @@ try {
   await fill('Tripo API key / token OS-encrypted', tripoKey)
   await click('Save Tripo API key')
   await until(async () => (await ui()).text.includes('Tripo API key encrypted'), 'fake key for rejection fixture')
-  await app.evaluate((_, encodedPng) => {
+  await app.evaluate((_, { encodedPng, encodedGlb }) => {
     const originalFetch = globalThis.fetch
     globalThis.providerSmokeRequests = []
     globalThis.providerSmokeSuccess = false
+    globalThis.providerSmokeMeshPending = true
     globalThis.providerSmokeRestoreFetch = () => { globalThis.fetch = originalFetch }
     globalThis.fetch = async (input, options) => {
       const url = String(input)
@@ -361,6 +392,17 @@ try {
         }
         if (globalThis.providerSmokeSuccess && url.endsWith('/tasks/tripo_legacy_fixture'))
           return Response.json({ code: 0, data: { status: 'success', output: { generated_image_url: 'https://assets.tripo3d.ai/fixture.png' } } })
+        if (globalThis.providerSmokeSuccess && url.endsWith('/files'))
+          return Response.json({ code: 0, data: { file_token: 'tripo_mesh_image_fixture' } })
+        if (globalThis.providerSmokeSuccess && url.endsWith('/generation/image-to-model')) {
+          const body = JSON.parse(options.body)
+          if (body.face_limit !== 20000 || body.smart_low_poly !== true || body.quad !== undefined)
+            return Response.json({ code: 1004, message: 'Fixture expected 20,000 triangles, Smart low-poly and no quad conversion.' }, { status: 400 })
+          return Response.json({ code: 0, data: { task_id: 'tripo_mesh_fixture' } })
+        }
+        if (globalThis.providerSmokeSuccess && url.endsWith('/tasks/tripo_mesh_fixture'))
+          return Response.json({ code: 0, data: { status: globalThis.providerSmokeMeshPending ? 'running' : 'success',
+            output: { model_url: 'https://assets.tripo3d.ai/fixture.glb' } } })
         return Response.json({
           code: 1004, message: 'Fixture: selected model was rejected. test-only-tripo-api-key',
           suggestion: 'Check the image model for this task.'
@@ -370,9 +412,13 @@ try {
         if (options?.headers) throw new Error('Fixture image download must not receive credentials.')
         return new Response(Buffer.from(encodedPng, 'base64'))
       }
+      if (url === 'https://assets.tripo3d.ai/fixture.glb') {
+        if (options?.headers) throw new Error('Fixture model download must not receive credentials.')
+        return new Response(Buffer.from(encodedGlb, 'base64'))
+      }
       return originalFetch(input, options)
     }
-  }, png.toString('base64'))
+  }, { encodedPng: png.toString('base64'), encodedGlb: modelFixture(true).toString('base64') })
   await click('Close provider settings')
   await click('Generate scene')
   await until(async () => (await ui()).modal === 'Approve remote AI execution', 'Tripo fixture approval')
@@ -407,14 +453,44 @@ try {
   assert.ok(translated.sceneUrl)
   assert.equal(translated.ai.at(-1).route.model, 'chat_image_1.5')
   assert.equal((await state()).ai.stages.scene.model, 'gpt_image_1.5')
-  const tripoRequests = await app.evaluate(() => {
-    globalThis.providerSmokeRestoreFetch()
-    return globalThis.providerSmokeRequests
-  })
+  const tripoRequests = await app.evaluate(() => globalThis.providerSmokeRequests)
   assert.equal(tripoRequests.length, 3, 'Exactly two explicit submissions and one success poll are expected.')
   assert.equal(tripoRequests[0].url, 'https://openapi.tripo3d.ai/v3/generation/text-to-image')
   assert.equal(JSON.parse(tripoRequests[0].body).model, 'banana2')
   assert.equal(JSON.parse(tripoRequests[1].body).model, 'chat_image_1.5')
+  pending = false
+  await click('Use scene & generate T-pose')
+  await click('Approve this remote stage')
+  await until(async () => (await state()).designer.designs[0].tposeIsolated, 'T-pose for triangle-settings fixture')
+  await click('Use T-pose & generate 3D')
+  await until(async () => (await ui()).modal === 'Approve remote AI execution', 'mesh triangle settings approval')
+  assert.ok((await ui()).text.includes('Maximum triangles: 20,000'))
+  assert.ok((await ui()).text.includes('Smart low-poly: on'))
+  assert.equal((await app.evaluate(() => globalThis.providerSmokeRequests)).length, 3, 'Triangle settings must not bypass upload consent.')
+  await click('Approve this remote stage')
+  await until(async () => (await app.evaluate(() => globalThis.providerSmokeRequests)).some(item => item.url.endsWith('/tasks/tripo_mesh_fixture')), 'pending triangle-constrained mesh')
+  await click(/^3D mesh generation provider:/)
+  const lockedTriangles = (await ui()).elements.find(item => item.name === 'Maximum triangles')
+  const lockedLowPoly = (await ui()).elements.find(item => item.name === 'Smart low-poly')
+  assert.equal(lockedTriangles?.disabled, true)
+  assert.equal(lockedLowPoly?.disabled, true)
+  assert.equal((await client.callTool({ name: 'studio_set_value', arguments: { ref: lockedTriangles.ref, value: '10000' } })).isError, true)
+  assert.equal((await client.callTool({ name: 'studio_click', arguments: { ref: lockedLowPoly.ref } })).isError, true)
+  await click('Close provider settings')
+  await app.evaluate(() => { globalThis.providerSmokeMeshPending = false })
+  await until(async () => !!(await state()).designer.designs[0].modelUrl && (await state()).designer.designs[0].status === 'idle', 'triangle-constrained GLB reaches the desktop')
+  const triangleDesign = (await state()).designer.designs[0]
+  assert.deepEqual(triangleDesign.ai.findLast(item => item.stage === 'mesh').route.tripoMesh, { maxTriangles: 20000, smartLowPoly: true })
+  assert.deepEqual((await state()).designer.designs.find(design => design.id === designId), completed)
+  const meshRequests = await app.evaluate(() => {
+    globalThis.providerSmokeRestoreFetch()
+    return globalThis.providerSmokeRequests.filter(item => item.url.endsWith('/generation/image-to-model'))
+  })
+  assert.equal(meshRequests.length, 1)
+  assert.deepEqual(JSON.parse(meshRequests[0].body), {
+    input: 'tripo_mesh_image_fixture', model: 'v3.1-20260211', model_seed: 42, texture: true, pbr: true,
+    face_limit: 20000, smart_low_poly: true
+  })
   await click('Model & workflow providers')
   await select('AI stage', 'scene')
   await select('Tripo image model', 'banana2')
@@ -427,10 +503,17 @@ try {
   const screenshot = await client.callTool({ name: 'studio_screenshot', arguments: {} })
   assert.equal(screenshot.content[0].type, 'image')
   await writeFile(resolve('docs', 'screenshots', 'ai-providers.png'), Buffer.from(screenshot.content[0].data, 'base64'))
+  await select('AI stage', 'mesh')
+  await page.setViewportSize({ width: 1440, height: 2100 })
+  await call('studio_scroll', { ref: await locate('Model and workflow providers', 'dialog'), y: -10000 })
+  const meshScreenshot = await client.callTool({ name: 'studio_screenshot', arguments: {} })
+  assert.equal(meshScreenshot.content[0].type, 'image')
+  await writeFile(resolve('docs', 'screenshots', 'tripo-mesh-settings.png'), Buffer.from(meshScreenshot.content[0].data, 'base64'))
   await client.close(); client = undefined
   await app.close(); app = undefined
   const saved = JSON.parse(await readFile(join(directory, 'ai-providers.json'), 'utf8'))
   assert.equal(saved.configuration.stages.scene.model, 'banana2')
+  assert.deepEqual(saved.configuration.stages.mesh.tripoMesh, { maxTriangles: 20000, smartLowPoly: true })
   assert.ok(saved.history.length >= 8)
   assert.equal(Object.keys(JSON.parse(await readFile(join(directory, 'ai-credentials.json'), 'utf8'))).length, 0)
   app = await electron.launch({ args: ['.', '--mcp'], env: { ...process.env, STUDIO_SKIP_SETUP_CHECKLIST: '1', STUDIO_DATA_DIR: directory }, timeout: 60000 })
@@ -442,8 +525,19 @@ try {
     args: [resolve('scripts', 'mcp-client.mjs'), '--connection', join(directory, 'mcp-connection.json')] }))
   assert.deepEqual((await state()).ai, saved.configuration)
   assert.deepEqual((await state()).designer.designs.find(design => design.id === rigged.id), rigged)
+  // Asset URLs are re-registered at startup; saved data and the displayed image must remain unchanged.
+  const { tposeUrl: originalPoseUrl, ...beforeRestart } = triangleDesign
+  const { tposeUrl: restoredPoseUrl, ...afterRestart } = (await state()).designer.designs.find(design => design.id === triangleDesign.id)
+  assert.ok(originalPoseUrl && restoredPoseUrl)
+  assert.deepEqual(afterRestart, beforeRestart)
+  assert.deepEqual(Buffer.from(await reopened.evaluate(async url => Array.from(new Uint8Array(await (await fetch(url)).arrayBuffer())), restoredPoseUrl)), png)
+  await click('Designer', 'tab')
+  await click('Model & workflow providers')
+  await select('AI stage', 'mesh')
+  assert.equal(await reopened.getByLabel('Maximum triangles', { exact: true }).inputValue(), '20000')
+  await expect(reopened.getByRole('checkbox', { name: 'Smart low-poly', exact: true })).toBeChecked()
   assert.deepEqual(errors, [])
-  console.log('Provider MCP smoke passed: default Tripo key entry, custom-only model IDs, current-step models, global/native/stage selections, workflow import/invalid mappings, approval/rejection, mixed routing, real PNG/PBR/skinned GLB variations, credential redaction/isolation/locks, actionable redacted HTTP 400, cancellation and provenance after restart. Fixtures only; no cloud requests or learned inference.')
+  console.log('Provider MCP smoke passed: default Tripo key entry, custom-only model IDs, current-step models, triangle budgets/low-poly validation, approval, request payloads and locks, global/native/stage selections, workflow import/invalid mappings, mixed routing, real PNG/PBR/skinned GLB variations, credential redaction/isolation, actionable redacted HTTP 400, cancellation and provenance after restart. Fixtures only; no cloud requests or learned inference.')
 } finally {
   await client?.close()
   await app?.close()

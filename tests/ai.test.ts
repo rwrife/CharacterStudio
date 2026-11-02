@@ -148,6 +148,33 @@ test('templates have explicit bindings and output contracts, preserve checkpoint
   assert.throws(() => aiConfigurationSchema.parse({ version: 1, stages: { motion: { ...route('https://gpu.example', 'comfyui'), workflow: motion } } }), /ignores inline JSON/)
 })
 
+test('Tripo triangle budgets validate model and mode limits without changing existing defaults', () => {
+  const chosen = { ...route('https://openapi.tripo3d.ai', 'tripo'), model: 'v3.1-20260211' }
+  const config = { version: 1, stages: { mesh: chosen } }
+  assert.deepEqual(aiConfigurationSchema.parse(config), config)
+  for (const [model, maximum] of [['v3.1-20260211', 1_500_000], ['v3.0-20250812', 1_000_000], ['v2.5-20250123', 500_000]] as const) {
+    for (const maxTriangles of [1, 20_000, maximum])
+      assert.equal(aiRouteSchema.parse({ ...chosen, model, tripoMesh: { maxTriangles } }).tripoMesh?.maxTriangles, maxTriangles)
+    assert.throws(() => aiRouteSchema.parse({ ...chosen, model, tripoMesh: { maxTriangles: maximum + 1 } }), /Maximum triangles/)
+  }
+  for (const maxTriangles of [-1, 0, 1.5, NaN, Infinity, '20000'])
+    assert.equal(aiRouteSchema.safeParse({ ...chosen, tripoMesh: { maxTriangles } }).success, false)
+  for (const maxTriangles of [undefined, 500, 20_000])
+    assert.equal(aiRouteSchema.parse({ ...chosen, tripoMesh: { maxTriangles, smartLowPoly: true } }).tripoMesh?.smartLowPoly, true)
+  for (const maxTriangles of [499, 20_001])
+    assert.throws(() => aiRouteSchema.parse({ ...chosen, tripoMesh: { maxTriangles, smartLowPoly: true } }), /between 500 and 20,000/)
+  for (const model of ['v2.5-20250123', 'P1-20260311'])
+    assert.throws(() => aiRouteSchema.parse({ ...chosen, model, tripoMesh: { smartLowPoly: true } }), /not supported/)
+  const meshRoute = { ...chosen, tripoMesh: { maxTriangles: 20_000, smartLowPoly: true } }
+  for (const stage of ['scene', 'tpose', 'texture', 'rig'])
+    assert.throws(() => aiConfigurationSchema.parse({ version: 1, stages: { [stage]: meshRoute } }), /only to 3D mesh/)
+  assert.throws(() => aiRouteSchema.parse({ ...meshRoute, provider: 'api' }), /require the Tripo/)
+  assert.throws(() => aiRouteSchema.parse({ ...chosen, tripoMesh: { quad: true } }), /Unrecognized key/)
+  assert.equal(aiRouteSchema.safeParse({ ...chosen, tripoMesh: { smartLowPoly: 'true' } }).success, false)
+  assert.notEqual(hashConfiguration(chosen), hashConfiguration(meshRoute))
+  assert.notEqual(hashConfiguration(meshRoute), hashConfiguration({ ...meshRoute, tripoMesh: { maxTriangles: 10_000, smartLowPoly: true } }))
+})
+
 test('Tripo keys can be saved before choosing a route without changing local defaults or endpoint scopes', async t => {
   const root = await temp(t), vault = new AiCredentials(root, encryption())
   const config = structuredClone(defaultAiConfiguration)
@@ -156,6 +183,7 @@ test('Tripo keys can be saved before choosing a route without changing local def
   assert.equal(chosen.provider, 'tripo')
   vault.set(chosen, 'test-only-preset-token')
   assert.equal(vault.get({ ...chosen, model: 'gemini_3.1_flash_image_preview' }), 'test-only-preset-token')
+  assert.equal(vault.get({ ...chosen, model: 'v3.1-20260211', tripoMesh: { maxTriangles: 20_000, smartLowPoly: true } }), 'test-only-preset-token')
   assert.equal(vault.has(resolveAiCredentialRoute(config, 'tripo-com')), false)
   assert.equal(vault.has({ ...chosen, provider: 'api' }), false)
   assert.deepEqual(config, defaultAiConfiguration)
@@ -488,6 +516,70 @@ test('Tripo v3 uses paid credential headers only on API requests, exact routes a
     assert.equal(address, 'https://assets.tripo3d.ai/fixture.glb?signature=test')
     assert.equal(options?.headers, undefined)
     return new Response(new Uint8Array(glb()))
+  })
+
+  await t.test('Tripo triangle settings survive reload and reach approval, mesh requests and immutable provenance', async t => {
+    const root = await temp(t), providers = new AiProviders(root, () => settings)
+    const chosen = { ...route('https://openapi.tripo3d.ai', 'tripo'), model: 'v3.1-20260211' }
+    providers.credentials = new AiCredentials(root, encryption())
+    providers.credentials.set(chosen, 'test-only-key')
+    const approvals: string[][] = [], records: AiProvenance[] = [], requests: Record<string, unknown>[] = []
+    let networkCalls = 0
+    providers.confirm = async request => { approvals.push(request.inputs); return true }
+    const image = join(root, 'reference.png'); await writeFile(image, 'original image')
+    t.mock.method(globalThis, 'fetch', async (url: string | URL | Request, options?: RequestInit) => {
+      networkCalls++
+      const address = String(url)
+      if (address.endsWith('/files')) return Response.json({ code: 0, data: { file_token: 'reference_file' } })
+      if (address.endsWith('/generation/image-to-model')) {
+        requests.push(JSON.parse(String(options?.body)))
+        return Response.json({ code: 0, data: { task_id: `mesh_${requests.length}` } })
+      }
+      if (address.includes('/tasks/')) return Response.json({ code: 0, data: {
+        status: 'success', output: { model_url: 'https://assets.tripo3d.ai/model.glb' }
+      } })
+      assert.equal(address, 'https://assets.tripo3d.ai/model.glb')
+      assert.equal(options?.headers, undefined)
+      return new Response(new Uint8Array(glb()))
+    })
+    const options = { stage: 'mesh' as const, prompt: 'robot', image, seed: 42, steps: 20,
+      signal: AbortSignal.timeout(5000), progress: () => {}, submitted: () => {},
+      record: async (record: AiProvenance) => { records.push(structuredClone(record)) } }
+    for (const badRoute of [
+      { ...chosen, tripoMesh: { maxTriangles: 0 } },
+      { ...chosen, tripoMesh: { maxTriangles: 20_001, smartLowPoly: true } },
+      { ...chosen, model: 'v2.5-20250123', tripoMesh: { smartLowPoly: true } }
+    ]) await assert.rejects(providers.execute({ ...options, route: badRoute }), /triangles|low-poly/)
+    await assert.rejects(providers.execute({ ...options, stage: 'texture', route: { ...chosen, tripoMesh: { maxTriangles: 20_000 } } }), /only to 3D mesh/)
+    assert.equal(approvals.length, 0)
+    assert.equal(networkCalls, 0, 'Invalid settings must fail before uploading or spending credits.')
+    const cases: { tripoMesh: AiRoute['tripoMesh']; expected: Record<string, number | boolean> }[] = [
+      { tripoMesh: undefined, expected: {} },
+      { tripoMesh: { maxTriangles: 50_000 }, expected: { face_limit: 50_000 } },
+      { tripoMesh: { maxTriangles: 20_000, smartLowPoly: true }, expected: { face_limit: 20_000, smart_low_poly: true } },
+      { tripoMesh: { smartLowPoly: true }, expected: { smart_low_poly: true } },
+      { tripoMesh: { maxTriangles: 10_000, smartLowPoly: false }, expected: { face_limit: 10_000, smart_low_poly: false } }
+    ]
+    for (const { tripoMesh, expected } of cases) {
+      const savedRoute = { ...chosen, ...(tripoMesh ? { tripoMesh } : {}) }
+      const previousRecords = structuredClone(records)
+      providers.save({ version: 1, stages: { mesh: savedRoute } })
+      assert.deepEqual(new AiProviders(root, () => settings).route('mesh'), savedRoute)
+      const output = await providers.execute(options)
+      assert.deepEqual(output.model, glb())
+      assert.deepEqual(requests.at(-1), {
+        input: 'reference_file', model: chosen.model, model_seed: 42, texture: true, pbr: true, ...expected
+      })
+      assert.deepEqual(records.at(-1)?.route, savedRoute)
+      assert.equal(records.at(-1)?.configurationHash, hashConfiguration(savedRoute))
+      assert.deepEqual(records.slice(0, previousRecords.length), previousRecords)
+      if (tripoMesh) {
+        assert.ok(approvals.at(-1)?.includes(`Maximum triangles: ${tripoMesh.maxTriangles?.toLocaleString('en-US') ?? 'Automatic'}`))
+        assert.ok(approvals.at(-1)?.includes(`Smart low-poly: ${tripoMesh.smartLowPoly ? 'on' : 'off'}`))
+      }
+    }
+    assert.equal(requests.length, cases.length)
+    assert.equal(await readFile(image, 'utf8'), 'original image')
   })
 
   await t.test('Tripo v3 image requests translate saved aliases and reject unsupported models without substitution', async t => {

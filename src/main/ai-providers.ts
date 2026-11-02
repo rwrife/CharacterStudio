@@ -147,6 +147,8 @@ export class AiProviders {
   }
   async execute(options: Execution): Promise<AiResult> {
     const requested = options.route ?? this.route(options.stage)
+    if (requested.tripoMesh)
+      aiConfigurationSchema.parse({ version: 1, stages: { [options.stage]: requested } })
     const imageStage = options.stage === 'scene' || options.stage === 'tpose'
     const route = requested.provider === 'builtin' ? { ...requested, provider: 'comfyui' as const, endpoint: this.settings().comfyUrl } :
       requested.provider === 'tripo' && imageStage ? { ...requested, model: tripoImageModelId(requested.model) } : requested
@@ -161,6 +163,8 @@ export class AiProviders {
       const approved = await this.confirm({
         id: randomUUID(), stage: options.stage, endpoint: route.endpoint, model: route.model,
         provider: route.provider, inputs: ['Prompt and generation settings', ...(options.image ? ['Character reference image'] : []),
+          ...(route.provider === 'tripo' && options.stage === 'mesh' && route.tripoMesh ?
+            [`Maximum triangles: ${route.tripoMesh.maxTriangles?.toLocaleString('en-US') ?? 'Automatic'}`, `Smart low-poly: ${route.tripoMesh.smartLowPoly ? 'on' : 'off'}`] : []),
           ...(options.mesh ? ['Character mesh and embedded textures'] : []), ...(options.constraints ? ['Actual incoming / endpoint pose constraints'] : [])]
       }, signal)
       if (!approved) throw new Error('Remote execution was not approved. No prompt or asset was transmitted.')
@@ -373,7 +377,10 @@ export class AiProviders {
       const body = {
         ...(input ? { input } : {}), ...(network.route.model ? { model: network.route.model } : {}),
         ...(['scene', 'tpose'].includes(stage) ? { prompt: options.prompt, ...(stage === 'tpose' ? { t_pose: true } : {}) } : {}),
-        ...(stage === 'mesh' ? { model_seed: options.seed, texture: true, pbr: true } : {}),
+        ...(stage === 'mesh' ? { model_seed: options.seed, texture: true, pbr: true,
+          ...(network.route.tripoMesh?.maxTriangles !== undefined ? { face_limit: network.route.tripoMesh.maxTriangles } : {}),
+          ...(network.route.tripoMesh?.smartLowPoly !== undefined ? { smart_low_poly: network.route.tripoMesh.smartLowPoly } : {})
+        } : {}),
         ...(stage === 'rig' ? { rig_type: 'biped', out_format: 'glb', spec: 'tripo' } : {}),
         ...(stage === 'texture' ? { texture: true, pbr: true, texture_seed: options.seed, texture_prompt: { text: options.prompt } } : {})
       }
