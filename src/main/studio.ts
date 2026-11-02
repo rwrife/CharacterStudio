@@ -4,10 +4,12 @@ import { access, copyFile, readdir, stat, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { setTimeout as delay } from 'node:timers/promises'
-import type { Character, Check, GenerateRequest, Job, RigSetup, SkinningMode, Settings, Snapshot, MotionPlan, BatchRequest, Batch, MotionNode, GraphContext } from '../shared/types'
+import type { Character, Check, GenerateRequest, Job, LandmarkSuggestion, RigSetup, SkinningMode, Settings, Snapshot, MotionPlan, BatchRequest, Batch, MotionNode, GraphContext, Vec3 } from '../shared/types'
 import { defaultLandmarks } from '../shared/rig'
+import { fitLandmarks } from '../shared/landmark-fit'
 import { createBatchItems } from '../shared/plans'
-import { errorText, generateSchema, settingsSchema, setupSchema, skinningSchema, planSchema, batchSchema } from './validation'
+import { errorText, generateSchema, settingsSchema, setupSchema, rotationSchema, skinningSchema, planSchema, batchSchema } from './validation'
+import { readGlbGeometry } from './mesh-geometry'
 import { api, cancelMotion, generateMotion } from './comfy'
 import { runProcess } from './process'
 import { validateCharacterGlb, validateDesignGlb } from './export-validation'
@@ -121,6 +123,20 @@ export class Studio {
     return this.snapshot().characters.find(c => c.id === id)!
   }
 
+  private async fitPreview(directory: string, rotation: Vec3): Promise<LandmarkSuggestion> {
+    let geometry
+    try { geometry = await readGlbGeometry(join(directory, 'preview.glb')) }
+    catch (error) { throw new Error(`Could not read this character's mesh: ${errorText(error)}`) }
+    const fit = fitLandmarks(geometry, rotation)
+    return { landmarks: setupSchema.parse({ rotation, landmarks: fit.landmarks }).landmarks, warnings: fit.warnings }
+  }
+
+  async fitLandmarks(id: string, rotation: Vec3): Promise<LandmarkSuggestion> {
+    const value = rotationSchema.parse(rotation)
+    this.character(id)
+    return this.fitPreview(join(this.root, 'characters', id), value)
+  }
+
   private update(job: Job, stage: Job['stage'], message: string, progress: number) {
     Object.assign(job, { stage, message, progress })
     this.persist()
@@ -183,10 +199,21 @@ export class Studio {
       if (requiredTextureSize) await validateDesignGlb(join(output, 'preview.glb'), requiredTextureSize)
       signal.throwIfAborted()
       const report = JSON.parse(readFileSync(join(output, 'import-report.json'), 'utf8'))
+      const rotation = report.suggestedRotation as Vec3
+      const warnings: string[] = [...report.warnings]
+      let landmarks = defaultLandmarks()
+      try {
+        const fit = await this.fitPreview(output, rotation)
+        landmarks = fit.landmarks
+        warnings.push('Joint landmarks were auto-fitted to this mesh. Review them in the front and side views before building the rig.', ...fit.warnings)
+      } catch (error) {
+        warnings.push(`Automatic landmark fitting was unavailable: ${errorText(error)} Place the template landmarks manually.`)
+      }
+      signal.throwIfAborted()
       this.state.characters.unshift({
         id, name, importedAt: new Date().toISOString(), previewUrl: this.asset(`${id}-input`, join(output, 'preview.glb')),
-        vertices: report.vertices, meshes: report.meshes, warnings: report.warnings,
-        setup: { rotation: report.suggestedRotation, landmarks: defaultLandmarks() }, rigged: false
+        vertices: report.vertices, meshes: report.meshes, warnings,
+        setup: { rotation, landmarks }, rigged: false
       })
     })
     return this.snapshot().characters.find(c => c.id === id)!

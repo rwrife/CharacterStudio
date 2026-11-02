@@ -2,21 +2,23 @@ import { readFile } from 'node:fs/promises'
 import { crc32, inflateSync } from 'node:zlib'
 
 interface TextureReference { index: number; texCoord?: number }
-interface Gltf {
+export interface Gltf {
   asset?: { version?: string }
+  scene?: number
+  scenes?: { nodes?: number[] }[]
   buffers?: { uri?: string; byteLength: number }[]
   images?: { uri?: string; bufferView?: number; mimeType?: string }[]
   textures?: { source?: number }[]
   materials?: { pbrMetallicRoughness?: { baseColorTexture?: TextureReference; metallicRoughnessTexture?: TextureReference } }[]
   bufferViews?: { buffer: number; byteOffset?: number; byteLength: number; byteStride?: number }[]
-  accessors?: { bufferView?: number; byteOffset?: number; componentType: number; count: number; type: string; normalized?: boolean }[]
+  accessors?: { bufferView?: number; byteOffset?: number; componentType: number; count: number; type: string; normalized?: boolean; sparse?: unknown }[]
   skins?: { joints: number[] }[]
-  nodes?: { mesh?: number; skin?: number }[]
-  meshes?: { primitives: { attributes: Record<string, number>; material?: number }[] }[]
+  nodes?: { mesh?: number; skin?: number; children?: number[]; matrix?: number[]; translation?: number[]; rotation?: number[]; scale?: number[] }[]
+  meshes?: { primitives: { attributes: Record<string, number>; indices?: number; mode?: number; material?: number }[] }[]
   animations?: { channels: { target: { node: number; path: string } }[] }[]
 }
 
-async function readGlb(path: string) {
+export async function readGlb(path: string) {
   const bytes = await readFile(path)
   if (bytes.length < 20 || bytes.readUInt32LE(0) !== 0x46546c67 || bytes.readUInt32LE(4) !== 2 ||
       bytes.readUInt32LE(8) !== bytes.length || bytes.readUInt32LE(16) !== 0x4e4f534a)

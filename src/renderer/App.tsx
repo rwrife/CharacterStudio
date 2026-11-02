@@ -116,6 +116,16 @@ export function App() {
     const updated = await window.studio.saveSetup(character.id, setup)
     setSetup(updated.setup); setDirty(false)
   }
+  async function autoFit() {
+    if (!character) return
+    await perform(async () => {
+      const fitted = await window.studio.fitLandmarks(character.id, setup.rotation).catch(e => {
+        throw new Error(`Auto-fit could not place the joints: ${explain(e)} Your current landmarks were kept.`)
+      })
+      setSetup(old => ({ ...old, landmarks: fitted.landmarks })); setDirty(true)
+      setNotice(['Landmarks fitted to the mesh. Review them in the front and side views before building the rig.', ...fitted.warnings].join(' '))
+    })
+  }
   async function createRig(skinning: SkinningMode = 'automatic') {
     if (!character) return
     await perform(async () => {
@@ -208,7 +218,7 @@ export function App() {
 
       <aside className="right-panel" aria-label="Animator motion controls">
         {fit && character ? <>
-          <div className="section-kicker">02 / PREPARE CHARACTER</div><h2>Fit the humanoid rig</h2><p className="panel-description">Use a full-body T- or A-pose. Point the character forward (+Z), then place joints inside the mesh.</p>
+          <div className="section-kicker">02 / PREPARE CHARACTER</div><h2>Fit the humanoid rig</h2><p className="panel-description">Use a full-body T- or A-pose. Point the character forward (+Z), auto-fit the joints, then check that each joint sits inside the mesh.</p>
           <label className="field-label">Orientation <span>degrees</span></label>
           <div className="xyz-fields">{(['X', 'Y', 'Z'] as const).map((axis, i) => <label key={axis}>{axis}<select aria-label={`Rotate ${axis}`} disabled={locked} value={setup.rotation[i]} onChange={e => { const rotation = [...setup.rotation] as Vec3; rotation[i] = Number(e.target.value); setSetup({ ...setup, rotation }); setDirty(true) }}>{[-180, -90, 0, 90, 180].map(v => <option key={v} value={v}>{v}°</option>)}</select></label>)}</div>
           <label className="field-label" htmlFor="joint-select">Selected landmark</label>
@@ -216,7 +226,8 @@ export function App() {
           <div className="xyz-fields positions">{(['X', 'Y', 'Z'] as const).map((axis, i) => <label key={axis}>{axis}<input aria-label={`Joint ${axis}`} type="number" step="0.01" min="-4" max="4" value={Number(setup.landmarks[selected][i].toFixed(3))} disabled={locked} onChange={e => { const point = [...setup.landmarks[selected]] as Vec3; point[i] = Number(e.target.value); move(selected, point) }} /></label>)}</div>
           <label className="checkbox"><input type="checkbox" checked={mirror} onChange={e => setMirror(e.target.checked)} /> Mirror left / right joints</label>
           <div className="fit-instructions"><strong>Fit in two views</strong><p>Front: hips, knees, shoulders, elbows.<br />Side: joint depth, spine, toes.<br />White joint = selected. Drag its axis handles.</p></div>
-          <button className="secondary full" disabled={locked} onClick={() => { setSetup({ ...setup, landmarks: defaultLandmarks() }); setDirty(true) }}><RotateIcon /> Reset landmark template</button>
+          <button className="secondary full" disabled={locked} onClick={() => void autoFit()}><WandSparkles size={14} /> Auto-fit landmarks to mesh</button>
+          <button className="text-button full" disabled={locked} onClick={() => { setSetup({ ...setup, landmarks: defaultLandmarks() }); setDirty(true) }}><RotateIcon /> Reset landmark template</button>
           {dirty && <button className="text-button full" disabled={locked} onClick={() => void perform(async () => { await saveFit(); setNotice('Fit saved. Rebuild the rig to apply these changes.') })}><CheckIcon size={14} /> Save fit without rigging</button>}
           {skinningFailed && <div className="fit-instructions" role="status"><strong>Some vertices could not be attached</strong><p>Your fitted points are saved. Adjust them and rebuild, or accept them below to try approximate fallback weights. No incomplete rig is accepted.</p></div>}
           <button className="primary full" disabled={locked} onClick={() => void createRig()}><Bone size={17} /> {character.rigged && !dirty ? 'Rebuild skin + rig' : 'Build skin + rig'}<ArrowRight size={17} /></button>

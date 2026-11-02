@@ -228,6 +228,89 @@ def copy_proxy_weights(proxy, obj, mapping):
             targets[name].add([index], weight, "REPLACE")
 
 
+HEAT_RETRY_LIMIT = 64
+
+
+def unweighted_pieces(obj, deform):
+    """Connected pieces of obj with no deforming weight and at least one face, largest first."""
+    mesh = obj.data
+    groups = {g.index for g in obj.vertex_groups if g.name in deform}
+    weighted = [any(g.group in groups and g.weight > 1e-6 for g in v.groups) for v in mesh.vertices]
+    if all(weighted):
+        return []
+    parent = list(range(len(weighted)))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for edge in mesh.edges:
+        a, b = find(edge.vertices[0]), find(edge.vertices[1])
+        if a != b:
+            parent[a] = b
+    roots = [find(i) for i in range(len(parent))]
+    weighted_roots = {roots[i] for i, done in enumerate(weighted) if done}
+    pieces = {}
+    for polygon in mesh.polygons:
+        root = roots[polygon.vertices[0]]
+        if root not in weighted_roots:
+            pieces.setdefault(root, ([], []))[1].append(tuple(polygon.vertices))
+    for i, root in enumerate(roots):
+        if root in pieces:
+            pieces[root][0].append(i)
+    return sorted(pieces.values(), key=lambda piece: len(piece[0]), reverse=True)
+
+
+def solve_piece_heat(rig, obj, vertices, faces):
+    """Bone heat on one isolated piece, so other pieces cannot occlude it or make the shared solve singular."""
+    local = {index: k for k, index in enumerate(vertices)}
+    mesh = bpy.data.meshes.new(obj.name + "StudioHeatPiece")
+    mesh.from_pydata([tuple(obj.data.vertices[i].co) for i in vertices], [], [[local[i] for i in face] for face in faces])
+    piece = bpy.data.objects.new(mesh.name, mesh)
+    piece.matrix_world = obj.matrix_world.copy()
+    bpy.context.collection.objects.link(piece)
+    try:
+        bpy.ops.object.select_all(action="DESELECT")
+        piece.select_set(True)
+        rig.select_set(True)
+        bpy.context.view_layer.objects.active = rig
+        try:
+            bpy.ops.object.parent_set(type="ARMATURE_AUTO")
+        except RuntimeError as exc:
+            if "bone heat weighting: failed to find solution" not in str(exc).lower():
+                raise
+            return 0
+        names = {group.index: group.name for group in piece.vertex_groups}
+        solved = 0
+        for vertex in mesh.vertices:
+            weights = [(names[g.group], g.weight) for g in vertex.groups if g.group in names and g.weight > 1e-6]
+            if not weights:
+                continue
+            solved += 1
+            for name, weight in weights:
+                (obj.vertex_groups.get(name) or obj.vertex_groups.new(name=name)).add([vertices[vertex.index]], weight, "REPLACE")
+        return solved
+    finally:
+        bpy.data.objects.remove(piece, do_unlink=True)
+        bpy.data.meshes.remove(mesh)
+
+
+def retry_piece_heat(rig, targets):
+    deform = {bone.name for bone in rig.data.bones if bone.use_deform}
+    report = {"pieces": 0, "solvedPieces": 0, "vertices": 0, "skippedPieces": 0}
+    for target in targets:
+        pieces = unweighted_pieces(target, deform)
+        report["skippedPieces"] += max(0, len(pieces) - HEAT_RETRY_LIMIT)
+        for vertices, faces in pieces[:HEAT_RETRY_LIMIT]:
+            report["pieces"] += 1
+            solved = solve_piece_heat(rig, target, vertices, faces)
+            report["solvedPieces"] += solved > 0
+            report["vertices"] += solved
+    return report
+
+
 def repair_skin(rig, objects, fallback):
     connected, proximity = 0, 0
     bones = [(bone.name, tuple(rig.matrix_world @ bone.head_local), tuple(rig.matrix_world @ bone.tail_local))
@@ -287,8 +370,9 @@ def rig_character(req):
     proxies = {obj.name: welded for obj in objects if (welded := welded_heat_proxy(obj))}
     seam_weld = {"meshes": len(proxies), "mergedVertices": sum(merged for _, _, merged in proxies.values())}
     bpy.ops.object.select_all(action="DESELECT")
-    for obj in objects:
-        (proxies[obj.name][0] if obj.name in proxies else obj).select_set(True)
+    targets = [proxies[obj.name][0] if obj.name in proxies else obj for obj in objects]
+    for target in targets:
+        target.select_set(True)
     rig.select_set(True)
     bpy.context.view_layer.objects.active = rig
     try:
@@ -297,8 +381,16 @@ def rig_character(req):
         except RuntimeError as exc:
             if "bone heat weighting: failed to find solution" not in str(exc).lower():
                 raise
-            warnings.append("Blender bone-heat weighting failed; missing-weight recovery was attempted.")
-            emit("rigging", warnings[-1], 45)
+            warnings.append("Blender bone-heat weighting failed for the combined mesh; unweighted pieces were retried separately before missing-weight recovery.")
+            emit("rigging", warnings[-1], 40)
+        # One occluded or detached piece leaves the combined solve with no weights there, or makes it singular
+        # for the whole object. Solving such pieces alone often recovers them without approximate weights.
+        emit("rigging", "Checking for mesh pieces that bone heat could not weight", 42)
+        heat_retry = retry_piece_heat(rig, targets)
+        if heat_retry["solvedPieces"]:
+            warnings.append(f"Bone heat was solved separately for {heat_retry['solvedPieces']:,} mesh piece(s) ({heat_retry['vertices']:,} vertices) that the combined solve could not weight. Check that separate pieces bend with the expected bones.")
+        if heat_retry["skippedPieces"]:
+            warnings.append(f"{heat_retry['skippedPieces']:,} further unweighted mesh piece(s) were not re-solved individually; missing-weight recovery handles them.")
         for obj in objects:
             if obj.name in proxies:
                 proxy, mapping, _ = proxies[obj.name]
@@ -333,6 +425,7 @@ def rig_character(req):
     report["skinning"] = skinning
     report["repair"] = repair
     report["seamWeld"] = seam_weld
+    report["heatRetry"] = heat_retry
     report["warnings"] = warnings + [
         "Guided body rig: fingers, facial controls, and cloth simulation are not generated.",
         "Inspect joint placement and bending. Automatic weights may need artist cleanup.",
