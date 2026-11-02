@@ -134,7 +134,7 @@ class BlenderSkinTests(unittest.TestCase):
     def test_seam_split_islands_are_skinned_from_welded_copies(self):
         self.add_occluded_seam_island()
         original = {obj.name: [obj.matrix_world @ v.co for v in obj.data.vertices] for obj in character.meshes()}
-        with patch.object(character, "welded_heat_proxy", return_value=None):
+        with patch.object(character, "welded_heat_proxy", return_value=None), patch.object(character, "HEAT_RETRY_LIMIT", 0):
             with self.assertRaises(character.UnweightedSkinError):
                 self.run_rig("automatic")
         self.assertFalse((self.root / "output" / "rigged.blend").exists())
@@ -143,6 +143,7 @@ class BlenderSkinTests(unittest.TestCase):
         self.assertEqual(report["vertices"], report["weightedVertices"])
         self.assertEqual(report["repair"], {"connectedVertices": 0, "fallbackVertices": 0})
         self.assertEqual(report["seamWeld"], {"meshes": 1, "mergedVertices": 16})
+        self.assertEqual(report["heatRetry"], {"pieces": 0, "solvedPieces": 0, "vertices": 0, "skippedPieces": 0})
         bpy.ops.wm.open_mainfile(filepath=str(self.root / "output" / "rigged.blend"))
         self.assertEqual({obj.name for obj in character.meshes()}, set(original))
         for obj in character.meshes():
@@ -155,6 +156,47 @@ class BlenderSkinTests(unittest.TestCase):
                 skin = sorted((obj.vertex_groups[g.group].name, round(g.weight, 5)) for g in vertex.groups)
                 # Coincident seam vertices share weights, so the seam cannot crack when posed.
                 self.assertEqual(weights.setdefault(key, skin), skin)
+
+    def add_sealed_piece(self):
+        # Blender bone heat treats front-facing triangles as occluders. A detached piece enclosed by an
+        # inward-facing (hollow or double-sided) shell cannot see any bone, receives no heat, and makes the
+        # combined solve for its whole object singular; there are no seams for welding to join.
+        head, tail = (character.C @ Vector(self.points[name]) for name in ("Head", "HeadEnd"))
+        obj = min(character.meshes(), key=lambda o: (o.location - (head + tail) * 0.5).length)
+        direction = (tail - head).normalized()
+        side = direction.cross(Vector((0, 0, 1)))
+        if side.length < 1e-3:
+            side = direction.cross(Vector((1, 0, 0)))
+        bm = bmesh.new()
+        bm.from_mesh(obj.data)
+        shell = [bmesh.ops.create_icosphere(bm, subdivisions=1, radius=radius,
+                                            matrix=Matrix.Translation(side.normalized() * 0.045))["verts"]
+                 for radius in (0.012, 0.004)][0]
+        bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+        bmesh.ops.reverse_faces(bm, faces=list({face for vertex in shell for face in vertex.link_faces}))
+        bm.to_mesh(obj.data)
+        bm.free()
+        bpy.ops.wm.save_as_mainfile(filepath=str(self.input))
+        return obj.name, len(obj.data.vertices), 12
+
+    def test_hidden_detached_pieces_are_solved_separately(self):
+        name, count, hidden = self.add_sealed_piece()
+        with patch.object(character, "HEAT_RETRY_LIMIT", 0):
+            with self.assertRaises(character.UnweightedSkinError):
+                self.run_rig("automatic")
+        self.assertFalse((self.root / "output" / "rigged.blend").exists())
+        self.run_rig("automatic")
+        report = json.loads((self.root / "output" / "rig-report.json").read_text())
+        self.assertEqual(report["vertices"], report["weightedVertices"])
+        self.assertEqual(report["repair"], {"connectedVertices": 0, "fallbackVertices": 0})
+        self.assertEqual(report["heatRetry"], {"pieces": 1, "solvedPieces": 1, "vertices": hidden, "skippedPieces": 0})
+        self.assertTrue(any("solved separately for 1 mesh piece" in warning for warning in report["warnings"]))
+        bpy.ops.wm.open_mainfile(filepath=str(self.root / "output" / "rigged.blend"))
+        obj = bpy.data.objects[name]
+        self.assertEqual(len(obj.data.vertices), count)
+        self.assertEqual(len([o for o in bpy.data.objects if "StudioHeat" in o.name]), 0)
+        for vertex in obj.data.vertices:
+            self.assertAlmostEqual(sum(group.weight for group in vertex.groups), 1, places=5)
 
     def test_unrelated_blender_errors_are_not_swallowed(self):
         with parent_error("Unexpected operator error"):

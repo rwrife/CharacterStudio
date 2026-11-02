@@ -5,6 +5,10 @@ export interface RigSetup {
   rotation: Vec3
   landmarks: Landmarks
 }
+export interface LandmarkSuggestion {
+  landmarks: Landmarks
+  warnings: string[]
+}
 export interface Settings {
   comfyUrl: string
   comfyRoot: string
@@ -172,6 +176,7 @@ export interface StudioApi {
   importCharacter(): Promise<Character | null>
   importCollection(): Promise<Character[]>
   saveSetup(id: string, setup: RigSetup): Promise<Character>
+  fitLandmarks(id: string, rotation: Vec3): Promise<LandmarkSuggestion>
   rig(id: string, skinning?: SkinningMode): Promise<void>
   generate(request: GenerateRequest): Promise<void>
   cancel(): Promise<void>
