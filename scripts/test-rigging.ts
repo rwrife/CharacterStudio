@@ -13,6 +13,12 @@ try {
   ], { stdio: 'inherit', env: { ...process.env, STUDIO_RIG_TEST_OUTPUT: output } })
   await validateCharacterGlb(join(output, 'rigged.glb'), false)
   console.log('Fallback GLB passed the desktop character-export validator.')
+  execFileSync(bundledBlenderPath(resolve('.')), [
+    '--background', '--factory-startup', '--disable-autoexec', '--python-exit-code', '1',
+    '--python', resolve('tests', 'test_mocap_blender.py')
+  ], { stdio: 'inherit', env: { ...process.env, STUDIO_MOCAP_TEST_OUTPUT: output } })
+  await validateCharacterGlb(join(output, 'animated.glb'), true)
+  console.log('Video mocap GLB passed the desktop animated-character validator.')
 } finally {
   await rm(output, { recursive: true, force: true })
 }

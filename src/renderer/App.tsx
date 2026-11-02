@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
-import { ArrowDownToLine, ArrowRight, Check as CheckIcon, ChevronDown, CircleAlert, FolderOpen, Layers3, ListChecks, LoaderCircle, Plus, Settings2, ShieldCheck, Sparkles, X, Zap, Box, Bone, SlidersHorizontal, RefreshCw, WandSparkles } from 'lucide-react'
+import { ArrowDownToLine, ArrowRight, Check as CheckIcon, ChevronDown, CircleAlert, Clapperboard, FolderOpen, Layers3, ListChecks, LoaderCircle, Plus, Settings2, ShieldCheck, Sparkles, X, Zap, Box, Bone, SlidersHorizontal, RefreshCw, WandSparkles } from 'lucide-react'
 import type { Character, Check, Job, RigSetup, SkinningMode, Settings, Snapshot, Vec3 } from '../shared/types'
 import { Viewport } from './Viewport'
 import { LibraryPanel } from './LibraryPanel'
 import { ModelSetupGuide } from './ModelSetupGuide'
 import { DesignerPanel } from './DesignerPanel'
+import { MocapPanel } from './MocapPanel'
 import { SetupWizard } from './SetupWizard'
 import { FileDialog } from './FileDialog'
 import { LaunchCheck } from './LaunchCheck'
@@ -21,7 +22,7 @@ export function App() {
   const [snapshot, setSnapshot] = useState<Snapshot>()
   const [mcpEnabled, setMcpEnabled] = useState(false)
   const [mcpChanging, setMcpChanging] = useState(false)
-  const [workspace, setWorkspace] = useState<'designer' | 'animator'>('animator')
+  const [workspace, setWorkspace] = useState<'designer' | 'animator' | 'mocap'>('animator')
   const [characterId, setCharacterId] = useState('')
   const [setup, setSetup] = useState<RigSetup>({ rotation: [0, 0, 0], landmarks: defaultLandmarks() })
   const [dirty, setDirty] = useState(false)
@@ -53,9 +54,9 @@ export function App() {
   const character = snapshot?.characters.find(c => c.id === characterId)
   const latestRig = snapshot?.jobs.find(j => j.characterId === characterId && j.kind === 'rig')
   const skinningFailed = latestRig?.stage === 'failed' && (latestRig.rigFailure === 'unweighted' || latestRig.message.includes('vertices unweighted'))
-  const jobs = snapshot?.jobs.filter(j => j.characterId === characterId && j.kind === 'generate') ?? []
-  const completed = jobs.filter(j => j.stage === 'complete')
-  const output = completed.find(j => j.id === jobId)
+  const jobs = snapshot?.jobs.filter(j => j.characterId === characterId && (j.kind === 'generate' || j.kind === 'mocap')) ?? []
+  const completed = jobs.filter(j => j.stage === 'complete' && j.kind === 'generate')
+  const output = jobs.find(j => j.id === jobId && j.stage === 'complete')
   const active = snapshot?.jobs.find(j => !done.has(j.stage))
   const activeBatch = snapshot?.batches.find(b => b.status === 'running')
   const locked = busy || !!active || !!activeBatch || !!snapshot?.designer?.designs.some(d => d.status === 'running') || snapshot?.designer?.modelDownload?.status === 'running'
@@ -165,18 +166,24 @@ export function App() {
       <nav className="workspace-tabs" role="tablist" aria-label="Character workspace" onKeyDown={event => {
         if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
         event.preventDefault()
-        const next = event.key === 'Home' ? 'designer' : event.key === 'End' ? 'animator' : workspace === 'designer' ? 'animator' : 'designer'
+        const order = ['designer', 'animator', 'mocap'] as const
+        const index = order.indexOf(workspace)
+        const next = event.key === 'Home' ? 'designer' : event.key === 'End' ? 'mocap' : order[(index + (event.key === 'ArrowRight' ? 1 : order.length - 1)) % order.length]
         setWorkspace(next)
         document.getElementById(`${next}-tab`)?.focus()
       }}>
         <button id="designer-tab" role="tab" tabIndex={workspace === 'designer' ? 0 : -1} aria-selected={workspace === 'designer'} aria-controls="designer-panel" className={workspace === 'designer' ? 'active' : ''} onClick={() => setWorkspace('designer')}>Designer</button>
         <span className="module-divider" aria-hidden="true">|</span>
         <button id="animator-tab" role="tab" tabIndex={workspace === 'animator' ? 0 : -1} aria-selected={workspace === 'animator'} aria-controls="animator-panel" className={workspace === 'animator' ? 'active' : ''} onClick={() => setWorkspace('animator')}>Animator</button>
+        <span className="module-divider" aria-hidden="true">|</span>
+        <button id="mocap-tab" role="tab" tabIndex={workspace === 'mocap' ? 0 : -1} aria-selected={workspace === 'mocap'} aria-controls="mocap-panel" className={workspace === 'mocap' ? 'active' : ''} onClick={() => setWorkspace('mocap')}>Mocap</button>
       </nav>
       <div className="topbar-actions"><button aria-label="Setup checklist" title="Setup checklist" className="connection icon-only" onClick={() => setSetupOpen(true)}><ListChecks size={16} /></button>
       <button aria-label="Backend connections" className={`connection ${blocked.length ? 'warning' : ''}`} onClick={() => setSettingsOpen(true)}><span className="tiny-dot" />{checking ? 'Checking backends' : blocked.length ? 'Setup needs attention' : checks.length ? 'Local backends ready' : 'Backend settings'}<Settings2 size={14} /></button></div>
     </header>
     {snapshot && <DesignerPanel snapshot={snapshot} visible={workspace === 'designer'} animatorBusy={busy || !!active || !!activeBatch} onSettings={() => setSettingsOpen(true)} onProviders={openProviders} onAnimate={c => { selectCharacter(c); setFit(true); setWorkspace('animator') }} />}
+    {snapshot && <MocapPanel snapshot={snapshot} visible={workspace === 'mocap'} animatorBusy={busy} onProviders={openProviders} onReviewFit={c => { selectCharacter(c); setFit(true); setWorkspace('animator') }}
+          onOpenAnimator={(c, job) => { selectCharacter(c); setJobId(job); setMode('animation'); setWorkspace('animator') }} />}
     <div id="animator-panel" role="tabpanel" aria-labelledby="animator-tab" hidden={workspace !== 'animator'} className="studio-layout">
       <aside className="left-panel" aria-label="Animator character library">
         <div className="section-kicker">YOUR WORKSPACE</div><h1>Character lab</h1>
@@ -219,7 +226,7 @@ export function App() {
           <div className="section-heading"><div><span className="section-kicker">MOTION TAKES</span><span className="count">{jobs.length}</span></div><small>Saved automatically on this PC</small></div>
           {!jobs.length ? <div className="no-takes"><span className="take-placeholder"><Sparkles size={19} /></span><div><strong>A new move starts with a few words.</strong><p>Generated takes will appear here, ready to preview and export.</p></div></div> :
             <div className="take-list">{jobs.map(job => <button key={job.id} disabled={job.stage !== 'complete' || locked} className={`take ${jobId === job.id ? 'selected' : ''} ${job.stage}`} onClick={() => { setJobId(job.id); setMode('animation'); setFit(false); setAnimationPart('path') }}>
-              <span className="take-icon">{job.stage === 'complete' ? <Sparkles size={17} /> : job.stage === 'failed' ? <CircleAlert size={17} /> : <LoaderCircle size={17} />}</span><span><strong>{job.label || job.prompt || 'Motion take'}</strong><small>{job.stage === 'complete' ? `${job.parentJobId ? 'Full branch · ' : ''}${job.seconds}s / segment · seed ${job.seed}` : job.stage}</small>{job.stage === 'failed' && <small className="failure-text">{job.message}</small>}</span><span className="take-time">{new Date(job.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+              <span className="take-icon">{job.stage === 'complete' ? job.kind === 'mocap' ? <Clapperboard size={17} /> : <Sparkles size={17} /> : job.stage === 'failed' ? <CircleAlert size={17} /> : <LoaderCircle size={17} />}</span><span><strong>{job.label || job.prompt || 'Motion take'}</strong><small>{job.stage === 'complete' ? job.kind === 'mocap' ? `Mocap · ${job.mocapOptions?.legs === 'lock' ? 'upper body · ' : ''}smoothing ${Math.round((job.mocapOptions?.smoothing ?? 0) * 100)}%` : `${job.parentJobId ? 'Full branch · ' : ''}${job.seconds}s / segment · seed ${job.seed}` : job.stage}</small>{job.stage === 'failed' && <small className="failure-text">{job.message}</small>}</span><span className="take-time">{new Date(job.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
             </button>)}</div>}
         </section>
       </main>
@@ -264,11 +271,11 @@ export function App() {
           <div className="section-kicker">EXPORT CHARACTER</div>
           {output ? <><h3>Ready for your next scene.</h3>
             {output.clipPreviewUrl && <><label className="field-label" htmlFor="preview-part">Preview output</label><select id="preview-part" value={animationPart} onChange={e => { setAnimationPart(e.target.value as typeof animationPart); setMode('animation') }}><option value="path">Full path</option><option value="clip">Node clip</option>{output.transitionPreviewUrl && <option value="transition">Incoming transition</option>}</select><p className="fine-print">{output.graphContext?.pathLabel}</p></>}
-            <button className="text-button full" disabled={locked} onClick={() => { setParentJobId(output.id); setInPlace(output.inPlace ?? false); setNotice('Next generation will branch from this take’s final pose.') }}>Branch from this take <ArrowRight size={13} /></button>{output.outputFiles?.map(file => <button key={file} className="download" onClick={() => void perform(async () => { const path = await window.studio.saveOutput(output.id, file); if (path) setNotice(`Saved ${path}`) })}><ArrowDownToLine size={16} /><span>{outputLabel(file)}</span></button>)}{output.warnings?.map(w => <p className="fine-print" key={w}>{w}</p>)}</> : <><div className="export-disabled"><ArrowDownToLine size={18} /><span>Animated GLB + FBX</span></div><p className="fine-print">Available after a completed, validated character animation. A skeleton alone is not an animated character.</p></>}
+            {output.kind === 'generate' && <button className="text-button full" disabled={locked} onClick={() => { setParentJobId(output.id); setInPlace(output.inPlace ?? false); setNotice('Next generation will branch from this take’s final pose.') }}>Branch from this take <ArrowRight size={13} /></button>}{output.outputFiles?.map(file => <button key={file} className="download" onClick={() => void perform(async () => { const path = await window.studio.saveOutput(output.id, file); if (path) setNotice(`Saved ${path}`) })}><ArrowDownToLine size={16} /><span>{outputLabel(file)}</span></button>)}{output.warnings?.map(w => <p className="fine-print" key={w}>{w}</p>)}</> : <><div className="export-disabled"><ArrowDownToLine size={18} /><span>Animated GLB + FBX</span></div><p className="fine-print">Available after a completed, validated character animation. A skeleton alone is not an animated character.</p></>}
         </div>
       </aside>
     </div>
-    <footer><span><ShieldCheck size={12} /> LOCAL FIRST</span><span>{workspace === 'designer' ? <>Character & scene <ArrowRight size={10} /> T-pose reference <ArrowRight size={10} /> 3D geometry <ArrowRight size={10} /> Animator</> : <>FBX import <ArrowRight size={10} /> Blender rig + skin <ArrowRight size={10} /> Motion provider <ArrowRight size={10} /> Character export</>}</span><span>ARM64 READY</span></footer>
+    <footer><span><ShieldCheck size={12} /> LOCAL FIRST</span><span>{workspace === 'designer' ? <>Character & scene <ArrowRight size={10} /> T-pose reference <ArrowRight size={10} /> 3D geometry <ArrowRight size={10} /> Animator</> : workspace === 'mocap' ? <>T-pose character <ArrowRight size={10} /> Reference video / webcam <ArrowRight size={10} /> Local pose capture <ArrowRight size={10} /> Animated FBX</> : <>FBX import <ArrowRight size={10} /> Blender rig + skin <ArrowRight size={10} /> Motion provider <ArrowRight size={10} /> Character export</>}</span><span>ARM64 READY</span></footer>
     {libraryOpen && snapshot && <LibraryPanel snapshot={snapshot} setup={setup} current={{ prompt, seconds, seed, steps, inPlace }} characterId={characterId} startNew={libraryNew} onClose={() => setLibraryOpen(false)} onApply={(node, savedFit) => {
       setPrompt(node.prompt); setSeconds(node.seconds); setSeed(node.seed); setSteps(node.steps); setInPlace(node.inPlace); setParentJobId('')
       if (savedFit && character) { setSetup({ ...structuredClone(savedFit), rotation: setup.rotation }); setDirty(true); setFit(true); setMode('input') }
@@ -325,6 +332,8 @@ export function App() {
 function PersonIcon() { return <Box size={21} strokeWidth={1.3} /> }
 function RotateIcon() { return <RefreshCw size={14} /> }
 function outputLabel(file: string) {
+  if (file === 'mocap-motion.json') return 'Solved mocap bone motion · JSON'
+  if (file === 'landmarks.json') return 'Captured pose landmarks · JSON'
   const [name, extension] = file.split('.')
   const label = name === 'animated' ? 'Full character path' : name === 'clip' ? 'Character node clip' : name === 'transition' ? 'Incoming transition' : name === 'sequence' ? 'Full path motion only' : 'Node motion only'
   return `${label} · ${extension === 'blend' ? 'Blender' : extension.toUpperCase()}`

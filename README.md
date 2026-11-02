@@ -4,7 +4,7 @@
 
 The implementation combines **staged character design and existing humanoid FBX assets with AI-generated body motion**. Artists retain control over reference review, rig fitting, motion instructions, and the final exported character. Designer supports geometry-only and textured generation; neither produces a finished, rigged game asset.
 
-Local-first Windows ARM64 desktop app with **Designer** and **Animator** workspaces. Designer turns a character brief or local reference image into a scene concept, a T-pose reference, and a GLB model, with optional textures. Built-in inference stays local; [per-stage providers](#model-and-workflow-providers) can use custom workflows, explicitly approved remote GPU servers, or paid Tripo APIs. Animator imports humanoid meshes, fits and skins a body rig, generates compatible Kimodo motion through the selected provider, and exports the **animated character mesh** using local Blender.
+Local-first Windows ARM64 desktop app with **Designer**, **Animator** and **Mocap** workspaces. Designer turns a character brief or local reference image into a scene concept, a T-pose reference, and a GLB model, with optional textures. Built-in inference stays local; [per-stage providers](#model-and-workflow-providers) can use custom workflows, explicitly approved remote GPU servers, or paid Tripo APIs. Animator imports humanoid meshes, fits and skins a body rig, generates compatible Kimodo motion through the selected provider, and exports the **animated character mesh** using local Blender. Mocap captures body motion from a reference video or webcam take with a CPU pose model and bakes it onto a rigged T-pose character as an animated FBX.
 
 ## Features at a glance
 
@@ -20,13 +20,14 @@ Local-first Windows ARM64 desktop app with **Designer** and **Animator** workspa
 | [Guided humanoid rigging](#animator-workflow) | Import FBX assets or send Designer meshes to Animator. Joint landmarks are [automatically fitted to the mesh](#automatic-landmark-fitting) on import; review and adjust them and the orientation with mirrored editing. Then build a Blender-skinned body rig with automatic missing-weight repair, or explicitly accept your points with approximate fallback skinning. |
 | [Natural-language animation](#animator-workflow) | Generate motion takes with duration, seed, denoising steps, and in-place controls. Branch from a completed take's actual endpoint; preview with playback, scrubbing, orbit, zoom, and wireframe. |
 | [Motion encoder choice](#experimental-lfm-setup-no-llama-approval) | Use the original local Llama/LLM2Vec encoder or explicitly select the experimental ungated LFM bridge. Readiness checks and GPU guidance surface setup requirements without silently switching models. |
+| [Video motion capture](#mocap-workflow) | Import a reference video or record a webcam take, trim the clip, and capture body motion on this PC with MediaPipe Pose (CPU, no GPU). Review the 3D skeleton beside the video, then bake it onto a skinned T-pose character and open the animated FBX/GLB in Animator. Optional remote capture providers need explicit approval. |
 | [Visual animation graphs](#visual-animation-graphs) | Connect states, reusable actions, transitions, and pose-constrained loops. Inspect path-specific incoming context, save layouts, and preview node clips, transitions, or full paths. |
 | [Configurations and batches](#repeatability-and-collections) | Save or exchange configuration JSON, import FBX collections, and generate sequential batches with identical motion per path context or deterministic seed variations. Rerun immutable batch snapshots. |
 | [Character exports](#animator-workflow) | Save animated skinned GLB, FBX, and editable Blender scenes, plus separately labeled motion-only BVH/NPZ. Export completed batch results with manifests; failed outputs are not presented as completed characters. |
 | [Local workspace persistence](#data-and-reproducibility) | Keep original assets, designs, rig fits, settings, jobs, and outputs on this PC. Cancel app-owned work and retain completed results across restarts. |
 | [Visible desktop MCP control](#desktop-mcp-control) | Let a trusted local agent operate the actual desktop window: Designer, Animator, fitting, graphs, batches, settings, import/export, playback and viewport gestures. Watch the same controls, progress and errors as when working manually. |
 
-**Current boundaries:** Built-in Designer outputs are unrigged until prepared in Animator; optional remote rigged GLBs are exportable but not guaranteed compatible with its SOMA body rig. Native Hunyuan outputs are untextured; inferred textures cannot guarantee accurate unseen surfaces or seam-free UVs. Animator rigging is guided and body-only, not universal auto-rigging; automatic landmark fitting is a heuristic for standing T- or A-pose humanoids and needs review. Motion and graph joins require review; endpoint checks do not guarantee seamless animation or game-engine readiness. Local models/backend setup or separately configured remote services are prerequisites, not bundled capabilities. Part segmentation, learned landmark inference and cloth analysis remain future extension points.
+**Current boundaries:** Built-in Designer outputs are unrigged until prepared in Animator; optional remote rigged GLBs are exportable but not guaranteed compatible with its SOMA body rig. Native Hunyuan outputs are untextured; inferred textures cannot guarantee accurate unseen surfaces or seam-free UVs. Animator rigging is guided and body-only, not universal auto-rigging; automatic landmark fitting is a heuristic for standing T- or A-pose humanoids and needs review. Motion and graph joins require review; endpoint checks do not guarantee seamless animation or game-engine readiness. Local models/backend setup or separately configured remote services are prerequisites, not bundled capabilities. Mocap is single-camera, body-only and in place: depth, foot contact and hidden limbs are estimated, not measured. Part segmentation, learned landmark inference and cloth analysis remain future extension points.
 
 ## Screenshots
 
@@ -95,6 +96,16 @@ End-to-end local run: a Designer-generated TRELLIS.2 mesh (about 65,000 vertices
 ![Animation graph showing a crouch state branching into jump and lie-down actions](docs/screenshots/animation-graph.png)
 
 Arrange reusable states and actions, connect transitions, and edit motion instructions and generation settings. This graph-editor screenshot predates the Designer workspace; it illustrates graph authoring, not successful learned graph generation.
+
+### Mocap: capture motion from a reference video
+
+![Mocap Review step showing a reference walk video beside the captured 3D pose skeleton, with the clip timeline and four-step stepper](docs/screenshots/mocap-review.png)
+
+The **Mocap** tab after capturing a 77-frame clip locally with **Pose Lite** on the CPU. The reference video is a Blender render of a Studio character walking, not live-action footage. The skeleton is MediaPipe's estimated 3D pose; a still frame does not establish capture accuracy or retargeting quality.
+
+![Animator playing the walk_reference mocap take on the skinned Bruiser character, with the take listed under Motion takes](docs/screenshots/mocap-animator.png)
+
+The same capture after **Send to Animator**: local Blender rigged the user-supplied Bruiser sample (198,581 vertices, all weighted to the 22-bone body rig), baked the 77 captured frames in place and exported validated FBX/GLB files, which open in Animator as a **Mocap** take. This shows one observed run, not production-ready motion; foot contact and depth were estimated. The Bruiser asset is not included in this repository.
 
 ### MCP: agent control of the visible desktop
 
@@ -240,7 +251,7 @@ Enable this only for agents you trust with **all of the app's local user privile
 
 The server controls **Studio's window only**, not the OS, external browser pages, authentication prompts, ComfyUI's separate UI, or other desktop applications. Model access, downloads and third-party authentication remain subject to the existing manual setup guidance. The user can continue interacting with the same window; coordinate edits to avoid conflicting selections. Turn off **Enable MCP control** to revoke access immediately, including when launched with `--mcp`. A stale connection file after a crash is not a running server; restart Studio rather than reusing its token.
 
-`npm run test:mcp` builds and exercises the real stdio-to-HTTP-to-Electron path in an isolated workspace under ignored `artifacts\mcp-smoke`: visible Designer fields and cancellation, graph edits and dragging, save/import/export with overwrite checks, backend settings and folder selection, stale refs, keyboard/scrolling, screenshots, in-app disable/re-enable with revoked credentials, saved-toggle restoration, cleanup and a default-off launch. It also runs generation-rerun and provider regressions in temporary workspaces with deterministic local HTTP fixtures. A landmark auto-fit regression on procedural box meshes checks that **Auto-fit landmarks to mesh** updates the visible joint fields without saving, **Save fit without rigging** persists them, and a non-humanoid block reports an error and keeps its landmarks. It needs no model weights, Blender or third-party character. Provider credential coverage requires a working OS encryption backend. It does not establish successful learned generation, paid API interoperability, rigging, motion quality, or cross-platform GUI compatibility.
+`npm run test:mcp` builds and exercises the real stdio-to-HTTP-to-Electron path in an isolated workspace under ignored `artifacts\mcp-smoke`: visible Designer fields and cancellation, graph edits and dragging, save/import/export with overwrite checks, backend settings and folder selection, stale refs, keyboard/scrolling, screenshots, in-app disable/re-enable with revoked credentials, saved-toggle restoration, cleanup and a default-off launch. It also runs generation-rerun and provider regressions in temporary workspaces with deterministic local HTTP fixtures. A Mocap regression drives the visible tab through webcam recording with a fake camera, video import, clip-range keyboard edits, a cached-model check, the local WASM pose runtime reporting that no person was found (the fake feed contains none), and take deletion. It downloads the verified 5.5 MB Pose Lite model once into ignored `artifacts\mocap-cache` unless already cached. When `MOCAP_SMOKE_VIDEO` names a full-body clip, `MOCAP_SMOKE_CHARACTER` names a riggable T-pose (such as `artifacts\Bruiser_base.fbx`) and the isolated Blender runtime is installed, it also captures the clip, rigs the character, sends it to Animator and checks the exported FBX/GLB. `MOCAP_SMOKE_SCREENSHOTS` saves the Review and Animator captures to a folder, and `MOCAP_SMOKE_KEEP=1` keeps a failed run's temporary workspace. A landmark auto-fit regression on procedural box meshes checks that **Auto-fit landmarks to mesh** updates the visible joint fields without saving, **Save fit without rigging** persists them, and a non-humanoid block reports an error and keeps its landmarks. Apart from the small Mocap pose model, it needs no model weights, Blender or third-party character. Provider credential coverage requires a working OS encryption backend. It does not establish successful learned generation, paid API interoperability, rigging, motion quality, or cross-platform GUI compatibility.
 
 ## Model and workflow providers
 
@@ -250,7 +261,7 @@ Open **Backend connections > Model & workflow providers**, the same button in De
 
 Actual desktop/MCP capture from an isolated fixture workspace. Local GPU telemetry was deliberately unavailable; no Tripo request or learned inference was performed.
 
-Choose **AI stage**, then **Execution provider**. Naming, scene/concept, T-pose editing, background removal, mesh generation, PBR post-texturing, remote rigging and motion/text encoding are independently configurable. **Global ComfyUI connection** supplies a default for scene, T-pose, cutout, mesh and motion; an explicit stage override wins, including **Built-in local presets** to keep that stage local. Naming, post-texturing and rigging do not inherit the global connection. Future segmentation, landmark and cloth entries are disabled until those features exist.
+Choose **AI stage**, then **Execution provider**. Naming, scene/concept, T-pose editing, background removal, mesh generation, PBR post-texturing, remote rigging, motion/text encoding and video pose capture are independently configurable. **Global ComfyUI connection** supplies a default for scene, T-pose, cutout, mesh and motion; an explicit stage override wins, including **Built-in local presets** to keep that stage local. Naming, post-texturing and rigging do not inherit the global connection. Future segmentation, landmark and cloth entries are disabled until those features exist.
 
 **Built-in local presets** expose installed checkpoint names and the existing image/mesh/encoder profiles. The panel reports CPU, platform/architecture, RAM and local ComfyUI's total/free VRAM, with conservative per-profile guidance. Unknown telemetry is not proof of compatibility. Changing image architecture clears incompatible checkpoint/adapter choices; full VAE, vision, adapter and supported-download controls remain in Designer. No weights, precision or provider are silently switched to fit the machine.
 
@@ -320,7 +331,7 @@ Export **API-format** nodes from ComfyUI, wrap them in a Studio envelope and use
 
 This graph's checkpoint is fixed in its template; add a `model` binding to `1.ckpt_name` and fill **Provider model / checkpoint ID** to control it separately. Adding a reference photo requires an actual image-conditioning graph and `image` binding, not merely the scene text. Missing bindings or installed nodes are actionable errors.
 
-Bindings assign supplied values directly into existing node inputs. Available parameters: `prompt`, `image`, `mesh`, `seed`, `steps`, `seconds`, `prefix`, `model`, `textEncoder`, `constraints`, `referenceStrength`. Image/mesh bindings receive uploaded server input filenames, never the client's local paths. Constraints are inline JSON strings. There is no script mapper. The envelope allows 1-300 nodes, up to 100 bindings, one of each output kind, and at most 1 MB.
+Bindings assign supplied values directly into existing node inputs. Available parameters: `prompt`, `image`, `mesh`, `seed`, `steps`, `seconds`, `prefix`, `model`, `textEncoder`, `constraints`, `referenceStrength`, `video`, `clipStart`, `clipEnd`, `subject`. Image/mesh/video bindings receive uploaded server input filenames, never the client's local paths. Constraints are inline JSON strings. There is no script mapper. The envelope allows 1-300 nodes, up to 100 bindings, one of each output kind, and at most 1 MB.
 
 | Stage | Required mappings | Required output kinds |
 |---|---|---|
@@ -328,8 +339,9 @@ Bindings assign supplied values directly into existing node inputs. Available pa
 | T-pose / cutout / mesh | `image`, `prefix`; also bind `prompt` to apply editing instructions | `image` / `image` / `model` |
 | Texture / rig | `mesh`, `prefix`; optional `prompt` for instructions | `model` |
 | Motion | `prompt`, `seed`, `steps`, `seconds`, `prefix`, `constraints` | `npz`, `bvh`, `metadata` |
+| Video pose capture | `video`, `clipStart`, `clipEnd`, `prefix`; optional `subject` | `json` |
 
-Each output mapping selects one history node/field containing a **one-element array**. Binary outputs must be `{ "filename": "studio_..._0001.png", "subfolder": "", "type": "output" }` descriptors using the bound job prefix plus `_` and the declared extension (`.png`, `.glb`, `.npz`, `.bvh`). Studio retrieves them through `/view`; no shared output directory is required. Text output is a nonempty title of at most 100 characters. Motion metadata is an object or JSON string with `num_joints: 77`, `num_frames`, and `fps`, matching the requested duration and segment count.
+Each output mapping selects one history node/field containing a **one-element array**. Binary outputs must be `{ "filename": "studio_..._0001.png", "subfolder": "", "type": "output" }` descriptors using the bound job prefix plus `_` and the declared extension (`.png`, `.glb`, `.npz`, `.bvh`). Studio retrieves them through `/view`; no shared output directory is required. Text output is a nonempty title of at most 100 characters. A capture `json` output is the pose object described under [Mocap workflow](#mocap-workflow), either inline or as a JSON string. Motion metadata is an object or JSON string with `num_joints: 77`, `num_frames`, and `fps`, matching the requested duration and segment count.
 
 Local custom workflows reject declared ComfyUI API/cloud nodes and literal HTTP URLs. **Custom nodes are trusted software, not a sandbox or proof of offline execution**: a node or local API gateway can make its own network requests. Review installed nodes and gateway configuration yourself. Studio validates the selected routing boundary; it cannot audit server internals.
 
@@ -361,9 +373,9 @@ The local machine still requires Blender, the configured ComfyUI Python environm
 }
 ```
 
-It must echo `{ "id": "client-generated-uuid" }` exactly and deduplicate that ID. Motion additionally supplies `seconds`, `textEncoder`, and `constraints` as the actual parsed pose-constraint JSON when conditioned. Mesh input uses `kind: "mesh"` and `mimeType: "model/gltf-binary"`. Text-only requests have an empty inputs array. A configured encrypted token is sent as `Authorization: Bearer ...`; redirects are refused.
+It must echo `{ "id": "client-generated-uuid" }` exactly and deduplicate that ID. Motion additionally supplies `seconds`, `textEncoder`, and `constraints` as the actual parsed pose-constraint JSON when conditioned. Mesh input uses `kind: "mesh"` and `mimeType: "model/gltf-binary"`. Capture sends the whole source file as `kind: "video"` (`video/mp4`, `video/webm` or `video/quicktime`, at most 100 MB) plus `clipStart`/`clipEnd` in seconds and `subject` (`primary`, `left` or `right`). Text-only requests have an empty inputs array. A configured encrypted token is sent as `Authorization: Bearer ...`; redirects are refused.
 
-`GET {endpoint}/jobs/{id}` returns `status` (`queued`, `running`, `complete`, `failed`, `cancelled`) and, only when complete, `outputs`. Return binary output bytes as standard padded base64 in `image`, `model`, `npz`, or `bvh`; naming uses `text`. Motion also requires `metadata: { "num_joints": 77, "num_frames": 60, "fps": 30 }` for a single two-second segment. Images must decode, cutouts must pass transparent-foreground validation, GLBs must contain embedded geometry/resources, and motion files undergo local verification. The combined JSON response limit is 700 MB; images are limited to 20 MB and each model/motion output to 500 MB. Polling stops after one hour.
+`GET {endpoint}/jobs/{id}` returns `status` (`queued`, `running`, `complete`, `failed`, `cancelled`) and, only when complete, `outputs`. Return binary output bytes as standard padded base64 in `image`, `model`, `npz`, or `bvh`; naming uses `text`; capture returns its pose object in `json`. Motion also requires `metadata: { "num_joints": 77, "num_frames": 60, "fps": 30 }` for a single two-second segment. Images must decode, cutouts must pass transparent-foreground validation, GLBs must contain embedded geometry/resources, and motion files undergo local verification. The combined JSON response limit is 700 MB; images are limited to 20 MB and each model/motion output to 500 MB. Polling stops after one hour.
 
 `DELETE {endpoint}/jobs/{id}` must cancel **only that job** and return valid JSON, such as `{}`. Implement cancellation/deduplication in the gateway before using a billable backend. Missing/invalid outputs, failed requests and uncertain cancellation are errors, never triggers for a fallback model.
 
@@ -544,6 +556,28 @@ Both actions require every vertex to have usable weights, required body bones to
 
 Run `npm run test:rigging` after `npm run setup:blender` for regressions using procedural test geometry. It covers native recovery, seam welding, separate-piece bone-heat retries, coverage, fitted-bone preservation and GLB round-trips. `npm test` covers landmark auto-fit on procedural box humanoids and rejection of non-humanoid shapes. `python -m unittest discover -s tests -p test_skin_weights.py` runs the pure repair tests without Blender. After `npm run build`, `node --import tsx scripts\rigging-smoke.mjs` exercises the desktop recovery controls with explicitly simulated backend responses and captures the panel. These fixtures do not establish repair quality on real generated characters.
 
+## Mocap workflow
+
+Open the **Mocap** tab to turn a recorded performance into animation for a rigged character. It is separate from Animator's text-to-motion generation and needs no ComfyUI, GPU or gated weights for local capture.
+
+1. **Import video**: choose **Import video** (MP4, MOV, M4V or WebM, up to 1 GB) or **Record with webcam**. Webcam takes record after a short countdown for up to 90 seconds and are saved as WebM in the workspace; camera frames never leave the computer. Use one clearly visible, full-body performer with a steady camera.
+2. **Capture motion**: set **Clip range** (**Clip start**/**Clip end**, at most 180 seconds; drag the timeline handles or use the arrow keys) and **Subject** (**Primary performer**, **Leftmost person** or **Rightmost person**). Under **Capture options**, choose **Pose Lite** (5.5 MB, fastest) or **Pose Full** (9.0 MB, steadier limbs, roughly twice as slow) and **Download** it once. Models come from Google's MediaPipe storage (Apache-2.0), are verified against pinned SHA-256 hashes, and are stored under `models\mocap` in the workspace. **Capture motion** then samples the clip at 30 fps with MediaPipe Pose on the CPU inside the app window. **Cancel capture** stops it without saving.
+3. **Review**: the source video and the captured 3D skeleton play side by side on a shared timeline. The summary reports how many frames contained a person; captures where fewer than half the frames found a person are rejected rather than saved.
+4. **Send to Animator**: choose a **Character**, or **Import T-pose** (FBX or GLB) to add a standing T- or A-pose humanoid. Characters that are not rigged yet need **Build skin + rig**, which uses the same automatic landmark fit and validated Blender skinning as Animator; use **Review fit in Animator** if the fit needs adjustment. Under **Retarget**, set **Smoothing**, **Legs** (**Auto: lock legs when they are out of view**, **Always track legs** or **Lock legs (upper body only)**), **Follow crouches (hip height)** and **Mirror left and right**, then choose **Send to Animator**.
+
+Sending runs a local Blender job that converts the captured pose into rotations for the 22-bone body rig, bakes them onto the skinned character in place, and validates the exports before marking the job complete. Each result provides `animated.fbx`, `animated.glb`, `animated.blend`, the solved `mocap-motion.json` and the raw `landmarks.json`. Results open in Animator with **Open result in Animator** and can be saved with the download buttons. **Saved captures** keeps earlier takes; deleting a take keeps characters already exported from it.
+
+**Configure capture provider** opens **Model & workflow providers** for the **Video pose capture** stage. The built-in local MediaPipe capture is the default. A remote ComfyUI workflow or Studio API gateway can return the same pose JSON (`{ "version": 1, "fps", "width", "height", "frames" }`, where each frame is 33 MediaPipe world landmarks as `[x, y, z, visibility]` or `null`). Remote capture uploads the **entire** source video, not only the selected clip, after per-stage approval. Studio validates the frame count, rate and landmarks before saving the take. Remote capture is covered only by contract tests with local HTTP fixtures, not a real pose-estimation server.
+
+Mocap limitations:
+
+- Single-camera capture estimates depth; fast spins, occluded limbs and loose clothing can produce jitter or flipped limbs. Increase **Smoothing** or use **Pose Full** for steadier results.
+- Motion is body-only (no fingers or face) and stays in place: root translation is not captured. **Follow crouches** only follows hip height.
+- Foot contact is not solved, so feet can slide or float. **Auto** locks legs only when they are mostly out of view.
+- Multiple people are told apart by horizontal position in each frame, without identity tracking; people crossing can swap subjects.
+- Chromium must decode the video; some HEVC/H.265 files fail. Re-encode to H.264 MP4 or WebM if capture cannot read frames.
+- Retargeting requires a validated Studio rig. Characters with their own imported skeletons are re-rigged in the working copy, as in Animator.
+
 ## Local Llama, not remote inference
 
 Kimodo uses a trained **Llama 3 8B + LLM2Vec** text encoder with its MNTP and supervised adapters. Inference happens on this computer. Hugging Face supplies the initial model downloads; it is not an inference endpoint.
@@ -652,6 +686,7 @@ The branch constraint serialization, conversion to the real SOMA30 model skeleto
 - Foot contact cleanup is not installed. Foot sliding, extreme joint bends, or imperfect automatic weights can require manual cleanup. Playback looping is not a promise of a seamless looping animation.
 - Imports start from geometrically estimated landmarks for standing T- or A-pose humanoids. This is not learned pose detection; unusual proportions, poses, clothing or props can require manual placement.
 - Fully unweighted detached pieces are re-solved separately with bone heat. Missing weights that remain trigger connected-surface repair. Proximity fallback requires **Accept points + fallback skinning**, retains fitted joints, and records approximation warnings. Complete vertex coverage and required-bone checks still apply; repair does not guarantee correct deformation or fix intersecting/non-manifold geometry.
+- Mocap uses single-camera MediaPipe Pose landmarks: estimated depth, body-only, in place, with no foot-contact solving. See [Mocap workflow](#mocap-workflow).
 - Built-in ComfyUI and desktop MCP remain loopback-only. Configured Remote providers can receive prompts/assets only after per-stage approval. Downloaded weights and workspace data remain local; remote services have their own retention policies. ComfyUI/custom nodes and API gateways are trusted software, not sandboxes.
 
 ## Data and reproducibility
@@ -671,6 +706,7 @@ npm run test:desktop
 npm run test:mcp
 node --import tsx scripts\generation-smoke.mjs
 node scripts\provider-smoke.mjs
+node --import tsx scripts\mocap-smoke.mjs
 python tests\test_provider_nodes.py
 node scripts\designer-smoke.mjs
 node scripts\designer-smoke.mjs --generate

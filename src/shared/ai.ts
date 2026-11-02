@@ -9,6 +9,7 @@ export const aiStages = {
   texture: 'PBR texturing',
   rig: 'Remote rigging',
   motion: 'Motion + text encoder',
+  capture: 'Video pose capture',
   segmentation: 'Part segmentation (future)',
   landmarks: 'Landmark detection (future)',
   cloth: 'Cloth analysis (future)'
@@ -42,7 +43,7 @@ export const tripoCredentialEndpoints = {
 export type TripoCredentialTarget = keyof typeof tripoCredentialEndpoints
 export const aiCredentialTargetSchema = z.union([aiStageSchema, z.enum(['global', 'tripo', 'tripo-com'])])
 export type AiCredentialTarget = z.infer<typeof aiCredentialTargetSchema>
-export const workflowParameters = ['prompt', 'image', 'mesh', 'seed', 'steps', 'seconds', 'prefix', 'model', 'textEncoder', 'constraints', 'referenceStrength'] as const
+export const workflowParameters = ['prompt', 'image', 'mesh', 'seed', 'steps', 'seconds', 'prefix', 'model', 'textEncoder', 'constraints', 'referenceStrength', 'video', 'clipStart', 'clipEnd', 'subject'] as const
 export type WorkflowParameter = typeof workflowParameters[number]
 export type Workflow = Record<string, { class_type: string; inputs: Record<string, unknown> }>
 const identifier = z.string().min(1).max(120).regex(/^[a-zA-Z0-9_. -]+$/)
@@ -161,7 +162,7 @@ export const aiConfigurationSchema = z.object({
       ctx.addIssue({ code: 'custom', message: 'Tripo triangle reduction settings apply only to 3D mesh generation.' })
     if (route.provider === 'tripo' && !['scene', 'tpose', 'mesh', 'texture', 'rig', 'segmentation'].includes(stage))
       ctx.addIssue({ code: 'custom', message: `Tripo is not a provider for ${stage}. Select a compatible ComfyUI workflow or API gateway.` })
-    if (route.provider === 'comfyui' && ['naming', 'rig', 'texture', 'segmentation', 'landmarks', 'cloth'].includes(stage) && !route.workflow)
+    if (route.provider === 'comfyui' && ['naming', 'rig', 'texture', 'segmentation', 'landmarks', 'cloth', 'capture'].includes(stage) && !route.workflow)
       ctx.addIssue({ code: 'custom', message: `${stage} requires a custom ComfyUI workflow.` })
     if (route.workflow) {
       for (const binding of route.workflow.bindings) {
@@ -169,11 +170,12 @@ export const aiConfigurationSchema = z.object({
           ctx.addIssue({ code: 'custom', message: 'Kimodo_Sampler takes a server-local path and ignores inline JSON. Use Studio_Kimodo_Sampler from the supplied ComfyUI bridge for constraints.' })
       }
       const required = stage === 'motion' ? ['npz', 'bvh', 'metadata'] :
-        stage === 'naming' ? ['text'] : ['landmarks', 'cloth'].includes(stage) ? ['json'] :
+        stage === 'naming' ? ['text'] : ['landmarks', 'cloth', 'capture'].includes(stage) ? ['json'] :
           ['scene', 'tpose', 'cutout'].includes(stage) ? ['image'] : ['model']
       for (const kind of required) if (!route.workflow.outputs.some(output => output.kind === kind))
         ctx.addIssue({ code: 'custom', message: `${stage} workflow must declare its ${kind} output.` })
       for (const parameter of stage === 'motion' ? ['prompt', 'seed', 'steps', 'seconds', 'prefix', 'constraints'] :
+        stage === 'capture' ? ['video', 'clipStart', 'clipEnd', 'prefix'] :
         ['tpose', 'cutout', 'mesh'].includes(stage) ? ['image', 'prefix'] :
           ['rig', 'texture', 'segmentation'].includes(stage) ? ['mesh', 'prefix'] : ['prompt', 'prefix']) {
         if (!route.workflow.bindings.some(binding => binding.parameter === parameter))

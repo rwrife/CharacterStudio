@@ -34,11 +34,13 @@ export interface Job {
   id: string
   characterId: string
   characterName: string
-  kind: 'rig' | 'generate' | 'import'
+  kind: 'rig' | 'generate' | 'import' | 'mocap' | 'capture'
   stage: Stage
   message: string
   progress: number
   createdAt: string
+  mocapTakeId?: string
+  mocapOptions?: import('./mocap').MocapOptions
   prompt?: string
   seconds?: number
   seed?: number
@@ -153,6 +155,7 @@ export interface Snapshot {
   batches: Batch[]
   designer?: import('./designer').DesignerSnapshot
   ai?: import('./ai').AiConfiguration
+  mocap?: import('./mocap').MocapSnapshot
 }
 export interface StudioApi {
   aiSettings(config: import('./ai').AiConfiguration): Promise<void>
@@ -204,6 +207,18 @@ export interface StudioApi {
   runBatch(request: BatchRequest): Promise<void>
   rerunBatch(id: string): Promise<void>
   exportBatch(id: string): Promise<string | null>
+  mocapImportCharacter(): Promise<Character | null>
+  mocapImportVideo(): Promise<import('./mocap').MocapTake | null>
+  mocapSaveRecording(data: ArrayBuffer): Promise<import('./mocap').MocapTake>
+  mocapSaveCapture(takeId: string, capture: import('./mocap').MocapCapture): Promise<import('./mocap').MocapTake>
+  mocapReadCapture(takeId: string): Promise<import('./mocap').MocapCapture>
+  /** Capture a clip through the selected routed (non built-in) capture provider. */
+  mocapCapture(request: import('./mocap').MocapCaptureRequest): Promise<Job>
+  mocapDeleteTake(takeId: string): Promise<void>
+  mocapDownloadModel(model: import('./mocap').MocapPoseModel): Promise<void>
+  mocapCancelDownload(): Promise<void>
+  mocapModel(model: import('./mocap').MocapPoseModel): Promise<Uint8Array>
+  mocapExport(request: import('./mocap').MocapExportRequest): Promise<void>
   onUpdate(callback: (snapshot: Snapshot) => void): () => void
   setupState(): Promise<import('./setup').SetupState>
   setupReport(): Promise<import('./setup').SetupReport>
