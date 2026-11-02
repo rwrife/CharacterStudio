@@ -181,6 +181,34 @@ test('the checklist reports missing local tools as actionable steps', async () =
   assert.equal(report.items.filter(i => i.group === 'designer').length, setupModels.length)
 })
 
+test('a missing Studio-managed Blender installs automatically once, but a chosen Blender is never replaced', async () => {
+  const root = temp()
+  const blender = async (overrides: Partial<SetupHost>, assistant = new SetupAssistant(host(root, overrides).value)) =>
+    (await assistant.report()).items.find(i => i.id === 'blender')!
+  const managed = { blenderPath: join(root, 'tools', 'blender-missing', 'blender.exe') }
+  const withPath = (path: Partial<Settings>, extra: Partial<SetupHost> = {}) => {
+    const h = host(root, extra)
+    h.value.saveSettings({ ...h.value.settings(), ...path })
+    return h.value
+  }
+  const auto = await blender({}, new SetupAssistant(withPath(managed)))
+  assert.equal(auto.automatic, 'install-blender')
+  assert.match(auto.detail, /installs an isolated, checksum-verified copy/)
+  assert.equal((await blender({}, new SetupAssistant(withPath(managed, { autoInstall: false })))).automatic, undefined)
+  const chosen = await blender({})
+  assert.equal(chosen.automatic, undefined)
+  assert.match(chosen.detail, /did not start/)
+  assert.ok(chosen.actions.some(a => a.id === 'install-blender'))
+
+  // After an attempt (here cancelled before any download), the install is offered but not restarted automatically.
+  const assistant = new SetupAssistant(withPath(managed, { signal: AbortSignal.abort() }))
+  const state = await assistant.run({ item: 'blender', action: 'install-blender' })
+  assert.equal(state.result?.ok, false)
+  const after = await blender({}, assistant)
+  assert.equal(after.automatic, undefined)
+  assert.ok(after.actions.some(a => a.id === 'install-blender'))
+})
+
 test('launch checks report unresolved requirements and honour ignored items until they work again', async () => {
   const root = temp(), output = join(root, 'output')
   mkdirSync(output)
