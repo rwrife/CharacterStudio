@@ -32,6 +32,8 @@ export interface SetupItem {
   requiredFor: ('designer' | 'animator')[]
   actions: SetupAction[]
   bytes?: number
+  /** Action the checklist and launch check start without a click (shown with progress and Cancel). */
+  automatic?: SetupActionId
 }
 export interface SetupTask {
   item: SetupItemId

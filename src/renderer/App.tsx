@@ -221,7 +221,7 @@ export function App() {
           {dirty && <button className="text-button full" disabled={locked} onClick={() => void perform(async () => { await saveFit(); setNotice('Fit saved. Rebuild the rig to apply these changes.') })}><CheckIcon size={14} /> Save fit without rigging</button>}
           {skinningFailed && <div className="fit-instructions" role="status"><strong>Some vertices could not be attached</strong><p>Your fitted points are saved. Adjust them and rebuild, or accept them below to try approximate fallback weights. No incomplete rig is accepted.</p></div>}
           <button className="primary full" disabled={locked} onClick={() => void createRig()}><Bone size={17} /> {character.rigged && !dirty ? 'Rebuild skin + rig' : 'Build skin + rig'}<ArrowRight size={17} /></button>
-          <button className="secondary full" disabled={locked} onClick={() => void createRig('fallback')}><CheckIcon size={17} /> Accept points + fallback skinning</button>
+          <button className="secondary full rig-fallback-button" disabled={locked} onClick={() => void createRig('fallback')}><CheckIcon size={17} /> Accept points + fallback skinning</button>
           <p className="fine-print">Both actions keep your joint positions. Build automatically repairs missing weights along connected surfaces. Fallback also attaches remaining vertices to nearby fitted bones; touching limbs or separate pieces may bend incorrectly. Complete weights are still required. Body only, not fingers or face.</p>
         </> : <>
           <div className="section-kicker">03 / DIRECT THE MOTION</div><h2>What’s the move?</h2><p className="panel-description">Describe a movement. Kimodo generates the motion; Blender applies it to your character.</p>
