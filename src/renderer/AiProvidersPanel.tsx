@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ArrowDownToLine, Check, RefreshCw, X } from 'lucide-react'
-import { aiConfigurationSchema, aiModelLabel, aiRouteLabel, aiStages, aiStageSchema, defaultAiConfiguration, localRoute, resolveAiRoute, tripoCredentialEndpoints, tripoImageModels, workflowSchema,
+import { aiConfigurationSchema, aiModelLabel, aiRouteLabel, aiStages, aiStageSchema, defaultAiConfiguration, localRoute, resolveAiRoute, tripoCredentialEndpoints, tripoImageModelId, tripoImageModels, unavailableTripoImageModels, workflowSchema,
   type AiConfiguration, type AiHardware, type AiRoute, type AiStage, type TripoCredentialTarget } from '../shared/ai'
 import { imageProfiles, meshProfiles } from '../shared/designer'
 import type { Snapshot } from '../shared/types'
@@ -96,7 +96,8 @@ export function AiProvidersPanel({ snapshot, initialStage = 'scene', locked, onC
     JSON.stringify(native) !== JSON.stringify(snapshot.designer?.config) || encoder !== (snapshot.settings.textEncoder ?? 'llm2vec')
   const disabled = locked || busy
   const tripoImage = route.provider === 'tripo' && ['scene', 'tpose'].includes(stage)
-  const customModel = tripoImage && (customTripoModel || !Object.hasOwn(tripoImageModels, route.model))
+  const tripoModel = tripoImageModelId(route.model)
+  const customModel = tripoImage && (customTripoModel || !Object.hasOwn(tripoImageModels, tripoModel))
   const tripoEndpoint = route.provider === 'tripo' ? route.endpoint.replace(/\/+$/, '') : tripoCredentialEndpoints.tripo
   const tripoTarget = tripoEndpoint === tripoCredentialEndpoints.tripo ? 'tripo' :
     tripoEndpoint === tripoCredentialEndpoints['tripo-com'] ? 'tripo-com' : undefined
@@ -134,7 +135,7 @@ export function AiProvidersPanel({ snapshot, initialStage = 'scene', locked, onC
     if (stage === 'global' && value === 'builtin') { changeRoute(); return }
     const item = choices[value]
     if (!item) return
-    const model = item.provider === 'tripo' ? stage === 'mesh' ? 'v3.1-20260211' : stage === 'rig' ? 'v1.0-20240301' : stage === 'texture' ? 'v3.5-20260815' : 'gemini_2.5_flash_image_preview' : ''
+    const model = item.provider === 'tripo' ? stage === 'mesh' ? 'v3.1-20260211' : stage === 'rig' ? 'v1.0-20240301' : stage === 'texture' ? 'v3.5-20260815' : 'banana' : ''
     changeRoute({ provider: item.provider, location: item.location,
       endpoint: item.provider === 'comfyui' && item.location === 'local' ? snapshot.settings.comfyUrl : item.endpoint,
       model, minVramGB: 0 })
@@ -188,17 +189,20 @@ export function AiProvidersPanel({ snapshot, initialStage = 'scene', locked, onC
       {stage !== 'global' && <>
         {tripoImage && <>
           <label className="field-label" htmlFor="ai-tripo-image">Tripo image model</label>
-          <select id="ai-tripo-image" disabled={disabled || inherited} value={customModel ? 'custom' : route.model} onChange={event => {
+          <select id="ai-tripo-image" disabled={disabled || inherited} value={customModel ? 'custom' : tripoModel} onChange={event => {
             setCustomTripoModel(event.target.value === 'custom')
             if (event.target.value !== 'custom') changeRoute({ ...route, model: event.target.value })
           }}>
-            {Object.entries(tripoImageModels).map(([value, label]) => <option key={value} value={value} disabled={stage === 'tpose' && ['midjourney', 'flux.1_dev'].includes(value)}>{label}</option>)}
+            {Object.entries(tripoImageModels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             <option value="custom">Custom model ID (advanced)</option>
           </select>
-          <p className="fine-print">{['midjourney', 'flux.1_dev'].includes(route.model) ?
-            `${aiModelLabel(route)} cannot use a reference image or edit a scene into a T-pose. Studio rejects those requests instead of switching models. ` :
+          <p className="fine-print">{unavailableTripoImageModels.some(model => model === tripoModel) ?
+            'This legacy image preset is not supported by Tripo v3. Choose a supported preset or configure a compatible Studio API gateway. ' :
+            tripoModel === 'seedream_v4' ? 'Seedream v4 cannot use a reference image or edit a scene into a T-pose. ' :
             customModel ? 'Use a Tripo-supported image model ID; reference-image support depends on that model. ' :
               `${aiModelLabel(route)} supports text prompts and reference-image editing. `}Tripo image prompts are limited to 1,024 characters.</p>
+          {tripoModel === 'chat_image_1' && <p className="ai-warning">Tripo lists GPT Image 1 as retired. This legacy selection is preserved for migration; availability is account-dependent. Choose a supported model for new work.</p>}
+          {tripoModel === 'chat_image_1.5' && <p className="fine-print">Tripo schedules GPT Image 1.5 retirement for December 1, 2026. Studio will not switch your model automatically.</p>}
         </>}
         {(!tripoImage || customModel) && <>
           <label className="field-label" htmlFor="ai-model">Provider model / checkpoint ID</label>

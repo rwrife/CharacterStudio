@@ -15,16 +15,25 @@ export const aiStages = {
 } as const
 export type AiStage = keyof typeof aiStages
 export const tripoImageModels = {
-  'gemini_2.5_flash_image_preview': 'Nano Banana',
-  'gemini_3_pro_image_preview': 'Nano Banana Pro',
-  'gemini_3.1_flash_image_preview': 'Nano Banana 2',
-  'gpt_4o': 'GPT Image 1',
-  'gpt_image_1.5': 'GPT Image 1.5',
-  'gpt_image_2': 'GPT Image 2',
-  'midjourney': 'Midjourney (text-only)',
-  'flux.1_kontext_pro': 'FLUX.1 Kontext Pro',
-  'flux.1_dev': 'FLUX.1 dev (text-only)'
+  banana: 'Nano Banana',
+  banana_pro: 'Nano Banana Pro',
+  banana2: 'Nano Banana 2',
+  chat_image_1: 'GPT Image 1 (legacy)',
+  'chat_image_1.5': 'GPT Image 1.5',
+  chat_image_2: 'GPT Image 2'
 } as const
+const legacyTripoImageModels = {
+  'gemini_2.5_flash_image_preview': 'banana',
+  gemini_3_pro_image_preview: 'banana_pro',
+  'gemini_3.1_flash_image_preview': 'banana2',
+  gpt_4o: 'chat_image_1',
+  'gpt_image_1.5': 'chat_image_1.5',
+  gpt_image_2: 'chat_image_2'
+} as const satisfies Record<string, keyof typeof tripoImageModels>
+export const unavailableTripoImageModels = ['midjourney', 'flux.1_kontext_pro', 'flux.1_dev'] as const
+export function tripoImageModelId(model: string): string {
+  return Object.entries(legacyTripoImageModels).find(([id]) => id === model)?.[1] ?? model
+}
 export const aiStageSchema = z.enum(Object.keys(aiStages) as [AiStage, ...AiStage[]])
 export const tripoCredentialEndpoints = {
   tripo: 'https://openapi.tripo3d.ai',
@@ -167,7 +176,7 @@ export function aiRouteLabel(config: AiConfiguration | undefined, stage: AiStage
   return `${route.location === 'remote' ? 'Remote' : 'Local'} / ${route.provider === 'builtin' ? 'built-in' : route.provider === 'api' ? 'custom API' : route.provider === 'tripo' ? 'Tripo (paid)' : 'ComfyUI'}${route.model ? ` / ${aiModelLabel(route)}` : ''}`
 }
 export function aiModelLabel(route: Pick<AiRoute, 'provider' | 'model'>): string {
-  return route.provider === 'tripo' ? Object.entries(tripoImageModels).find(([id]) => id === route.model)?.[1] ?? route.model : route.model
+  return route.provider === 'tripo' ? Object.entries(tripoImageModels).find(([id]) => id === tripoImageModelId(route.model))?.[1] ?? route.model : route.model
 }
 export interface AiProvenance {
   stage: AiStage

@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { z } from 'zod'
 import {
-  aiConfigurationSchema, defaultAiConfiguration, resolveAiRoute, workflowSchema,
+  aiConfigurationSchema, defaultAiConfiguration, resolveAiRoute, tripoImageModelId, unavailableTripoImageModels, workflowSchema,
   type AiConfiguration, type AiConsent, type AiHardware, type AiProvenance, type AiRoute,
   type AiStage, type Workflow, type WorkflowParameter, type WorkflowTemplate
 } from '../shared/ai'
@@ -147,8 +147,12 @@ export class AiProviders {
   }
   async execute(options: Execution): Promise<AiResult> {
     const requested = options.route ?? this.route(options.stage)
-    const route = requested.provider === 'builtin' ? { ...requested, provider: 'comfyui' as const, endpoint: this.settings().comfyUrl } : requested
+    const imageStage = options.stage === 'scene' || options.stage === 'tpose'
+    const route = requested.provider === 'builtin' ? { ...requested, provider: 'comfyui' as const, endpoint: this.settings().comfyUrl } :
+      requested.provider === 'tripo' && imageStage ? { ...requested, model: tripoImageModelId(requested.model) } : requested
     const { signal } = options
+    if (route.provider === 'tripo' && imageStage && unavailableTripoImageModels.some(model => model === route.model))
+      throw new Error('This legacy image model is not supported by Tripo v3. Choose a supported Nano Banana or GPT Image preset, or configure a compatible Studio API gateway. No model was substituted and no request was sent.')
     if (route.provider === 'comfyui' && !route.workflow && !options.native)
       throw new Error(`${options.stage} requires a custom ComfyUI template with input and output mappings.`)
     signal.throwIfAborted()
@@ -347,8 +351,8 @@ export class AiProviders {
     try {
       if (['scene', 'tpose'].includes(stage) && options.prompt.length > 1024)
         throw new Error('Tripo image prompts support at most 1,024 characters. Shorten the character description and art style before retrying; no image was uploaded.')
-      if (options.image && ['midjourney', 'flux.1_dev'].includes(network.route.model))
-        throw new Error('The selected Tripo image model is text-only. Choose Nano Banana, GPT Image or FLUX.1 Kontext for reference images and T-pose editing. No model substitution was made.')
+      if (options.image && ['scene', 'tpose'].includes(stage) && network.route.model === 'seedream_v4')
+        throw new Error('Seedream v4 is text-only in Tripo v3. Choose an image-editing model for reference images and T-pose editing. No model substitution was made.')
       let input: string | undefined
       const path = options.mesh ?? options.image
       if (path) {

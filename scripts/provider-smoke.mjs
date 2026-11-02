@@ -151,9 +151,9 @@ try {
   assert.ok(!(await readFile(join(directory, 'ai-credentials.json'), 'utf8')).includes(tripoKey))
   assert.ok(!JSON.stringify(await state()).includes(tripoKey))
   await select('Execution provider', 'tripo')
-  await select('Tripo image model', 'gemini_3.1_flash_image_preview')
+  await select('Tripo image model', 'banana2')
   await fill('Tripo API key / token OS-encrypted', tripoKey)
-  await select('Tripo image model', 'gpt_image_1.5')
+  await select('Tripo image model', 'chat_image_1.5')
   assert.equal(await page.getByLabel('Tripo API key / token OS-encrypted').inputValue(), tripoKey, 'Model selection must not clear a key for the same endpoint.')
   await click('Save Tripo API key')
   await until(async () => (await ui()).text.includes('Tripo API key encrypted'), 'key saved while generation selections are unsaved')
@@ -317,14 +317,17 @@ try {
 
   await select('AI stage', 'scene')
   await select('Execution provider', 'tripo')
-  await select('Tripo image model', 'midjourney')
-  assert.ok((await ui()).text.includes('cannot use a reference image'))
+  const tripoOptions = (await ui()).elements.find(item => item.role === 'combobox' && item.name === 'Tripo image model').options
+  assert.ok(!tripoOptions.some(option => ['midjourney', 'flux.1_dev', 'flux.1_kontext_pro', 'gpt_image_1.5'].includes(option.value)))
+  await select('Tripo image model', 'custom')
+  await fill('Provider model / checkpoint ID', 'midjourney')
+  assert.ok((await ui()).text.includes('not supported by Tripo v3'))
   await save()
   assert.equal((await state()).ai.stages.scene.model, 'midjourney')
-  await select('Tripo image model', 'gemini_3.1_flash_image_preview')
+  await select('Tripo image model', 'banana2')
   assert.ok(!(await ui()).elements.some(item => item.role === 'textbox' && item.name === 'Provider model / checkpoint ID'))
   assert.ok((await ui()).text.includes('Nano Banana 2 supports text prompts and reference-image editing.'))
-  assert.ok(!(await ui()).text.includes('cannot use a reference image'))
+  assert.ok(!(await ui()).text.includes('not supported by Tripo v3'))
   await select('Tripo image model', 'custom')
   await fill('Provider model / checkpoint ID', 'custom-image-fixture')
   await save()
@@ -333,29 +336,43 @@ try {
   await click('Model & workflow providers')
   await select('AI stage', 'scene')
   assert.equal(await page.getByLabel('Provider model / checkpoint ID', { exact: true }).inputValue(), 'custom-image-fixture')
-  await select('Tripo image model', 'gemini_3.1_flash_image_preview')
+  await select('Tripo image model', 'banana2')
   await save()
-  assert.equal((await state()).ai.stages.scene.model, 'gemini_3.1_flash_image_preview')
+  assert.equal((await state()).ai.stages.scene.model, 'banana2')
   assert.ok(!(await ui()).elements.some(item => item.role === 'textbox' && item.name === 'Provider model / checkpoint ID'))
   await fill('Tripo API key / token OS-encrypted', tripoKey)
   await click('Save Tripo API key')
   await until(async () => (await ui()).text.includes('Tripo API key encrypted'), 'fake key for rejection fixture')
-  await app.evaluate(() => {
+  await app.evaluate((_, encodedPng) => {
     const originalFetch = globalThis.fetch
     globalThis.providerSmokeRequests = []
+    globalThis.providerSmokeSuccess = false
     globalThis.providerSmokeRestoreFetch = () => { globalThis.fetch = originalFetch }
     globalThis.fetch = async (input, options) => {
       const url = String(input)
       if (url.startsWith('https://openapi.tripo3d.ai/')) {
         globalThis.providerSmokeRequests.push({ url, method: options?.method, body: options?.body })
+        if (globalThis.providerSmokeSuccess && url.endsWith('/generation/text-to-image')) {
+          const model = JSON.parse(options.body).model
+          if (!['banana', 'banana2', 'banana_pro', 'chat_image_1', 'chat_image_1.5', 'chat_image_2',
+            'chat_image_2.5_flare', 'chat_image_2.5_sunburst', 'seedream_v4', 'seedream_v5'].includes(model))
+            return Response.json({ code: 1004, message: `invalid model for text-to-image: ${model}` }, { status: 400 })
+          return Response.json({ code: 0, data: { task_id: 'tripo_legacy_fixture' } })
+        }
+        if (globalThis.providerSmokeSuccess && url.endsWith('/tasks/tripo_legacy_fixture'))
+          return Response.json({ code: 0, data: { status: 'success', output: { generated_image_url: 'https://assets.tripo3d.ai/fixture.png' } } })
         return Response.json({
           code: 1004, message: 'Fixture: selected model was rejected. test-only-tripo-api-key',
           suggestion: 'Check the image model for this task.'
         }, { status: 400, headers: { 'X-Tripo-Trace-ID': '20516a36-f45c-4454-83c8-45877b75eac8' } })
       }
+      if (url === 'https://assets.tripo3d.ai/fixture.png') {
+        if (options?.headers) throw new Error('Fixture image download must not receive credentials.')
+        return new Response(Buffer.from(encodedPng, 'base64'))
+      }
       return originalFetch(input, options)
     }
-  })
+  }, png.toString('base64'))
   await click('Close provider settings')
   await click('Generate scene')
   await until(async () => (await ui()).modal === 'Approve remote AI execution', 'Tripo fixture approval')
@@ -367,15 +384,41 @@ try {
   assert.ok((await ui()).text.includes('Trace ID: 20516a36-f45c-4454-83c8-45877b75eac8'))
   assert.ok(!JSON.stringify(await state()).includes(tripoKey))
   assert.ok(!JSON.stringify(await ui()).includes(tripoKey))
+  assert.equal((await app.evaluate(() => globalThis.providerSmokeRequests)).length, 1, 'A rejected paid submission must not be retried.')
+  await click('Model & workflow providers')
+  await select('AI stage', 'scene')
+  await select('Tripo image model', 'custom')
+  await fill('Provider model / checkpoint ID', 'gpt_image_1.5')
+  await save()
+  await click('Close provider settings')
+  await click('Model & workflow providers')
+  await select('AI stage', 'scene')
+  assert.equal(await page.getByLabel('Tripo image model', { exact: true }).inputValue(), 'chat_image_1.5')
+  assert.ok(!(await ui()).elements.some(item => item.role === 'textbox' && item.name === 'Provider model / checkpoint ID'))
+  assert.equal((await state()).ai.stages.scene.model, 'gpt_image_1.5', 'Recognizing a saved alias must not rewrite history.')
+  await click('Close provider settings')
+  await app.evaluate(() => { globalThis.providerSmokeSuccess = true })
+  await click('Generate scene')
+  await until(async () => (await ui()).modal === 'Approve remote AI execution', 'saved legacy model approval')
+  assert.ok((await ui()).text.includes('Model: GPT Image 1.5'))
+  await click('Approve this remote stage')
+  await until(async () => (await state()).designer.designs[0].status === 'idle', 'legacy selection succeeds against strict v3 fixture')
+  const translated = (await state()).designer.designs[0]
+  assert.ok(translated.sceneUrl)
+  assert.equal(translated.ai.at(-1).route.model, 'chat_image_1.5')
+  assert.equal((await state()).ai.stages.scene.model, 'gpt_image_1.5')
   const tripoRequests = await app.evaluate(() => {
     globalThis.providerSmokeRestoreFetch()
     return globalThis.providerSmokeRequests
   })
-  assert.equal(tripoRequests.length, 1, 'A rejected paid submission must not be retried.')
+  assert.equal(tripoRequests.length, 3, 'Exactly two explicit submissions and one success poll are expected.')
   assert.equal(tripoRequests[0].url, 'https://openapi.tripo3d.ai/v3/generation/text-to-image')
-  assert.equal(JSON.parse(tripoRequests[0].body).model, 'gemini_3.1_flash_image_preview')
+  assert.equal(JSON.parse(tripoRequests[0].body).model, 'banana2')
+  assert.equal(JSON.parse(tripoRequests[1].body).model, 'chat_image_1.5')
   await click('Model & workflow providers')
   await select('AI stage', 'scene')
+  await select('Tripo image model', 'banana2')
+  await save()
   await click('Remove Tripo API key')
   await until(async () => (await ui()).text.includes('Tripo API key removed.'), 'remove rejection-fixture key')
   await page.setViewportSize({ width: 1440, height: 1600 })
@@ -387,7 +430,7 @@ try {
   await client.close(); client = undefined
   await app.close(); app = undefined
   const saved = JSON.parse(await readFile(join(directory, 'ai-providers.json'), 'utf8'))
-  assert.equal(saved.configuration.stages.scene.model, 'gemini_3.1_flash_image_preview')
+  assert.equal(saved.configuration.stages.scene.model, 'banana2')
   assert.ok(saved.history.length >= 8)
   assert.equal(Object.keys(JSON.parse(await readFile(join(directory, 'ai-credentials.json'), 'utf8'))).length, 0)
   app = await electron.launch({ args: ['.', '--mcp'], env: { ...process.env, STUDIO_SKIP_SETUP_CHECKLIST: '1', STUDIO_DATA_DIR: directory }, timeout: 60000 })

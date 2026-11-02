@@ -6,7 +6,7 @@ import { once } from 'node:events'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { aiConfigurationSchema, aiModelLabel, aiRouteLabel, aiRouteSchema, aiStages, defaultAiConfiguration, localRoute, providerUrl, resolveAiCredentialRoute, resolveAiRoute, tripoImageModels, workflowSchema,
+import { aiConfigurationSchema, aiModelLabel, aiRouteLabel, aiRouteSchema, aiStages, defaultAiConfiguration, localRoute, providerUrl, resolveAiCredentialRoute, resolveAiRoute, tripoImageModelId, tripoImageModels, workflowSchema,
   type AiProvenance, type AiRoute, type AiStage, type WorkflowTemplate } from '../src/shared/ai'
 import { AiProviders, bindWorkflow, hashConfiguration, motionProviderTemplate, nativeTemplate, validateMotionMetadata } from '../src/main/ai-providers'
 import { AiCredentials, type CredentialEncryption } from '../src/main/ai-credentials'
@@ -182,6 +182,11 @@ test('Tripo presets use friendly labels without changing stored or custom model 
     assert.equal(chosen.model, model)
   }
   assert.equal(aiModelLabel({ provider: 'tripo', model: 'custom-image-model' }), 'custom-image-model')
+  assert.equal(aiModelLabel({ provider: 'tripo', model: 'gemini_3.1_flash_image_preview' }), 'Nano Banana 2')
+  assert.equal(aiModelLabel({ provider: 'tripo', model: 'gpt_image_1.5' }), 'GPT Image 1.5')
+  assert.equal(tripoImageModelId('custom-image-model'), 'custom-image-model')
+  assert.equal(tripoImageModelId('banana2'), 'banana2')
+  assert.equal(tripoImageModelId('constructor'), 'constructor')
   assert.equal(aiModelLabel({ provider: 'api', model: 'gemini_3.1_flash_image_preview' }), 'gemini_3.1_flash_image_preview')
 })
 
@@ -485,38 +490,75 @@ test('Tripo v3 uses paid credential headers only on API requests, exact routes a
     return new Response(new Uint8Array(glb()))
   })
 
-  await t.test('Tripo image presets retain explicit model IDs and reject incompatible references before uploading', async t => {
+  await t.test('Tripo v3 image requests translate saved aliases and reject unsupported models without substitution', async t => {
     const root = await temp(t), providers = new AiProviders(root, () => settings)
     const chosen = { ...route('https://openapi.tripo3d.ai', 'tripo'), model: 'gemini_2.5_flash_image_preview' }
     providers.credentials = new AiCredentials(root, encryption())
     providers.credentials.set(chosen, 'test-only-key')
-    providers.confirm = async () => true
+    const approvals: string[] = [], records: AiProvenance[] = []
+    providers.confirm = async request => { approvals.push(request.model); return true }
     const image = join(root, 'input.png'); await writeFile(image, 'fixture')
     const calls: { url: string; body?: unknown }[] = []
+    // Independent v3 server allowlist: deriving it from Studio's presets would hide obsolete IDs.
+    const allowedModels = new Set(['banana', 'banana2', 'banana_pro', 'chat_image_1', 'chat_image_1.5',
+      'chat_image_2', 'chat_image_2.5_flare', 'chat_image_2.5_sunburst', 'seedream_v4', 'seedream_v5'])
     t.mock.method(globalThis, 'fetch', async (url: string | URL | Request, options?: RequestInit) => {
       const address = String(url)
       const body = typeof options?.body === 'string' ? JSON.parse(options.body) : undefined
       calls.push({ url: address, body })
       if (address.endsWith('/files')) return Response.json({ code: 0, data: { file_token: 'image_file' } })
-      if (address.includes('/generation/')) return Response.json({ code: 0, data: { task_id: 'image_task' } })
+      if (address.includes('/generation/')) {
+        if (!allowedModels.has(body?.model)) return Response.json({
+          code: 1004, message: `invalid model for text-to-image: ${body?.model}`
+        }, { status: 400 })
+        return Response.json({ code: 0, data: { task_id: 'image_task' } })
+      }
       if (address.includes('/tasks/')) return Response.json({ code: 0, data: { status: 'success', output: { generated_image_url: 'https://assets.tripo3d.ai/image.png' } } })
       assert.equal(address, 'https://assets.tripo3d.ai/image.png')
       assert.equal(options?.headers, undefined)
       return new Response('image fixture')
     })
     const options = { stage: 'scene' as const, route: chosen, prompt: 'original robot', seed: 42, steps: 20,
-      signal: AbortSignal.timeout(5000), progress: () => {}, submitted: () => {}, record: async () => {} }
-    for (const model of ['midjourney', 'flux.1_dev'])
-      await assert.rejects(providers.execute({ ...options, image, route: { ...chosen, model } }), /text-only/)
+      signal: AbortSignal.timeout(5000), progress: () => {}, submitted: () => {},
+      record: async (record: AiProvenance) => { records.push(structuredClone(record)) } }
+    await assert.rejects(new AiNetwork(chosen, 'test-only-key').tripo('/v3/generation/text-to-image',
+      options.signal, { model: 'gpt_image_1.5', prompt: options.prompt }), /HTTP 400; code 1004.*invalid model/)
+    calls.length = 0
+    for (const model of ['midjourney', 'flux.1_dev', 'flux.1_kontext_pro']) {
+      await assert.rejects(providers.execute({ ...options, route: { ...chosen, model } }), /not supported by Tripo v3/)
+      await assert.rejects(providers.execute({ ...options, image, route: { ...chosen, model } }), /not supported by Tripo v3/)
+    }
+    await assert.rejects(providers.execute({ ...options, image, route: { ...chosen, model: 'seedream_v4' } }), /text-only/)
     await assert.rejects(providers.execute({ ...options, image, prompt: 'x'.repeat(1025) }), /1,024/)
     assert.equal(calls.length, 0)
     for (const model of Object.keys(tripoImageModels)) {
       await providers.execute({ ...options, route: { ...chosen, model } })
       assert.deepEqual(calls.findLast(call => call.url.endsWith('/text-to-image'))?.body, { model, prompt: options.prompt })
     }
-    await providers.execute({ ...options, stage: 'tpose', image })
-    assert.deepEqual(calls.findLast(call => call.url.endsWith('/image-to-image'))?.body,
-      { input: 'image_file', model: chosen.model, prompt: options.prompt, t_pose: true })
+    const aliases = [
+      ['gemini_2.5_flash_image_preview', 'banana'],
+      ['gemini_3_pro_image_preview', 'banana_pro'],
+      ['gemini_3.1_flash_image_preview', 'banana2'],
+      ['gpt_4o', 'chat_image_1'],
+      ['gpt_image_1.5', 'chat_image_1.5'],
+      ['gpt_image_2', 'chat_image_2']
+    ] as const
+    for (const [legacy, model] of aliases) {
+      const savedRoute = { ...chosen, model: legacy }
+      const before = structuredClone(savedRoute)
+      await providers.execute({ ...options, route: savedRoute })
+      assert.deepEqual(calls.findLast(call => call.url.endsWith('/text-to-image'))?.body, { model, prompt: options.prompt })
+      assert.equal(approvals.at(-1), model)
+      assert.equal(records.at(-1)?.route.model, model)
+      assert.equal(records.at(-1)?.configurationHash, hashConfiguration({ ...savedRoute, model }))
+      await providers.execute({ ...options, stage: 'tpose', image, route: savedRoute })
+      assert.deepEqual(calls.findLast(call => call.url.endsWith('/image-to-image'))?.body,
+        { input: 'image_file', model, prompt: options.prompt, t_pose: true })
+      assert.equal(records.at(-1)?.route.model, model)
+      assert.deepEqual(savedRoute, before, 'Existing selections and completed records must not be rewritten.')
+    }
+    await providers.execute({ ...options, route: { ...chosen, model: 'seedream_v5' } })
+    assert.equal(records.at(-1)?.route.model, 'seedream_v5', 'Other explicitly selected v3 model IDs are unchanged.')
   })
 
   await t.test('Tripo imports meshes before rigging/texturing and preserves every paid task ID with cancellation warnings', async t => {
