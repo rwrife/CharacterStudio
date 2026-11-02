@@ -237,10 +237,18 @@ export function App() {
           <button className="secondary full" disabled={locked} onClick={() => void autoFit()}><WandSparkles size={14} /> Auto-fit landmarks to mesh</button>
           <button className="text-button full" disabled={locked} onClick={() => { setSetup({ ...setup, landmarks: defaultLandmarks() }); setDirty(true) }}><RotateIcon /> Reset landmark template</button>
           {dirty && <button className="text-button full" disabled={locked} onClick={() => void perform(async () => { await saveFit(); setNotice('Fit saved. Rebuild the rig to apply these changes.') })}><CheckIcon size={14} /> Save fit without rigging</button>}
-          {skinningFailed && <div className="fit-instructions" role="status"><strong>Some vertices could not be attached</strong><p>Your fitted points are saved. Adjust them and rebuild, or accept them below to try approximate fallback weights. No incomplete rig is accepted.</p></div>}
-          <button className="primary full" disabled={locked} onClick={() => void createRig()}><Bone size={17} /> {character.rigged && !dirty ? 'Rebuild skin + rig' : 'Build skin + rig'}<ArrowRight size={17} /></button>
-          <button className="secondary full rig-fallback-button" disabled={locked} onClick={() => void createRig('fallback')}><CheckIcon size={17} /> Accept points + fallback skinning</button>
-          <p className="fine-print">Both actions keep your joint positions. Build automatically repairs missing weights along connected surfaces. Fallback also attaches remaining vertices to nearby fitted bones; touching limbs or separate pieces may bend incorrectly. Complete weights are still required. Body only, not fingers or face.</p>
+          <div className="rig-action-step">
+            <strong>1. Try automatic rigging first</strong>
+            <p>Build a skinned rig from these points. If it fails or the joints bend poorly, adjust the points and use step 2.</p>
+            <button className="primary full" disabled={locked} onClick={() => void createRig()}><Bone size={17} /> Try auto-rigging<ArrowRight size={17} /></button>
+          </div>
+          {skinningFailed && <div className="fit-instructions rig-failure" role="status"><strong>Automatic rigging could not attach all vertices</strong><p>Move the landmarks in the viewport, then choose “Use adjusted points + fallback skinning” below. Your adjusted points will be saved with that attempt; no incomplete rig was accepted.</p></div>}
+          <div className="rig-action-step rig-fallback-step">
+            <strong>2. If automatic rigging fails</strong>
+            <p>Manually move the landmarks in the viewport, then use fallback skinning with the adjusted points.</p>
+            <button className="secondary full rig-fallback-button" disabled={locked} onClick={() => void createRig('fallback')}><CheckIcon size={17} /> Use adjusted points + fallback skinning</button>
+          </div>
+          <p className="fine-print">Fallback attaches remaining vertices to nearby fitted bones; touching limbs or separate pieces may bend incorrectly. Complete weights are still required. Body only, not fingers or face.</p>
         </> : <>
           <div className="section-kicker">03 / DIRECT THE MOTION</div><h2>What’s the move?</h2><p className="panel-description">Describe a movement. The selected motion provider generates SOMA motion; local Blender applies it to your character.</p>
           {snapshot && <AiRouteBadge snapshot={snapshot} stage="motion" onClick={() => openProviders('motion')} />}
