@@ -550,7 +550,7 @@ test('a geometry variation can switch to textured generation while retaining its
 })
 
 test('failed and cancelled variations leave their source design and downstream outputs unchanged', async t => {
-  const { studio, setFailed, setPending } = await fixture(t)
+  const { studio, setFailed, setPending, uploads, submissions } = await fixture(t)
   const id = studio.designer.create(request)
   for (const stage of ['scene', 'tpose', 'model'] as const) await studio.designer.run(id, stage)
   const original = studio.designer.snapshot().designs[0]
@@ -560,11 +560,14 @@ test('failed and cancelled variations leave their source design and downstream o
   assert.equal(studio.designer.snapshot().designs[0].tposeUrl, undefined)
   const cancelled = await studio.designer.variation(id, 'model', request)
   setPending()
+  const beforeCancel = { uploads: uploads.length, submissions: submissions.length }
   const work = studio.designer.run(cancelled, 'model')
   const rejected = assert.rejects(work, /cancelled/)
   await assert.rejects(studio.designer.variation(id, 'scene', request), /share one local job slot/)
   await studio.designer.cancel()
   await rejected
+  assert.equal(uploads.length, beforeCancel.uploads, 'Cancellation during input preparation must not upload an image.')
+  assert.equal(submissions.length, beforeCancel.submissions, 'Cancellation before upload must not submit generation.')
   const designs = studio.designer.snapshot().designs
   assert.equal(designs[0].modelUrl, undefined)
   assert.equal(designs[0].status, 'cancelled')

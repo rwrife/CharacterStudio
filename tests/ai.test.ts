@@ -238,6 +238,16 @@ test('credentials are encrypted, endpoint-bound, never returned in configuration
   assert.equal(vault.has(chosen), false)
 })
 
+test('already cancelled provider uploads do not start fetch or serialize multipart streams', async t => {
+  const fetch = t.mock.method(globalThis, 'fetch', async () => new Response('{}'))
+  const network = new AiNetwork(route('https://gpu.example', 'comfyui'))
+  const form = new FormData()
+  form.append('image', new Blob(['fixture image'], { type: 'image/png' }), 'fixture.png')
+  const reason = new Error('Cancelled before upload')
+  await assert.rejects(network.request('/upload/image', AbortSignal.abort(reason), form), error => error === reason)
+  assert.equal(fetch.mock.callCount(), 0)
+})
+
 test('remote approval is one-shot, stale replies fail, abort withdraws the modal', async () => {
   const changes: (string | null)[] = []
   const consent = new RemoteConsent(request => changes.push(request?.id ?? null))

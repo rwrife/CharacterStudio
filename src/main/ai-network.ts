@@ -40,6 +40,7 @@ export class AiNetwork {
   }
   async request(path: string, signal: AbortSignal, body?: unknown, method?: string, limit = 2 * 1024 * 1024): Promise<Buffer> {
     if (!path.startsWith('/') || path.startsWith('//') || path.includes('\\')) throw new Error('Invalid provider request path.')
+    signal.throwIfAborted()
     const form = body instanceof FormData
     const response = await fetch(this.route.endpoint + path, {
       method: method ?? (body === undefined ? 'GET' : 'POST'),

@@ -378,8 +378,10 @@ export class Designer {
     }
   }
   private async upload(file: string, id: string, base: string, signal: AbortSignal) {
+    const bytes = await readFile(file)
+    signal.throwIfAborted()
     const form = new FormData()
-    form.append('image', new Blob([new Uint8Array(await readFile(file))], { type: 'image/png' }), `${id}.png`)
+    form.append('image', new Blob([new Uint8Array(bytes)], { type: 'image/png' }), `${id}.png`)
     form.append('overwrite', 'false')
     const response = await fetch(base + '/upload/image', { method: 'POST', body: form, redirect: 'error', signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]) })
     if (!response.ok) throw new Error(`Local ComfyUI reference import failed: HTTP ${response.status}.`)
