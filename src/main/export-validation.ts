@@ -55,7 +55,7 @@ function validateAtlas(bytes: Buffer, size: number) {
   for (let y = 0; y < size; y++) if (pixels[y * stride] > 4) throw fail()
 }
 
-export async function validateDesignGlb(path: string, requiredTextureSize?: number): Promise<boolean> {
+export async function validateDesignGlb(path: string, requiredTextureSize?: number | 'any'): Promise<boolean> {
   const { gltf, bytes, binaryOffset } = await readGlb(path)
   if (gltf.asset?.version !== '2.0' || gltf.buffers?.length !== 1 || gltf.buffers[0].uri ||
       gltf.images?.some(image => image.uri) || binaryOffset + 8 > bytes.length ||
@@ -107,7 +107,7 @@ export async function validateDesignGlb(path: string, requiredTextureSize?: numb
             !Number.isSafeInteger(imageView.byteLength) || imageView.byteLength < 24 ||
             imageOffset + imageView.byteLength > gltf.buffers[0].byteLength)
           throw new Error('Textured model has no complete embedded material image.')
-        if (requiredTextureSize) {
+        if (typeof requiredTextureSize === 'number') {
           const encoded = bytes.subarray(binaryOffset + 8 + imageOffset, binaryOffset + 8 + imageOffset + imageView.byteLength)
           if (image.mimeType !== 'image/png') throw new Error('Generated texture atlas must be an embedded PNG.')
           validateAtlas(encoded, requiredTextureSize)

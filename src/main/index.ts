@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, net, protocol, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, net, protocol, safeStorage, shell } from 'electron'
 import { copyFile, readFile, writeFile, stat } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
@@ -17,6 +17,9 @@ import { FileDialogs } from './file-dialogs'
 import { startDesktopMcp } from './mcp-server'
 import { desktopAdapter } from './mcp-desktop'
 import { DesktopMcpControl } from './mcp-control'
+import { AiCredentials } from './ai-credentials'
+import { RemoteConsent } from './ai-consent'
+import { resolveAiCredentialRoute, workflowSchema } from '../shared/ai'
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'studio', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }])
 let window: BrowserWindow
@@ -76,6 +79,14 @@ if (ownsWorkspace) app.whenReady().then(async () => {
   })
   window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
   const fileDialogs = new FileDialogs(window, false)
+  const remoteConsent = new RemoteConsent(request => {
+    if (!window.isDestroyed()) window.webContents.send('ai:consent', request)
+  })
+  studio.ai.credentials = new AiCredentials(app.getPath('userData'), safeStorage)
+  studio.ai.confirm = (request, signal) => remoteConsent.request(request, signal)
+  window.webContents.on('did-start-loading', () => remoteConsent.cancel())
+  window.on('closed', () => remoteConsent.cancel())
+  app.once('before-quit', () => remoteConsent.cancel())
   files = fileDialogs
   const mcpControl = new DesktopMcpControl(studio.root,
     () => startDesktopMcp(desktopAdapter(window, () => studio.snapshot()), studio.root),
@@ -118,6 +129,7 @@ if (ownsWorkspace) app.whenReady().then(async () => {
   const setup = new SetupAssistant({
     root: app.getPath('userData'), appRoot: app.getAppPath(), firstLaunch, quietLaunch, autoInstall: process.env.STUDIO_NO_AUTO_INSTALL !== '1', signal: lifetime.signal,
     settings: () => studio.snapshot().settings,
+    aiConfiguration: () => studio.ai.snapshot(),
     saveSettings: value => studio.saveSettings(value),
     startComfy: () => studio.startComfy(),
     designerConfig: () => studio.designer.snapshot().config,
@@ -134,6 +146,30 @@ if (ownsWorkspace) app.whenReady().then(async () => {
   handle('setup:launch-check', () => setup.launchCheck())
   handle('setup:cancel-launch-check', () => setup.cancelLaunchCheck())
   handle('studio:snapshot', () => studio.snapshot())
+  handle('ai:settings', (value: import('../shared/ai').AiConfiguration) => studio.saveAiSettings(value))
+  handle('ai:hardware', () => studio.ai.hardware())
+  const credentialRoute = (value: unknown) => resolveAiCredentialRoute(studio.ai.snapshot(), value)
+  handle('ai:credential-status', (target: unknown) => studio.ai.credentials!.has(credentialRoute(target)))
+  handle('ai:credential', (target: unknown, value: unknown) => {
+    const snapshot = studio.snapshot()
+    if (snapshot.jobs.some(job => !['complete', 'failed', 'cancelled'].includes(job.stage)) ||
+        snapshot.batches.some(batch => batch.status === 'running') || snapshot.designer?.designs.some(design => design.status === 'running'))
+      throw new Error('Wait for generation to finish before changing provider credentials.')
+    studio.ai.credentials!.set(credentialRoute(target), z.string().max(8192).parse(value))
+  })
+  handle('ai:balance', (target: unknown) => studio.ai.balance(credentialRoute(target), lifetime.signal))
+  handle('ai:consent-reply', (id: unknown, approved: unknown) => remoteConsent.reply(z.uuid().parse(id), z.boolean().parse(approved)))
+  handle('ai:import-workflow', async () => {
+    const choice = await fileDialogs.showOpenDialog(window, {
+      title: 'Import ComfyUI workflow template with parameter mappings', properties: ['openFile'],
+      filters: [{ name: 'Studio workflow template', extensions: ['json'] }]
+    })
+    if (choice.canceled) return null
+    if ((await stat(choice.filePaths[0])).size > 1024 * 1024) throw new Error('Workflow JSON exceeds 1 MB.')
+    const text = await readFile(choice.filePaths[0], 'utf8')
+    if (Buffer.byteLength(text) > 1024 * 1024) throw new Error('Workflow JSON exceeds 1 MB.')
+    return workflowSchema.parse(JSON.parse(text))
+  })
   handle('designer:readiness', () => studio.designer.readiness())
   handle('designer:install-models', (id: import('../shared/designer-models').DesignerModelPackage) =>
     studio.designer.installModels(id, async (label, models, root) => {
@@ -160,6 +196,7 @@ if (ownsWorkspace) app.whenReady().then(async () => {
     return result.canceled ? null : studio.designer.importStage(result.filePaths[0], request)
   })
   handle('designer:run', (id: string, stage: DesignStage) => studio.designer.run(id, stage))
+  handle('designer:process-model', (id: string, stage: 'rig' | 'texture') => studio.designer.processModel(id, stage))
   handle('designer:cancel', () => studio.designer.cancel())
   handle('designer:animate', (id: string) => studio.importDesign(id))
   handle('designer:reference', async () => {

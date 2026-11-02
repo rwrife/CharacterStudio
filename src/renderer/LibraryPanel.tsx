@@ -3,6 +3,8 @@ import { ArrowDownToLine, ArrowRight, Check, Copy, FolderOpen, GitBranch, Layers
 import type { GenerateRequest, MotionNode, MotionPlan, RigSetup, Snapshot } from '../shared/types'
 import { expandGraph } from '../shared/plans'
 import { MotionGraph } from './MotionGraph'
+import { AiRouteBadge } from './AiProvidersPanel'
+import { aiRouteLabel } from '../shared/ai'
 
 interface Props {
   snapshot: Snapshot
@@ -188,6 +190,7 @@ export function LibraryPanel(props: Props) {
           </>}
           <div className="panel-rule" />
           <details className="graph-targets" open><summary>Generate for characters</summary>
+            <AiRouteBadge snapshot={props.snapshot} stage="motion" />
             <div className="section-heading"><span className="fine-print">TARGETS</span><button className="text-button" disabled={locked} onClick={() => setSelectedCharacters(props.snapshot.characters.slice(0, 32).map(c => c.id))}>Select all</button></div>
             <div className="batch-targets">{props.snapshot.characters.map(c => <label className="checkbox" key={c.id}><input type="checkbox" disabled={locked} checked={selectedCharacters.includes(c.id)} onChange={e => setSelectedCharacters(old => e.target.checked ? [...old, c.id] : old.filter(id => id !== c.id))} /><span>{c.name}<small>{c.rigged ? 'Rig ready' : 'Needs rigging'}</small></span></label>)}{!props.snapshot.characters.length && <p className="fine-print">Import an FBX first.</p>}</div>
             <label className="field-label" htmlFor="seed-stride">Variation per character</label><select id="seed-stride" disabled={locked} value={stride} onChange={e => setStride(Number(e.target.value))}><option value="0">Reuse identical motion per path</option><option value="1">Vary seeds by 1</option><option value="100">Vary seeds by 100</option><option value="1000">Vary seeds by 1000</option></select>
@@ -200,6 +203,7 @@ export function LibraryPanel(props: Props) {
       </div> : <div className="batch-history">
         {!props.snapshot.batches.length && <div className="empty-assets"><Layers3 size={30} /><p>No generated paths yet</p></div>}
         {props.snapshot.batches.map(batch => <section className="batch-card" key={batch.id}>
+          <p className="fine-print">Saved provider: {aiRouteLabel({ version: 1, stages: { motion: batch.aiRoute } }, 'motion')}. Reruns require the same provider, model and workflow.</p>
           <div className="section-heading"><div><h3>{batch.name} <span className={`batch-status ${batch.status}`}>{batch.status}</span></h3><p className="fine-print">{new Date(batch.createdAt).toLocaleString()} · {batch.items.filter(i => i.status === 'complete').length}/{batch.items.length} variants · seed stride {batch.request.seedStride}</p></div><div className="node-actions">
             {batch.status === 'running' ? <button className="secondary" onClick={() => void window.studio.cancel().catch(e => setError(message(e)))}>Cancel batch</button> : <button className="secondary" disabled={locked} onClick={() => void action(() => window.studio.rerunBatch(batch.id))}><RefreshCw size={13} /> Run same batch again</button>}
             <button className="secondary" disabled={!batch.items.some(i => i.status === 'complete')} onClick={() => void action(async () => { const path = await window.studio.exportBatch(batch.id); if (path) setNotice(`Completed batch outputs saved to ${path}`) })}><ArrowDownToLine size={14} /> Save outputs</button>

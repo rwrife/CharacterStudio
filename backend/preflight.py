@@ -79,7 +79,21 @@ def check_gpu():
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--encoder", choices=("llm2vec", "lfm"), default="llm2vec")
+    parser.add_argument("--processing-only", action="store_true")
+    parser.add_argument("--kimodo")
     args = parser.parse_args()
+    if args.processing_only:
+        if not args.kimodo:
+            raise ValueError("Motion processing requires a local Kimodo source folder.")
+        sys.path.insert(0, args.kimodo)
+        import numpy
+        import torch
+        from kimodo.skeleton import SOMASkeleton77
+        from kimodo.constraints import FullBodyConstraintSet
+        from kimodo.exports.bvh import save_motion_bvh
+        SOMASkeleton77()
+        print("STUDIO_CHECKS:[]", flush=True)
+        return
     checks = [check_gpu()]
     checks.append(check_lfm_encoder() if args.encoder == "lfm" else check_text_encoder())
     print("STUDIO_CHECKS:" + json.dumps(checks), flush=True)

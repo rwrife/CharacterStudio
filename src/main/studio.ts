@@ -16,6 +16,8 @@ import { validateCharacterGlb, validateDesignGlb } from './export-validation'
 import { texturedMeshSettings } from '../shared/designer'
 import { Designer } from './designer'
 import { bundledBlenderPath, comfyPythonPath, defaultComfyRoot } from './native-runtime'
+import { AiProviders, hashConfiguration, motionProviderTemplate } from './ai-providers'
+import type { AiConfiguration } from '../shared/ai'
 
 interface StoredCharacter extends Character { rigDirectory?: string }
 interface StoredState extends Omit<Snapshot, 'characters' | 'designer'> { characters: StoredCharacter[] }
@@ -30,6 +32,7 @@ export class Studio {
   private lifetime = new AbortController()
   private designerBusy = false
   readonly designer: Designer
+  readonly ai: AiProviders
   readonly assets = new Map<string, string>()
   onUpdate: (snapshot: Snapshot) => void = () => {}
 
@@ -59,12 +62,13 @@ export class Studio {
         item.status = 'blocked'; item.message = 'App closed before this item completed. Run this saved batch again to retry.'
       }
     }
+    this.ai = new AiProviders(root, () => this.state.settings)
     this.designer = new Designer(root, appRoot, this.assets, () => this.state.settings, () => {
       if (this.designerBusy || this.active || this.batchController || this.startingComfy)
         throw new Error('Designer and Animator share one local job slot. Wait for the current operation or cancel it.')
       this.designerBusy = true
       return () => { this.designerBusy = false }
-    }, () => this.onUpdate(this.snapshot()), decodeImage)
+    }, () => this.onUpdate(this.snapshot()), decodeImage, undefined, this.ai)
     this.refreshAssets()
     this.persist()
   }
@@ -88,7 +92,7 @@ export class Studio {
 
   snapshot(): Snapshot {
     return structuredClone({
-      ...this.state, designer: this.designer.snapshot(), characters: this.state.characters.map(({ rigDirectory: _, ...character }) => character)
+      ...this.state, ai: this.ai.snapshot(), designer: this.designer.snapshot(), characters: this.state.characters.map(({ rigDirectory: _, ...character }) => character)
     })
   }
 
@@ -104,6 +108,13 @@ export class Studio {
     this.state.settings = settingsSchema.parse(value)
     this.persist()
     return this.state.settings
+  }
+
+  saveAiSettings(value: AiConfiguration) {
+    if (this.designerBusy || this.active || this.startingComfy || this.batchController)
+      throw new Error('Wait for the current operation before changing model and workflow providers.')
+    this.ai.save(value)
+    this.onUpdate(this.snapshot())
   }
 
   private character(id: string): StoredCharacter {
@@ -159,11 +170,11 @@ export class Studio {
       return job
     } catch (error) {
       let cleanup = ''
-      if (job.promptId) {
+      if (job.promptId && !job.ai?.length) {
         try { await cancelMotion(settings.comfyUrl, job.promptId) }
         catch (cancelError) { cleanup = ` Could not cancel this ComfyUI prompt: ${errorText(cancelError)}. Check prompt ${job.promptId} in ComfyUI.` }
       }
-      this.update(job, signal.aborted ? 'cancelled' : 'failed', (signal.aborted ? 'Job cancelled. No completed character output was published.' : errorText(error)) + cleanup, job.progress)
+      this.update(job, signal.aborted ? 'cancelled' : 'failed', (signal.aborted ? 'Job cancelled. No completed character output was published. ' : '') + errorText(error) + cleanup, job.progress)
       throw new Error(job.message)
     } finally {
       this.active = undefined
@@ -228,7 +239,7 @@ export class Studio {
     }
     const design = this.designer.snapshot().designs.find(design => design.id === id)
     const character = await this.importCharacter(this.designer.output(id, 'model'), this.designer.title(id),
-      design?.modelTextured && design.sources?.model?.kind === 'generated' && design.config.meshProfile === 'textured' ? texturedMeshSettings(design.config).textureSize : undefined)
+      design?.modelTextured && !design.ai?.length && design.sources?.model?.kind === 'generated' && design.config.meshProfile === 'textured' ? texturedMeshSettings(design.config).textureSize : undefined)
     this.designer.assign(id, character.id)
     return character
   }
@@ -266,6 +277,7 @@ export class Studio {
         throw new Error('The full branch would exceed 60 seconds. Shorten this segment or start an independent motion.')
     }
     return this.job('generate', character.id, character.name, async (job, signal, settings) => {
+      const aiRoute = this.ai.route('motion')
       job.textEncoder = settings.textEncoder ?? 'llm2vec'
       Object.assign(job, { prompt: batch?.node.prompt ?? request.prompt, seconds: request.seconds, seed: request.seed, steps: request.steps, inPlace: request.inPlace, parentJobId: parent?.id, label: batch?.label, batchId: batch?.id, planNodeId: batch?.nodeId, reusedMotionFrom: batch?.reuseJobId, graphContext: batch?.context })
       this.update(job, 'preflight', 'Checking local rig, ComfyUI nodes, and text-encoder access', 5)
@@ -284,17 +296,43 @@ export class Studio {
       const sample = async (stage: string, sampleRequest: GenerateRequest, constraintsPath = '') => {
         signal.throwIfAborted()
         const prefix = `studio_${job.id.replaceAll('-', '')}_${stage}`
-        const result = await generateMotion({
-          base: settings.comfyUrl, request: sampleRequest, prefix, signal, constraintsPath, textEncoder: settings.textEncoder,
-          submitted: promptId => { job.promptId = promptId; this.persist() },
-          progress: (message, p) => this.update(job, p < 30 ? 'queued' : 'generating', `${stage}: ${message}`, p)
-        })
-        signal.throwIfAborted()
-        const files = await readdir(settings.comfyOutput)
-        for (const extension of ['npz', 'bvh']) {
-          const matches = files.filter(file => file.startsWith(prefix + '_') && file.endsWith('.' + extension))
-          if (matches.length !== 1) throw new Error(`Expected one generated ${extension.toUpperCase()} in ${settings.comfyOutput}; found ${matches.length}. Check the configured ComfyUI output folder.`)
-          await copyFile(join(settings.comfyOutput, matches[0]), join(dir, `${stage}.${extension}`))
+        let result: { promptId: string; fps: number; frames: number }
+        if (aiRoute.provider !== 'builtin') {
+          const generated = await this.ai.execute({
+            stage: 'motion', route: aiRoute, prompt: sampleRequest.prompt, seed: sampleRequest.seed,
+            steps: sampleRequest.steps, seconds: sampleRequest.seconds, textEncoder: settings.textEncoder,
+            constraints: constraintsPath ? JSON.parse(readFileSync(constraintsPath, 'utf8')) : undefined,
+            native: parameters => motionProviderTemplate(sampleRequest, parameters, settings.textEncoder),
+            signal, submitted: promptId => { job.promptId = promptId; this.persist() },
+            progress: message => this.update(job, 'generating', `${stage}: ${message}`, 35),
+            record: async (provenance, workflow) => {
+              job.ai ??= []
+              const existing = job.ai.findIndex(item => item.createdAt === provenance.createdAt)
+              if (existing < 0) job.ai.push(structuredClone(provenance))
+              else job.ai[existing] = structuredClone(provenance)
+              const path = join(dir, `${stage}-provider.json`)
+              const previous = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {}
+              await writeFile(path, JSON.stringify({ ...previous, provenance, ...(workflow ? { workflow } : {}) }, null, 2))
+              this.persist()
+            }
+          })
+          if (!generated.npz || !generated.bvh || !generated.metadata) throw new Error('The motion provider returned incomplete SOMA-77 output.')
+          await writeFile(join(dir, `${stage}.npz`), generated.npz)
+          await writeFile(join(dir, `${stage}.bvh`), generated.bvh)
+          result = { promptId: job.promptId!, fps: generated.metadata.fps, frames: generated.metadata.num_frames }
+        } else {
+          result = await generateMotion({
+            base: settings.comfyUrl, request: sampleRequest, prefix, signal, constraintsPath, textEncoder: settings.textEncoder,
+            submitted: promptId => { job.promptId = promptId; this.persist() },
+            progress: (message, p) => this.update(job, p < 30 ? 'queued' : 'generating', `${stage}: ${message}`, p)
+          })
+          signal.throwIfAborted()
+          const files = await readdir(settings.comfyOutput)
+          for (const extension of ['npz', 'bvh']) {
+            const matches = files.filter(file => file.startsWith(prefix + '_') && file.endsWith('.' + extension))
+            if (matches.length !== 1) throw new Error(`Expected one generated ${extension.toUpperCase()} in ${settings.comfyOutput}; found ${matches.length}. Check the configured ComfyUI output folder.`)
+            await copyFile(join(settings.comfyOutput, matches[0]), join(dir, `${stage}.${extension}`))
+          }
         }
         await motionTool('verify-frames', ['--parent', join(dir, `${stage}.npz`), '--frames', String(result.frames), '--output', join(dir, `${stage}-check.json`)])
         stages.push({ stage, promptId: result.promptId, seed: sampleRequest.seed, fps: result.fps, frames: result.frames })
@@ -320,6 +358,7 @@ export class Studio {
             (parent && (parent.reusedMotionFrom ?? parent.id) !== source.parentJobId))
           throw new Error('Source motion does not match this exact graph path, seed and incoming pose. Refusing cross-context reuse.')
         const sourceDir = join(this.root, 'jobs', source.id)
+        job.ai = source.ai ? structuredClone(source.ai) : undefined
         const manifest = JSON.parse(readFileSync(join(sourceDir, 'manifest.json'), 'utf8'))
         generated = { promptId: manifest.promptId, fps: manifest.report.fps, frames: manifest.clipFrames }
         if (!Number.isInteger(generated.frames) || generated.frames < 2) throw new Error('Source motion manifest is missing its verified node frame count.')
@@ -398,7 +437,7 @@ export class Studio {
       job.warnings = [...report.warnings, ...(settings.textEncoder === 'lfm' ? ['Experimental LFM text conditioning: inspect handedness, stance and motion details before production use.'] : []),
         ...(graph?.node.loop ? ['Loop endpoint poses were checked; review velocity continuity and foot contact before production use.'] : [])]
       await writeFile(join(dir, 'manifest.json'), JSON.stringify({ request, samplingRequest, graph: batch ? { node: batch.node, context: batch.context } : undefined,
-        textEncoder: job.textEncoder, stages, promptId: generated.promptId, clipFrames: generated.frames, reusedMotionFrom: batch?.reuseJobId, source: character.name, setup: character.setup, report }, null, 2))
+        textEncoder: job.textEncoder, ai: job.ai, aiRoute, stages, promptId: generated.promptId, clipFrames: generated.frames, reusedMotionFrom: batch?.reuseJobId, source: character.name, setup: character.setup, report }, null, 2))
     }, !!batch)
   }
 
@@ -409,7 +448,7 @@ export class Studio {
     active.controller.abort()
     this.update(active.job, active.job.stage, 'Cancelling this job only...', active.job.progress)
     // The job catch path cancels after an in-flight submission finishes as well.
-    if (active.job.promptId) await cancelMotion(active.settings.comfyUrl, active.job.promptId)
+    if (active.job.promptId && !active.job.ai?.length) await cancelMotion(active.settings.comfyUrl, active.job.promptId)
   }
 
   savePlan(value: MotionPlan): MotionPlan {
@@ -437,6 +476,7 @@ export class Studio {
       id: randomUUID(), name: plan.name, createdAt: new Date().toISOString(), status: 'running',
       plan: structuredClone(plan), request: structuredClone(request),
       textEncoder: this.state.settings.textEncoder ?? 'llm2vec',
+      aiRoute: this.ai.route('motion'),
       items: createBatchItems(plan, request, this.state.characters, randomUUID)
     }
     this.state.batches.unshift(batch)
@@ -497,6 +537,8 @@ export class Studio {
   async rerunBatch(id: string) {
     const batch = this.state.batches.find(b => b.id === id)
     if (!batch) throw new Error('Saved batch not found.')
+    if (hashConfiguration(batch.aiRoute ?? { provider: 'builtin', location: 'local', endpoint: '', model: '', minVramGB: 0 }) !== hashConfiguration(this.ai.route('motion')))
+      throw new Error('Select this batch\'s original motion provider, model and workflow before rerunning. Saved batches never silently switch providers.')
     if ((batch.textEncoder ?? 'llm2vec') !== (this.state.settings.textEncoder ?? 'llm2vec'))
       throw new Error(`Select this batch's original ${batch.textEncoder === 'lfm' ? 'LFM bridge' : 'Llama + LLM2Vec'} encoder in Backend connections before rerunning. Encoder changes would alter its saved motion conditioning.`)
     return this.runBatch(batch.request, batch.plan)
@@ -525,6 +567,18 @@ export class Studio {
   async check(signal?: AbortSignal): Promise<Check[]> {
     signal = signal ? AbortSignal.any([signal, this.lifetime.signal]) : this.lifetime.signal
     const settings = this.state.settings
+    if (this.ai.route('motion').provider !== 'builtin') {
+      const checks = await Promise.all([
+        runProcess(settings.blenderPath, ['--background', '--factory-startup', '--version'], { signal, timeout: 30_000 })
+          .then<Check>(() => ({ name: 'Blender rigging backend', status: 'ready', detail: 'Local Blender is available for skinned character export.' }))
+          .catch((error): Check => ({ name: 'Blender rigging backend', status: 'blocked', detail: errorText(error) })),
+        runProcess(comfyPythonPath(settings.comfyRoot), [join(this.appRoot, 'backend', 'preflight.py'), '--processing-only',
+          '--kimodo', join(settings.comfyRoot, 'custom_nodes', 'ComfyUI-Kimodo', 'kimodo')], { signal, timeout: 30_000 })
+          .then<Check>(() => ({ name: 'Local motion processing', status: 'ready', detail: 'SOMA processing is available. Local inference weights and GPU memory are not required for remote motion.' }))
+          .catch((error): Check => ({ name: 'Local motion processing', status: 'blocked', detail: errorText(error) }))
+      ])
+      return [...checks, { name: 'Selected motion provider', status: 'warning', detail: 'The selected provider is checked when you generate. Remote requests require visible approval; motion must preserve SOMA-77 frames and actual endpoint constraints.' }]
+    }
     const [blender, python, comfy] = await Promise.all([
       runProcess(settings.blenderPath, ['--background', '--factory-startup', '--version'], { signal, timeout: 30_000 })
         .then<Check>(out => ({ name: 'Blender rigging backend', status: 'ready', detail: out.split(/\r?\n/).find(s => s.startsWith('Blender')) ?? 'Blender is available' }))

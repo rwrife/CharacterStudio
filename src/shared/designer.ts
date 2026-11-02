@@ -59,6 +59,8 @@ export interface Design {
   tposeIsolated?: boolean
   modelUrl?: string
   modelTextured?: boolean
+  modelRigged?: boolean
+  ai?: import('./ai').AiProvenance[]
   characterId?: string
   sources?: Partial<Record<DesignStage, DesignSource>>
   recovery?: import('./designer-models').DesignRecovery
@@ -126,4 +128,10 @@ export const handAnatomyPrompt = 'Humanoid characters have exactly five fingers 
 export const handAnatomyNegative = 'extra fingers, missing fingers, fused fingers, six fingers'
 export function specifiesHandAnatomy(request: Pick<DesignRequest, 'description' | 'style'>): boolean {
   return /\b(fingers?|fingered|digits?|thumbs?|claws?|clawed|talons?|paws?|pincers?|tentacles?)\b/i.test(`${request.description} ${request.style}`)
+}
+export function scenePrompt(request: Pick<DesignRequest, 'description' | 'style'>): string {
+  return `Character and scene: ${request.description}. Art style: ${request.style}. Full body character concept illustration in their environment, clear character silhouette, no text or lettering.${specifiesHandAnatomy(request) ? '' : ` ${handAnatomyPrompt}`}`
+}
+export function tposePrompt(request: Pick<DesignRequest, 'description' | 'style'>): string {
+  return specifiesHandAnatomy(request) ? tposeEditPrompt : `${tposeEditPrompt} ${handAnatomyPrompt}`
 }

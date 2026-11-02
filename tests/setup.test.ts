@@ -11,6 +11,7 @@ import { comfyPythonPath } from '../src/main/native-runtime'
 import { launchIssues, modelUrl, setupLinks, setupModels, summarizeSetup, type SetupItem, type SetupState } from '../src/shared/setup'
 import type { DesignerConfig } from '../src/shared/designer'
 import type { Settings } from '../src/shared/types'
+import { localRoute, type AiConfiguration } from '../src/shared/ai'
 
 const temp = () => mkdtempSync(join(tmpdir(), 'studio-setup-'))
 const config = (): DesignerConfig => designConfigSchema.parse({ imageProfile: 'sd15', checkpoint: '', controlnet: '', meshProfile: 'mini', meshCheckpoint: '', titleModel: '' })
@@ -61,6 +62,22 @@ test('workspace readiness requires every item the workspace depends on', () => {
   const item = (id: SetupItem['id'], status: SetupItem['status'], requiredFor: SetupItem['requiredFor']): SetupItem => ({ id, group: 'core', title: id, detail: '', status, requiredFor, actions: [] })
   assert.deepEqual(summarizeSetup([item('blender', 'done', ['animator']), item('comfy-running', 'todo', ['designer', 'animator']), item('ollama', 'optional', [])]), { designer: false, animator: false })
   assert.deepEqual(summarizeSetup([item('blender', 'todo', ['animator']), item('comfy-running', 'done', ['designer', 'animator']), item('ollama', 'optional', [])]), { designer: true, animator: false })
+})
+
+test('routed inference removes unused local weights and GPU services but retains local motion processing prerequisites', async t => {
+  const routing: AiConfiguration = { version: 1, globalComfy: {
+    provider: 'comfyui', location: 'remote', endpoint: 'https://gpu.example', model: '', minVramGB: 0
+  }, stages: { cutout: localRoute } }
+  t.mock.method(globalThis, 'fetch', async () => { throw new Error('No local backend in fixture') })
+  const assistant = new SetupAssistant(host(temp(), { aiConfiguration: () => routing }).value)
+  const report = await assistant.report()
+  const required = (id: string) => report.items.find(item => item.id === id)!.requiredFor
+  assert.ok(required('model:birefnet').includes('designer'), 'Independent local cutout still needs its model.')
+  assert.ok(!required('model:dreamshaper-8').includes('designer'))
+  assert.ok(!required('text-encoder').includes('animator'))
+  assert.ok(!required('comfy-running').includes('animator'))
+  assert.ok(required('comfy-install').includes('animator'), 'Remote motion still needs local Python processing.')
+  assert.ok(required('blender').includes('animator'))
 })
 
 test('paths shown in the checklist hide the account home directory', () => {

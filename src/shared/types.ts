@@ -58,6 +58,7 @@ export interface Job {
   clipPreviewUrl?: string
   transitionPreviewUrl?: string
   textEncoder?: 'llm2vec' | 'lfm'
+  ai?: import('./ai').AiProvenance[]
 }
 export interface Check {
   name: string
@@ -142,6 +143,7 @@ export interface Batch {
   request: BatchRequest
   items: BatchItem[]
   textEncoder?: 'llm2vec' | 'lfm'
+  aiRoute?: import('./ai').AiRoute
 }
 export interface Snapshot {
   settings: Settings
@@ -150,8 +152,18 @@ export interface Snapshot {
   plans: MotionPlan[]
   batches: Batch[]
   designer?: import('./designer').DesignerSnapshot
+  ai?: import('./ai').AiConfiguration
 }
 export interface StudioApi {
+  aiSettings(config: import('./ai').AiConfiguration): Promise<void>
+  aiHardware(): Promise<import('./ai').AiHardware>
+  aiImportWorkflow(): Promise<import('./ai').WorkflowTemplate | null>
+  aiCredentialStatus(target: import('./ai').AiCredentialTarget): Promise<boolean>
+  aiCredential(target: import('./ai').AiCredentialTarget, value: string): Promise<void>
+  aiBalance(target: import('./ai').AiCredentialTarget): Promise<{ balance: number; frozen: number }>
+  onAiConsent(callback: (request: import('./ai').AiConsent | null) => void): () => void
+  aiConsentReply(id: string, approved: boolean): Promise<void>
+  designerProcessModel(id: string, stage: 'rig' | 'texture'): Promise<string>
   desktopControlEnabled(): Promise<boolean>
   setDesktopControlEnabled(enabled: boolean): Promise<boolean>
   onDesktopControlChanged(callback: (enabled: boolean) => void): () => void

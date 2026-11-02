@@ -10,6 +10,9 @@ import { FileDialog } from './FileDialog'
 import { LaunchCheck } from './LaunchCheck'
 import { defaultLandmarks } from '../shared/rig'
 import { recommendTextEncoder } from '../shared/text-encoder'
+import { AiProvidersPanel, AiRouteBadge } from './AiProvidersPanel'
+import { AiConsent } from './AiConsent'
+import type { AiStage } from '../shared/ai'
 
 const done = new Set(['complete', 'failed', 'cancelled'])
 const explain = (e: unknown) => (e instanceof Error ? e.message : String(e)).replace(/^Error invoking remote method '[^']+': Error: /, '')
@@ -37,6 +40,7 @@ export function App() {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [providerStage, setProviderStage] = useState<AiStage>()
   const [settings, setSettings] = useState<Settings>()
   const [checks, setChecks] = useState<Check[]>([])
   const [checking, setChecking] = useState(false)
@@ -91,6 +95,10 @@ export function App() {
   function selectCharacter(c: Character) {
     setCharacterId(c.id); setSetup(structuredClone(c.setup)); setDirty(false)
     setMode(c.rigged ? 'rig' : 'input'); setFit(false); setJobId(''); setParentJobId(''); setAnimationPart('path')
+  }
+  function openProviders(stage: AiStage = 'scene') {
+    setSettingsOpen(false)
+    setProviderStage(stage)
   }
   async function perform(action: () => Promise<unknown>) {
     setBusy(true); setError(''); setNotice('')
@@ -168,7 +176,7 @@ export function App() {
       <div className="topbar-actions"><button aria-label="Setup checklist" title="Setup checklist" className="connection icon-only" onClick={() => setSetupOpen(true)}><ListChecks size={16} /></button>
       <button aria-label="Backend connections" className={`connection ${blocked.length ? 'warning' : ''}`} onClick={() => setSettingsOpen(true)}><span className="tiny-dot" />{checking ? 'Checking backends' : blocked.length ? 'Setup needs attention' : checks.length ? 'Local backends ready' : 'Backend settings'}<Settings2 size={14} /></button></div>
     </header>
-    {snapshot && <DesignerPanel snapshot={snapshot} visible={workspace === 'designer'} animatorBusy={busy || !!active || !!activeBatch} onSettings={() => setSettingsOpen(true)} onAnimate={c => { selectCharacter(c); setFit(true); setWorkspace('animator') }} />}
+    {snapshot && <DesignerPanel snapshot={snapshot} visible={workspace === 'designer'} animatorBusy={busy || !!active || !!activeBatch} onSettings={() => setSettingsOpen(true)} onProviders={openProviders} onAnimate={c => { selectCharacter(c); setFit(true); setWorkspace('animator') }} />}
     <div id="animator-panel" role="tabpanel" aria-labelledby="animator-tab" hidden={workspace !== 'animator'} className="studio-layout">
       <aside className="left-panel" aria-label="Animator character library">
         <div className="section-kicker">YOUR WORKSPACE</div><h1>Character lab</h1>
@@ -234,7 +242,8 @@ export function App() {
           <button className="secondary full rig-fallback-button" disabled={locked} onClick={() => void createRig('fallback')}><CheckIcon size={17} /> Accept points + fallback skinning</button>
           <p className="fine-print">Both actions keep your joint positions. Build automatically repairs missing weights along connected surfaces. Fallback also attaches remaining vertices to nearby fitted bones; touching limbs or separate pieces may bend incorrectly. Complete weights are still required. Body only, not fingers or face.</p>
         </> : <>
-          <div className="section-kicker">03 / DIRECT THE MOTION</div><h2>What’s the move?</h2><p className="panel-description">Describe a movement. Kimodo generates the motion; Blender applies it to your character.</p>
+          <div className="section-kicker">03 / DIRECT THE MOTION</div><h2>What’s the move?</h2><p className="panel-description">Describe a movement. The selected motion provider generates SOMA motion; local Blender applies it to your character.</p>
+          {snapshot && <AiRouteBadge snapshot={snapshot} stage="motion" onClick={() => openProviders('motion')} />}
           <label htmlFor="motion-prompt" className="field-label">Motion instructions <Sparkles size={13} /></label>
           <div className="prompt-field"><textarea id="motion-prompt" value={prompt} disabled={locked} maxLength={1000} onChange={e => setPrompt(e.target.value)} placeholder="A person waves with their right hand…" /><span>{prompt.length} / 1000</span></div>
           <div className="prompt-suggestions">{['Walk forward', 'Wave hello', 'Look around'].map((text, i) => <button disabled={locked} key={text} onClick={() => setPrompt(['A person walks forward at a relaxed pace.', 'A person stands and waves hello with their right hand.', 'A person stands and slowly looks around.'][i])}>{text}</button>)}</div>
@@ -259,7 +268,7 @@ export function App() {
         </div>
       </aside>
     </div>
-    <footer><span><ShieldCheck size={12} /> LOCAL PIPELINE</span><span>{workspace === 'designer' ? <>Character & scene <ArrowRight size={10} /> T-pose reference <ArrowRight size={10} /> 3D geometry <ArrowRight size={10} /> Animator</> : <>FBX import <ArrowRight size={10} /> Blender rig + skin <ArrowRight size={10} /> ComfyUI / Kimodo <ArrowRight size={10} /> Character export</>}</span><span>ARM64 READY</span></footer>
+    <footer><span><ShieldCheck size={12} /> LOCAL FIRST</span><span>{workspace === 'designer' ? <>Character & scene <ArrowRight size={10} /> T-pose reference <ArrowRight size={10} /> 3D geometry <ArrowRight size={10} /> Animator</> : <>FBX import <ArrowRight size={10} /> Blender rig + skin <ArrowRight size={10} /> Motion provider <ArrowRight size={10} /> Character export</>}</span><span>ARM64 READY</span></footer>
     {libraryOpen && snapshot && <LibraryPanel snapshot={snapshot} setup={setup} current={{ prompt, seconds, seed, steps, inPlace }} characterId={characterId} startNew={libraryNew} onClose={() => setLibraryOpen(false)} onApply={(node, savedFit) => {
       setPrompt(node.prompt); setSeconds(node.seconds); setSeed(node.seed); setSteps(node.steps); setInPlace(node.inPlace); setParentJobId('')
       if (savedFit && character) { setSetup({ ...structuredClone(savedFit), rotation: setup.rotation }); setDirty(true); setFit(true); setMode('input') }
@@ -277,6 +286,9 @@ export function App() {
       }} /> Enable MCP control</label>
       <p className="fine-print" role="status" aria-label="MCP control status">{mcpChanging ? 'Changing MCP control...' : mcpEnabled ? 'Enabled. Trusted local agents can operate this desktop.' : 'Disabled. MCP connections are blocked.'}</p>
       <p className="fine-print">This takes effect immediately and is saved independently of backend settings, even during a job. Only enable it for agents you trust with your local assets, settings and exports. Disabling disconnects MCP clients without cancelling running work; re-enabling requires clients to reconnect.</p>
+      <h3>AI execution</h3>
+      <button className="secondary full" onClick={() => openProviders()} disabled={locked}>Model & workflow providers</button>
+      <p className="fine-print">Select local presets, custom workflows, remote ComfyUI or paid API providers per stage. The paths below remain local processing and download settings; they do not authorize remote execution.</p>
       <label className="field-label" htmlFor="text-encoder">Kimodo text encoder</label>
       <select id="text-encoder" aria-describedby="encoder-memory-guidance" disabled={locked || starting} value={settings.textEncoder ?? 'llm2vec'} onChange={e => setSettings({ ...settings, textEncoder: e.target.value === 'lfm' ? 'lfm' : 'llm2vec' })}>
         <option value="llm2vec">Llama + LLM2Vec (original, ~16 GB weights){encoderAdvice.encoder === 'llm2vec' ? ' - Recommended for available memory' : ''}</option>
@@ -300,11 +312,13 @@ export function App() {
       <div className="section-heading"><span className="section-kicker">READINESS CHECKS</span><button className="text-button" disabled={checking} onClick={refreshChecks}><RefreshCw size={13} className={checking ? 'spin' : ''} /> Refresh</button></div>
       <div className="checks">{checks.map(check => <div className={`check ${check.status}`} key={check.name}>{check.status === 'ready' ? <CheckIcon size={16} /> : <CircleAlert size={16} />}<div><strong>{check.name}</strong><p>{check.detail}</p></div></div>)}</div>
       {error && <p className="modal-error" role="alert">{error}</p>}
-      <p className="fine-print">Both encoders run locally inside ComfyUI. LFM uses an explicit experimental Kimodo loader; it never falls back to Llama or remote inference. The original Llama loader uses TEXT_ENCODER_MODE=local when Studio starts ComfyUI; use that setting for an externally started backend. Hugging Face supplies downloads only. Closing Studio stops only the ComfyUI process it started.</p>
+      <p className="fine-print">With built-in motion routes, both encoders run in local ComfyUI. LFM uses an explicit experimental Kimodo loader; it never falls back to Llama or remote inference. The original Llama loader uses TEXT_ENCODER_MODE=local when Studio starts ComfyUI; use that setting for an externally started backend. Configured remote motion uses the selected provider instead. Closing Studio stops only the local ComfyUI process it started.</p>
     </section></div>}
     {setupOpen && window.studio && <SetupWizard onClose={closeSetup} />}
-    <FileDialog />
     {launchCheck && !setupOpen && window.studio && <LaunchCheck onClose={() => { setLaunchCheck(false); reloadAfterSetup() }} onOpenChecklist={() => setSetupOpen(true)} />}
+    {providerStage && snapshot && <AiProvidersPanel snapshot={snapshot} initialStage={providerStage} locked={locked} onClose={() => { setProviderStage(undefined); setSettings(snapshot.settings); void refreshChecks() }} />}
+    <FileDialog />
+    <AiConsent />
   </div>
 }
 

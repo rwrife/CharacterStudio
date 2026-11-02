@@ -1,5 +1,5 @@
 import type { DesignRequest, DesignerConfig } from '../shared/designer'
-import { handAnatomyNegative, handAnatomyPrompt, imageProfiles, meshProfiles, specifiesHandAnatomy, texturedMeshSettings, tposeEditProfile, tposeEditPrompt } from '../shared/designer'
+import { handAnatomyNegative, imageProfiles, meshProfiles, scenePrompt, specifiesHandAnatomy, texturedMeshSettings, tposeEditProfile, tposePrompt } from '../shared/designer'
 
 export type Workflow = Record<string, { class_type: string; inputs: Record<string, unknown> }>
 
@@ -7,7 +7,7 @@ export function imageWorkflow(config: DesignerConfig, request: DesignRequest, pr
   const size = imageProfiles[config.imageProfile].size
   const identity = !!reference && !!config.ipadapter && !!config.clipVision
   const defaultHands = !specifiesHandAnatomy(request)
-  const text = `Character and scene: ${request.description}. Art style: ${request.style}. Full body character concept illustration in their environment, clear character silhouette, no text or lettering.${defaultHands ? ` ${handAnatomyPrompt}` : ''}`
+  const text = scenePrompt(request)
   const negative = `cropped, extra limbs, ${defaultHands ? `${handAnatomyNegative}, ` : ''}malformed anatomy, duplicate character, crowd, extra people, watermark, logo, lettering`
   const workflow: Workflow = {
     '1': { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: config.checkpoint } },
@@ -32,7 +32,7 @@ export function imageWorkflow(config: DesignerConfig, request: DesignRequest, pr
   return workflow
 }
 
-export function tposeWorkflow(config: DesignerConfig, request: DesignRequest, prefix: string, scene: string): Workflow {
+export function tposeWorkflow(config: DesignerConfig, request: DesignRequest, prefix: string, scene: string, isolate = true): Workflow {
   if (!scene || !config.editModel || !config.editTextEncoder || !config.editVae)
     throw new Error('T-pose editing requires a scene image and installed FLUX.2 klein 4B, Qwen 3 4B and FLUX.2 VAE weights.')
   const workflow: Workflow = {
@@ -43,7 +43,7 @@ export function tposeWorkflow(config: DesignerConfig, request: DesignRequest, pr
     '5': { class_type: 'ImageScaleToTotalPixels', inputs: { image: ['4', 0], upscale_method: 'lanczos', megapixels: 1, resolution_steps: 16 } },
     '6': { class_type: 'VAEEncode', inputs: { pixels: ['5', 0], vae: ['3', 0] } },
     '7': { class_type: 'SaveImage', inputs: { images: ['23', 0], filename_prefix: prefix } },
-    '8': { class_type: 'CLIPTextEncode', inputs: { clip: ['2', 0], text: specifiesHandAnatomy(request) ? tposeEditPrompt : `${tposeEditPrompt} ${handAnatomyPrompt}` } },
+    '8': { class_type: 'CLIPTextEncode', inputs: { clip: ['2', 0], text: tposePrompt(request) } },
     '9': { class_type: 'ConditioningZeroOut', inputs: { conditioning: ['8', 0] } },
     '10': { class_type: 'ReferenceLatent', inputs: { conditioning: ['8', 0], latent: ['6', 0] } },
     '11': { class_type: 'ReferenceLatent', inputs: { conditioning: ['9', 0], latent: ['6', 0] } },
@@ -56,7 +56,7 @@ export function tposeWorkflow(config: DesignerConfig, request: DesignRequest, pr
     '22': { class_type: 'SamplerCustomAdvanced', inputs: { noise: ['21', 0], guider: ['12', 0], sampler: ['20', 0], sigmas: ['14', 0], latent_image: ['13', 0] } },
     '23': { class_type: 'VAEDecode', inputs: { samples: ['22', 0], vae: ['3', 0] } }
   }
-  addIsolation(workflow, config, ['23', 0])
+  if (isolate) addIsolation(workflow, config, ['23', 0])
   return workflow
 }
 

@@ -33,7 +33,7 @@ const shown = point => point.map(value => String(Number(value.toFixed(3))))
 
 let app, client
 try {
-  app = await electron.launch({ args: ['.', '--mcp'], env: { ...process.env, STUDIO_SKIP_SETUP_CHECKLIST: '1', STUDIO_DATA_DIR: directory }, timeout: 60000 })
+  app = await electron.launch({ args: ['.', '--mcp'], env: { ...process.env, STUDIO_SKIP_SETUP_CHECKLIST: '1', STUDIO_NO_AUTO_INSTALL: '1', STUDIO_DATA_DIR: directory }, timeout: 60000 })
   const page = await app.firstWindow()
   await page.getByRole('heading', { name: 'Character lab' }).waitFor()
   client = new Client({ name: 'autofit-regression', version: '1.0.0' })
