@@ -13,7 +13,6 @@ import { recommendTextEncoder } from '../shared/text-encoder'
 
 const done = new Set(['complete', 'failed', 'cancelled'])
 const explain = (e: unknown) => (e instanceof Error ? e.message : String(e)).replace(/^Error invoking remote method '[^']+': Error: /, '')
-const humanOutline = 'M59.9 40.15A19.8 19.8 0 1 0 40.1 40.15Q41.2 44.5 34.5 46.5Q31.2 47.5 29.5 50.5L3.5 93.5A6.8 6.8 0 0 0 15.2 100.5L28.5 78.5L28.5 155.5A8.75 8.75 0 0 0 46 155.5L46 122A4 4 0 0 1 54 122L54 155.5A8.75 8.75 0 0 0 71.5 155.5L71.5 78.5L84.8 100.5A6.8 6.8 0 0 0 96.5 93.5L70.5 50.5Q68.8 47.5 65.5 46.5Q58.8 44.5 59.9 40.15Z'
 
 export function App() {
   const [snapshot, setSnapshot] = useState<Snapshot>()
@@ -144,7 +143,7 @@ export function App() {
   ]
   return <div className="app">
     <header className="topbar">
-      <div className="brand"><span className="brand-mark"><svg viewBox="-44 -30 152 200" width="26" height="28" fill="none" stroke="currentColor" strokeWidth="8.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={humanOutline} transform="translate(-34 -22)" fill="var(--lime)" strokeOpacity={0.46} /><path d={humanOutline} transform="translate(-17 -11)" fill="var(--lime)" strokeOpacity={0.74} /><path d={humanOutline} fill="var(--lime)" /></svg></span><div className="brand-name"><strong>character<span>studio</span></strong></div></div>
+      <div className="brand"><img className="brand-mark" src="./icon.png" alt="" width={34} height={34} /><div className="brand-name"><strong>character<span>studio</span></strong></div></div>
       <nav className="workspace-tabs" role="tablist" aria-label="Character workspace" onKeyDown={event => {
         if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
         event.preventDefault()
