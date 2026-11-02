@@ -9,7 +9,6 @@ test('every release target selects its matching archive, checksum and executable
     ['win32', 'x64', 'windows-x64.zip', ['blender.exe']],
     ['win32', 'arm64', 'windows-arm64.zip', ['blender.exe']],
     ['linux', 'x64', 'linux-x64.tar.xz', ['blender']],
-    ['darwin', 'x64', 'macos-x64.dmg', ['Blender.app', 'Contents', 'MacOS', 'Blender']],
     ['darwin', 'arm64', 'macos-arm64.dmg', ['Blender.app', 'Contents', 'MacOS', 'Blender']]
   ] as const
   const hashes = new Set<string>()
@@ -21,7 +20,7 @@ test('every release target selects its matching archive, checksum and executable
     assert.equal(bundledBlenderPath('app', platform, arch), join('app', '.tools', distribution.directory, ...executable))
   }
   assert.equal(hashes.size, targets.length)
-  for (const [platform, arch] of [['linux', 'arm64'], ['win32', 'ia32'], ['freebsd', 'x64']])
+  for (const [platform, arch] of [['darwin', 'x64'], ['linux', 'arm64'], ['win32', 'ia32'], ['freebsd', 'x64']])
     assert.throws(() => blenderDistribution(platform, arch), /Unsupported Blender target/)
 })
 

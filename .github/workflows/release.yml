@@ -32,9 +32,6 @@ jobs:
           - os: ubuntu-24.04
             platform: linux
             arch: x64
-          - os: macos-15-intel
-            platform: darwin
-            arch: x64
           - os: macos-15
             platform: darwin
             arch: arm64
@@ -119,7 +116,7 @@ jobs:
         run: |
           cd release
           for file in CharacterStudio-win32-x64.zip CharacterStudio-win32-arm64.zip \
-            CharacterStudio-linux-x64.tar.gz CharacterStudio-darwin-x64.zip CharacterStudio-darwin-arm64.zip; do
+            CharacterStudio-linux-x64.tar.gz CharacterStudio-darwin-arm64.zip; do
             test -s "$file"
           done
           sha256sum *.zip *.tar.gz > SHA256SUMS.txt
