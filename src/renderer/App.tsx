@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ArrowDownToLine, ArrowRight, Check as CheckIcon, ChevronDown, CircleAlert, FolderOpen, Layers3, ListChecks, LoaderCircle, Plus, Settings2, ShieldCheck, Sparkles, X, Zap, Box, Bone, SlidersHorizontal, RefreshCw, WandSparkles } from 'lucide-react'
-import type { Character, Check, Job, RigSetup, SkinningMode, Settings, Snapshot, Vec3 } from '../shared/types'
+import type { Character, Check, HandPose, Job, RigSetup, SkinningMode, Settings, Snapshot, Vec3 } from '../shared/types'
 import { Viewport } from './Viewport'
 import { LibraryPanel } from './LibraryPanel'
 import { ModelSetupGuide } from './ModelSetupGuide'
@@ -12,6 +12,11 @@ import { defaultLandmarks } from '../shared/rig'
 import { recommendTextEncoder } from '../shared/text-encoder'
 import { AiProvidersPanel, AiRouteBadge } from './AiProvidersPanel'
 import { AiConsent } from './AiConsent'
+import { HandPosePanel } from './HandPosePanel'
+import { HandRigControls } from './HandRigControls'
+import { fittingPoints, handPoseConfiguration, handSides, handTemplate } from '../shared/hand-rig'
+import { defaultHandPose } from '../shared/hand-pose'
+import { poseAt } from '../shared/hand-animation'
 import type { AiStage } from '../shared/ai'
 
 const done = new Set(['complete', 'failed', 'cancelled'])
@@ -25,6 +30,9 @@ export function App() {
   const [characterId, setCharacterId] = useState('')
   const [setup, setSetup] = useState<RigSetup>({ rotation: [0, 0, 0], landmarks: defaultLandmarks() })
   const [dirty, setDirty] = useState(false)
+  const [handsOpen, setHandsOpen] = useState(false)
+  const [handPose, setHandPose] = useState<HandPose>(defaultHandPose)
+  const [handTime, setHandTime] = useState(0)
   const [fit, setFit] = useState(false)
   const [selected, setSelected] = useState('Hips')
   const [mirror, setMirror] = useState(true)
@@ -58,7 +66,11 @@ export function App() {
   const output = completed.find(j => j.id === jobId)
   const active = snapshot?.jobs.find(j => !done.has(j.stage))
   const activeBatch = snapshot?.batches.find(b => b.status === 'running')
-  const locked = busy || !!active || !!activeBatch || !!snapshot?.designer?.designs.some(d => d.status === 'running') || snapshot?.designer?.modelDownload?.status === 'running'
+  const working = busy || !!active || !!activeBatch || !!snapshot?.designer?.designs.some(d => d.status === 'running') || snapshot?.designer?.modelDownload?.status === 'running'
+  const savedHandPose = character?.handPose ?? defaultHandPose()
+  const handDirty = !!character && JSON.stringify(handPose) !== JSON.stringify(savedHandPose)
+  const locked = working || handDirty
+  const activeLandmark = fittingPoints(setup)[selected] ? selected : 'Hips'
   const blocked = checks.filter(c => c.status === 'blocked')
   const gpu = checks.find(check => check.gpu)?.gpu
   const encoderAdvice = recommendTextEncoder(gpu)
@@ -94,6 +106,7 @@ export function App() {
 
   function selectCharacter(c: Character) {
     setCharacterId(c.id); setSetup(structuredClone(c.setup)); setDirty(false)
+    setHandPose(structuredClone(c.handPose ?? defaultHandPose())); setHandTime(0); setHandsOpen(false)
     setMode(c.rigged ? 'rig' : 'input'); setFit(false); setJobId(''); setParentJobId(''); setAnimationPart('path')
   }
   function openProviders(stage: AiStage = 'scene') {
@@ -122,7 +135,7 @@ export function App() {
   async function saveFit() {
     if (!character) return
     const updated = await window.studio.saveSetup(character.id, setup)
-    setSetup(updated.setup); setDirty(false)
+    setSetup(updated.setup); setHandPose(updated.handPose ?? defaultHandPose()); setDirty(false)
   }
   async function autoFit() {
     if (!character) return
@@ -130,8 +143,10 @@ export function App() {
       const fitted = await window.studio.fitLandmarks(character.id, setup.rotation).catch(e => {
         throw new Error(`Auto-fit could not place the joints: ${explain(e)} Your current landmarks were kept.`)
       })
-      setSetup(old => ({ ...old, landmarks: fitted.landmarks })); setDirty(true)
-      setNotice(['Landmarks fitted to the mesh. Review them in the front and side views before building the rig.', ...fitted.warnings].join(' '))
+      setSetup(old => ({ ...old, landmarks: { ...old.landmarks, ...fitted.landmarks } })); setDirty(true)
+      setNotice(['Landmarks fitted to the mesh.',
+        ...(handSides.some(side => setup.hands?.[side].detail === 'basic') ? ['Manual hand points were kept; review or reset each hand template before building the rig.'] : []),
+        ...fitted.warnings].join(' '))
     })
   }
   async function createRig(skinning: SkinningMode = 'automatic') {
@@ -163,13 +178,13 @@ export function App() {
     <header className="topbar">
       <div className="brand"><img className="brand-mark" src="./icon.png" alt="" width={48} height={48} /><div className="brand-name"><strong>character<span>studio</span></strong></div></div>
       <nav className="workspace-tabs" role="tablist" aria-label="Character workspace" onKeyDown={event => {
-        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+        if (handDirty || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
         event.preventDefault()
         const next = event.key === 'Home' ? 'designer' : event.key === 'End' ? 'animator' : workspace === 'designer' ? 'animator' : 'designer'
         setWorkspace(next)
         document.getElementById(`${next}-tab`)?.focus()
       }}>
-        <button id="designer-tab" role="tab" tabIndex={workspace === 'designer' ? 0 : -1} aria-selected={workspace === 'designer'} aria-controls="designer-panel" className={workspace === 'designer' ? 'active' : ''} onClick={() => setWorkspace('designer')}>Designer</button>
+        <button id="designer-tab" role="tab" disabled={handDirty} tabIndex={workspace === 'designer' ? 0 : -1} aria-selected={workspace === 'designer'} aria-controls="designer-panel" className={workspace === 'designer' ? 'active' : ''} onClick={() => setWorkspace('designer')}>Designer</button>
         <span className="module-divider" aria-hidden="true">|</span>
         <button id="animator-tab" role="tab" tabIndex={workspace === 'animator' ? 0 : -1} aria-selected={workspace === 'animator'} aria-controls="animator-panel" className={workspace === 'animator' ? 'active' : ''} onClick={() => setWorkspace('animator')}>Animator</button>
       </nav>
@@ -183,9 +198,9 @@ export function App() {
         <p className="intro">From static mesh to something<br />with a little more life.</p>
         <button className="import-button" disabled={locked} onClick={importFbx}><Plus size={18} /> Import FBX <span>LOCAL FILE</span></button>
         <button className="text-button full" disabled={locked} onClick={() => void perform(async () => { const characters = await window.studio.importCollection(); if (characters[0]) selectCharacter(characters[0]) })}><FolderOpen size={14} /> Import FBX collection</button>
-        <button className="secondary full library-button" onClick={() => { setLibraryNew(false); setLibraryOpen(true) }}><Layers3 size={15} /> Motion library & batches</button>
+        <button className="secondary full library-button" disabled={handDirty} onClick={() => { setLibraryNew(false); setLibraryOpen(true) }}><Layers3 size={15} /> Motion library & batches</button>
         <nav className="steps">
-          {stages.map((stage, i) => <button key={stage.label} className={`step ${stage.ready ? 'ready' : ''} ${i === 1 && fit ? 'current' : ''}`} disabled={!character || locked} onClick={() => { setMode(i === 2 && output ? 'animation' : i === 1 && character?.rigged ? 'rig' : 'input'); setFit(i === 1); if (i === 1) setMode('input') }}>
+          {stages.map((stage, i) => <button key={stage.label} className={`step ${stage.ready ? 'ready' : ''} ${i === 1 && fit ? 'current' : ''}`} disabled={!character || locked} onClick={() => { setHandsOpen(false); setMode(i === 2 && output ? 'animation' : i === 1 && character?.rigged ? 'rig' : 'input'); setFit(i === 1); if (i === 1) setMode('input') }}>
             <span className="step-number">{stage.ready ? <CheckIcon size={14} /> : `0${i + 1}`}</span><span><strong>{stage.label}</strong><small>{stage.detail}</small></span><stage.icon size={16} />
           </button>)}
         </nav>
@@ -206,36 +221,53 @@ export function App() {
         <div className="scene-heading">
           <div><span className="section-kicker">SCENE</span><h2>{character?.name.replace(/\.fbx$/i, '') ?? 'Untitled character'}<span className="file-tag">{mode === 'animation' ? 'ANIMATED' : character?.rigged && !dirty ? 'RIGGED' : 'FBX'}</span></h2></div>
           <div className="view-tabs">
-            <button className={mode === 'input' ? 'active' : ''} disabled={!character || locked} onClick={() => { setMode('input'); setFit(false) }}>Original</button>
+            <button className={mode === 'input' ? 'active' : ''} disabled={!character || locked} onClick={() => { setMode('input'); setFit(false); setHandsOpen(false) }}>Original</button>
             <button className={mode === 'rig' ? 'active' : ''} disabled={!character?.rigged || dirty || locked} onClick={() => { setMode('rig'); setFit(false) }}>Rigged</button>
-            <button className={mode === 'animation' ? 'active' : ''} disabled={!output || locked} onClick={() => { setMode('animation'); setFit(false) }}>Animation</button>
+            <button className={mode === 'animation' ? 'active' : ''} disabled={!output || locked} onClick={() => { setMode('animation'); setFit(false); setHandsOpen(false) }}>Animation</button>
           </div>
         </div>
-        <Viewport url={url} setup={setup} fit={fit && !locked && !!character} kind={mode} selected={selected} onSelect={setSelected} onMove={move} />
+        <Viewport url={url} setup={setup} handPose={mode === 'rig' ? handPose : undefined} handTime={handTime} fit={fit && !locked && !!character} kind={mode} selected={activeLandmark} onSelect={setSelected} onMove={move} />
         {(active || activeBatch) && <div className="job-progress" role="status"><LoaderCircle size={17} className="spin" /><div><strong>{activeBatch ? `BATCH · ${activeBatch.items.filter(i => i.status === 'complete').length}/${activeBatch.items.length}` : active!.stage.toUpperCase()}</strong><p>{active?.message ?? 'Checking batch prerequisites'}</p><div className="progress-track"><span style={{ width: `${active?.progress ?? 5}%` }} /></div></div><button onClick={() => void window.studio.cancel().catch(e => setError(explain(e)))}>Cancel</button></div>}
         {error && <div className="banner error" role="alert"><CircleAlert size={18} /><span>{error}</span><button aria-label="Dismiss error" onClick={() => setError('')}><X size={16} /></button></div>}
         {notice && <div className="banner success" role="status"><CheckIcon size={18} /><span>{notice}</span><button aria-label="Dismiss message" onClick={() => setNotice('')}><X size={16} /></button></div>}
         <section className="takes">
           <div className="section-heading"><div><span className="section-kicker">MOTION TAKES</span><span className="count">{jobs.length}</span></div><small>Saved automatically on this PC</small></div>
           {!jobs.length ? <div className="no-takes"><span className="take-placeholder"><Sparkles size={19} /></span><div><strong>A new move starts with a few words.</strong><p>Generated takes will appear here, ready to preview and export.</p></div></div> :
-            <div className="take-list">{jobs.map(job => <button key={job.id} disabled={job.stage !== 'complete' || locked} className={`take ${jobId === job.id ? 'selected' : ''} ${job.stage}`} onClick={() => { setJobId(job.id); setMode('animation'); setFit(false); setAnimationPart('path') }}>
+            <div className="take-list">{jobs.map(job => <button key={job.id} disabled={job.stage !== 'complete' || locked} className={`take ${jobId === job.id ? 'selected' : ''} ${job.stage}`} onClick={() => { setJobId(job.id); setMode('animation'); setFit(false); setHandsOpen(false); setAnimationPart('path') }}>
               <span className="take-icon">{job.stage === 'complete' ? <Sparkles size={17} /> : job.stage === 'failed' ? <CircleAlert size={17} /> : <LoaderCircle size={17} />}</span><span><strong>{job.label || job.prompt || 'Motion take'}</strong><small>{job.stage === 'complete' ? `${job.parentJobId ? 'Full branch · ' : ''}${job.seconds}s / segment · seed ${job.seed}` : job.stage}</small>{job.stage === 'failed' && <small className="failure-text">{job.message}</small>}</span><span className="take-time">{new Date(job.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
             </button>)}</div>}
         </section>
       </main>
 
       <aside className="right-panel" aria-label="Animator motion controls">
-        {fit && character ? <>
+        {handsOpen && character ? <HandPosePanel key={character.id} pose={handPose} saved={savedHandPose} setup={setup} disabled={working || !character.rigged || dirty} dirty={handDirty}
+          onPreviewTime={setHandTime}
+          onFit={() => { setHandsOpen(false); setFit(true); setMode('input') }}
+          onBake={() => void perform(async () => {
+            const variation = await window.studio.bakeHandGrip(character.id)
+            selectCharacter(variation); setHandsOpen(true)
+            setNotice('Created a separate fixed-grip character. The original and its completed takes are unchanged.')
+          })}
+          onChange={setHandPose} onClose={() => setHandsOpen(false)} onSave={() => void perform(async () => {
+            const updated = await window.studio.saveHandPose(character.id, handPose)
+            setHandPose(updated.handPose ?? defaultHandPose())
+            setNotice('Hand pose saved without rebuilding skin weights. New character animations use these offsets; completed takes are unchanged.')
+          })} /> : fit && character ? <>
           <div className="section-kicker">02 / PREPARE CHARACTER</div><h2>Fit the humanoid rig</h2><p className="panel-description">Use a full-body T- or A-pose. Point the character forward (+Z), auto-fit the joints, then check that each joint sits inside the mesh.</p>
           <label className="field-label">Orientation <span>degrees</span></label>
           <div className="xyz-fields">{(['X', 'Y', 'Z'] as const).map((axis, i) => <label key={axis}>{axis}<select aria-label={`Rotate ${axis}`} disabled={locked} value={setup.rotation[i]} onChange={e => { const rotation = [...setup.rotation] as Vec3; rotation[i] = Number(e.target.value); setSetup({ ...setup, rotation }); setDirty(true) }}>{[-180, -90, 0, 90, 180].map(v => <option key={v} value={v}>{v}°</option>)}</select></label>)}</div>
+          <HandRigControls setup={setup} disabled={locked} onChange={(value, point) => { setSetup(value); setSelected(point); setDirty(true) }} />
           <label className="field-label" htmlFor="joint-select">Selected landmark</label>
-          <select id="joint-select" value={selected} onChange={e => setSelected(e.target.value)}>{Object.keys(setup.landmarks).map(name => <option key={name}>{name}</option>)}</select>
-          <div className="xyz-fields positions">{(['X', 'Y', 'Z'] as const).map((axis, i) => <label key={axis}>{axis}<input aria-label={`Joint ${axis}`} type="number" step="0.01" min="-4" max="4" value={Number(setup.landmarks[selected][i].toFixed(3))} disabled={locked} onChange={e => { const point = [...setup.landmarks[selected]] as Vec3; point[i] = Number(e.target.value); move(selected, point) }} /></label>)}</div>
+          <select id="joint-select" value={activeLandmark} disabled={locked} onChange={e => setSelected(e.target.value)}>{Object.keys(fittingPoints(setup)).map(name => <option key={name}>{name}</option>)}</select>
+          <div className="xyz-fields positions">{(['X', 'Y', 'Z'] as const).map((axis, i) => <label key={axis}>{axis}<input aria-label={`Joint ${axis}`} type="number" step="0.001" min="-4" max="4" value={Number(setup.landmarks[activeLandmark][i].toFixed(3))} disabled={locked} onChange={e => { const point = [...setup.landmarks[activeLandmark]] as Vec3; point[i] = Number(e.target.value); move(activeLandmark, point) }} /></label>)}</div>
           <label className="checkbox"><input type="checkbox" checked={mirror} onChange={e => setMirror(e.target.checked)} /> Mirror left / right joints</label>
           <div className="fit-instructions"><strong>Fit in two views</strong><p>Front: hips, knees, shoulders, elbows.<br />Side: joint depth, spine, toes.<br />White joint = selected. Drag its axis handles.</p></div>
           <button className="secondary full" disabled={locked} onClick={() => void autoFit()}><WandSparkles size={14} /> Auto-fit landmarks to mesh</button>
-          <button className="text-button full" disabled={locked} onClick={() => { setSetup({ ...setup, landmarks: defaultLandmarks() }); setDirty(true) }}><RotateIcon /> Reset landmark template</button>
+          <button className="text-button full" disabled={locked} onClick={() => {
+            let reset = { ...setup, landmarks: defaultLandmarks() }
+            for (const side of handSides) if (setup.hands?.[side].detail === 'basic') reset = handTemplate(reset, side, 'basic')
+            setSetup(reset); setSelected('Hips'); setDirty(true)
+          }}><RotateIcon /> Reset landmark template</button>
           {dirty && <button className="text-button full" disabled={locked} onClick={() => void perform(async () => { await saveFit(); setNotice('Fit saved. Rebuild the rig to apply these changes.') })}><CheckIcon size={14} /> Save fit without rigging</button>}
           <div className="rig-action-step">
             <strong>1. Try automatic rigging first</strong>
@@ -248,7 +280,7 @@ export function App() {
             <p>Manually move the landmarks in the viewport, then use fallback skinning with the adjusted points.</p>
             <button className="secondary full rig-fallback-button" disabled={locked} onClick={() => void createRig('fallback')}><CheckIcon size={17} /> Use adjusted points + fallback skinning</button>
           </div>
-          <p className="fine-print">Fallback attaches remaining vertices to nearby fitted bones; touching limbs or separate pieces may bend incorrectly. Complete weights are still required. Body only, not fingers or face.</p>
+          <p className="fine-print">Fallback attaches remaining body vertices to nearby fitted bones; touching limbs or separate pieces may bend incorrectly. Basic hands use bounded regions around your fitted chains. Complete weights are still required. Facial controls are not generated.</p>
         </> : <>
           <div className="section-kicker">03 / DIRECT THE MOTION</div><h2>What’s the move?</h2><p className="panel-description">Describe a movement. The selected motion provider generates SOMA motion; local Blender applies it to your character.</p>
           {snapshot && <AiRouteBadge snapshot={snapshot} stage="motion" onClick={() => openProviders('motion')} />}
@@ -264,14 +296,25 @@ export function App() {
           <p className="fine-print">Periods create separate motion segments. Playback loops the clip; seamless looping is not guaranteed.</p>
           {!character?.rigged || dirty ? <button className="primary full" disabled={!character || locked} onClick={() => { setFit(true); setMode('input') }}><SlidersHorizontal size={17} /> Fit character first<ArrowRight size={17} /></button> : <button className="primary full" disabled={locked || prompt.trim().length < 3} onClick={generate}><WandSparkles size={17} /> Generate animation<ArrowRight size={17} /></button>}
           {character?.rigged && !dirty && <button className="text-button full" disabled={locked} onClick={() => { setFit(true); setMode('input') }}><Bone size={14} /> Adjust rig fit</button>}
+          {character?.rigged && !dirty && <button className="secondary full" disabled={locked} onClick={() => { setHandsOpen(true); setHandTime(0); setMode('rig'); setFit(false) }}>Hand pose & rig detail</button>}
           {!!blocked.length && <button className="setup-warning" onClick={() => setSettingsOpen(true)}><CircleAlert size={16} /><span>{blocked.some(c => c.name.includes('text encoder')) ? 'Set up the local text encoder' : `${blocked.length} backend check${blocked.length > 1 ? 's' : ''} need attention`}<small>Review setup before generation <ArrowRight size={11} /></small></span></button>}
         </>}
         {!!character?.rigWarnings?.length && <details className="warnings" open><summary>Rig notes <ChevronDown size={13} /></summary>{character.rigWarnings.map(w => <p key={w}>{w}</p>)}</details>}
         {!!character?.warnings.length && <details className="warnings"><summary>Import notes <ChevronDown size={13} /></summary>{character.warnings.map(w => <p key={w}>{w}</p>)}</details>}
         <div className="output-section">
           <div className="section-kicker">EXPORT CHARACTER</div>
+          {character?.fixedGrip && <>
+            <p className="fine-print">Fixed-grip rig exports contain the baked finger shape at rest wrists. Editable wrist offsets apply to new animations, not these static rig files.</p>
+            {(['rigged.glb', 'fixed-grip.fbx', 'rigged.blend'] as const).map(file => <button key={file} className="download" disabled={locked}
+              onClick={() => void perform(async () => { const path = await window.studio.saveOutput(character.fixedGrip!.jobId, file); if (path) setNotice(`Saved ${path}`) })}>
+              <ArrowDownToLine size={16} /><span>Export fixed-grip {file.endsWith('.glb') ? 'GLB' : file.endsWith('.fbx') ? 'FBX' : 'Blender'}</span>
+            </button>)}
+          </>}
           {output ? <><h3>Ready for your next scene.</h3>
-            {output.clipPreviewUrl && <><label className="field-label" htmlFor="preview-part">Preview output</label><select id="preview-part" value={animationPart} onChange={e => { setAnimationPart(e.target.value as typeof animationPart); setMode('animation') }}><option value="path">Full path</option><option value="clip">Node clip</option>{output.transitionPreviewUrl && <option value="transition">Incoming transition</option>}</select><p className="fine-print">{output.graphContext?.pathLabel}</p></>}
+            <p className="fine-print">Saved wrist offsets: left {(output.handPose ?? defaultHandPose()).left.join(', ')}°; right {(output.handPose ?? defaultHandPose()).right.join(', ')}°. Motion-only BVH/NPZ keep the source motion without these character offsets.</p>
+            {output.handPose?.version === 2 && <p className="fine-print">Saved final finger pose: {handSides.map(side => `${side} ${Object.entries(handPoseConfiguration(poseAt(output.handPose!, 1)).fingers[side]).map(([name, value]) => `${name} ${Number(value.toFixed(3))}`).join(', ')}`).join('; ')}.
+              {output.handPose.keyframes && ` ${output.handPose.keyframes.length} keys over the node clip.`} These are local controls, not learned finger motion.</p>}
+            {output.clipPreviewUrl && <><label className="field-label" htmlFor="preview-part">Preview output</label><select id="preview-part" value={animationPart} disabled={locked} onChange={e => { setAnimationPart(e.target.value as typeof animationPart); setMode('animation'); setHandsOpen(false) }}><option value="path">Full path</option><option value="clip">Node clip</option>{output.transitionPreviewUrl && <option value="transition">Incoming transition</option>}</select><p className="fine-print">{output.graphContext?.pathLabel}</p></>}
             <button className="text-button full" disabled={locked} onClick={() => { setParentJobId(output.id); setInPlace(output.inPlace ?? false); setNotice('Next generation will branch from this take’s final pose.') }}>Branch from this take <ArrowRight size={13} /></button>{output.outputFiles?.map(file => <button key={file} className="download" onClick={() => void perform(async () => { const path = await window.studio.saveOutput(output.id, file); if (path) setNotice(`Saved ${path}`) })}><ArrowDownToLine size={16} /><span>{outputLabel(file)}</span></button>)}{output.warnings?.map(w => <p className="fine-print" key={w}>{w}</p>)}</> : <><div className="export-disabled"><ArrowDownToLine size={18} /><span>Animated GLB + FBX</span></div><p className="fine-print">Available after a completed, validated character animation. A skeleton alone is not an animated character.</p></>}
         </div>
       </aside>
@@ -280,7 +323,7 @@ export function App() {
     {libraryOpen && snapshot && <LibraryPanel snapshot={snapshot} setup={setup} current={{ prompt, seconds, seed, steps, inPlace }} characterId={characterId} startNew={libraryNew} onClose={() => setLibraryOpen(false)} onApply={(node, savedFit) => {
       setPrompt(node.prompt); setSeconds(node.seconds); setSeed(node.seed); setSteps(node.steps); setInPlace(node.inPlace); setParentJobId('')
       if (savedFit && character) { setSetup({ ...structuredClone(savedFit), rotation: setup.rotation }); setDirty(true); setFit(true); setMode('input') }
-      setNotice('Prompt settings applied independently. Generate the saved graph to preserve incoming pose context, transitions and loop constraints.')
+      setNotice('Prompt settings applied independently. Generate the saved graph to preserve node finger animation, incoming pose context, transitions and loop constraints.')
     }} onPreview={(id, job, part = 'path') => { const c = snapshot.characters.find(c => c.id === id); if (c) { selectCharacter(c); setJobId(job); setAnimationPart(part); setMode('animation') } }} />}
 
     {settingsOpen && settings && <div className="modal-backdrop"><section className="settings-modal" role="dialog" aria-modal="true" aria-label="Local backend settings">

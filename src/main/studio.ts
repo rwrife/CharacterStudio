@@ -4,11 +4,13 @@ import { access, copyFile, readdir, stat, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { setTimeout as delay } from 'node:timers/promises'
-import type { Character, Check, GenerateRequest, Job, LandmarkSuggestion, RigSetup, SkinningMode, Settings, Snapshot, MotionPlan, BatchRequest, Batch, MotionNode, GraphContext, Vec3 } from '../shared/types'
+import type { Character, Check, GenerateRequest, HandPose, Job, LandmarkSuggestion, RigSetup, SkinningMode, Settings, Snapshot, MotionPlan, BatchRequest, Batch, MotionNode, GraphContext, Vec3 } from '../shared/types'
 import { defaultLandmarks } from '../shared/rig'
+import { assertHandPoseFits, handRigConfiguration, handSides, handTemplate, openFingers } from '../shared/hand-rig'
+import { assertHandSeam, handTimeline, poseAt, sameHandPose } from '../shared/hand-animation'
 import { fitLandmarks } from '../shared/landmark-fit'
 import { createBatchItems } from '../shared/plans'
-import { errorText, generateSchema, settingsSchema, setupSchema, rotationSchema, skinningSchema, planSchema, batchSchema } from './validation'
+import { errorText, generateSchema, settingsSchema, setupSchema, rotationSchema, skinningSchema, planSchema, batchSchema, handPoseSchema, handTimelineSchema } from './validation'
 import { readGlbGeometry } from './mesh-geometry'
 import { api, cancelMotion, generateMotion } from './comfy'
 import { runProcess } from './process'
@@ -51,6 +53,10 @@ export class Studio {
     this.state.plans = this.state.plans.map(plan => planSchema.parse(plan))
     this.state.batches ??= []
     this.state.settings = settingsSchema.parse(this.state.settings)
+    for (const character of this.state.characters) {
+      if (character.handPose !== undefined) character.handPose = handPoseSchema.parse(character.handPose)
+      if (character.setup.hands !== undefined) character.setup = setupSchema.parse(character.setup)
+    }
     for (const job of this.state.jobs) if (!terminal.has(job.stage)) {
       job.stage = 'failed'
       job.message = 'App closed before this job finished. Partial files are not a completed result.' +
@@ -127,9 +133,25 @@ export class Studio {
     if (this.designerBusy || this.active || this.batchController) throw new Error('Wait for the current job before changing the rig.')
     const c = this.character(id)
     c.setup = setupSchema.parse(value)
+    if (c.handPose?.version === 2) for (const side of handSides)
+      if (c.setup.hands?.[side].detail !== 'basic') {
+        c.handPose.fingers[side] = openFingers()
+        for (const key of c.handPose.keyframes ?? []) key.fingers[side] = openFingers()
+      }
     c.rigged = false
     c.rigPreviewUrl = undefined
     c.rigWarnings = undefined
+    this.persist()
+    return this.snapshot().characters.find(c => c.id === id)!
+  }
+
+  saveHandPose(id: string, value: unknown): Character {
+    if (this.designerBusy || this.active || this.batchController) throw new Error('Wait for the current job before changing the hand pose.')
+    const character = this.character(id)
+    if (!character.rigged || !character.rigDirectory) throw new Error('Build a validated rig before posing its hands.')
+    const pose = handPoseSchema.unwrap().parse(value)
+    assertHandPoseFits(pose, character.setup)
+    character.handPose = pose
     this.persist()
     return this.snapshot().characters.find(c => c.id === id)!
   }
@@ -140,6 +162,42 @@ export class Studio {
     catch (error) { throw new Error(`Could not read this character's mesh: ${errorText(error)}`) }
     const fit = fitLandmarks(geometry, rotation)
     return { landmarks: setupSchema.parse({ rotation, landmarks: fit.landmarks }).landmarks, warnings: fit.warnings }
+  }
+
+  async bakeHandGrip(sourceId: string): Promise<Character> {
+    const source = this.character(sourceId)
+    const pose = handPoseSchema.parse(source.handPose)
+    if (!source.rigged || !source.rigDirectory || pose.version !== 2 || !handSides.some(side => source.setup.hands?.[side].detail === 'basic'))
+      throw new Error('Build a Basic three-chain hand rig and save its finger pose before baking a fixed grip.')
+    if (pose.keyframes) throw new Error('Disable finger animation at the desired preview pose and save it before baking a fixed grip.')
+    assertHandPoseFits(pose, source.setup)
+    const id = randomUUID(), name = source.name + ' - fixed grip'
+    await this.job('rig', id, name, async (job, signal, settings) => {
+      const output = join(this.root, 'jobs', job.id), directory = join(this.root, 'characters', id)
+      await this.blender(job, { command: 'bake-grip', input: join(source.rigDirectory!, 'rigged.blend'), handPose: pose, output }, signal, settings)
+      await validateCharacterGlb(join(output, 'rigged.glb'), false)
+      const report = JSON.parse(readFileSync(join(output, 'grip-report.json'), 'utf8'))
+      if (report.weightedVertices !== report.vertices || report.bones !== 22) throw new Error('Fixed-grip output failed wrist-only skin validation.')
+      mkdirSync(directory)
+      for (const file of ['character.blend', 'preview.glb']) await copyFile(join(output, file), join(directory, file))
+      await copyFile(join(output, 'preview.glb'), join(directory, 'original.glb'))
+      const setup = handTemplate(handTemplate(source.setup, 'left', 'wrist'), 'right', 'wrist')
+      setup.rotation = [0, 0, 0]
+      for (const side of handSides) setup.landmarks[`${side === 'left' ? 'Left' : 'Right'}HandEnd`] = report.handEnds[side]
+      const validatedSetup = setupSchema.parse(setup)
+      const provenance = { sourceCharacterId: sourceId, jobId: job.id, pose: structuredClone(pose) }
+      await writeFile(join(output, 'manifest.json'), JSON.stringify({ fixedGrip: provenance, setup, report }, null, 2))
+      signal.throwIfAborted()
+      job.outputFiles = ['rigged.glb', 'fixed-grip.fbx', 'rigged.blend']
+      job.warnings = report.warnings
+      this.state.characters.unshift({
+        id, name, importedAt: new Date().toISOString(), previewUrl: this.asset(`${id}-input`, join(directory, 'preview.glb')),
+        vertices: report.vertices, meshes: report.meshes, warnings: report.warnings, rigWarnings: report.warnings,
+        setup: validatedSetup, rigged: true, rigDirectory: output, rigPreviewUrl: this.asset(`${id}-rig`, join(output, 'rigged.glb')),
+        handPose: { version: 1, detail: 'wrist', left: pose.left, right: pose.right }, fixedGrip: provenance
+      })
+    })
+    return this.snapshot().characters.find(c => c.id === id)!
   }
 
   async fitLandmarks(id: string, rotation: Vec3): Promise<LandmarkSuggestion> {
@@ -261,7 +319,7 @@ export class Studio {
     }, batchOwned)
   }
 
-  async generate(value: GenerateRequest, batch?: { id: string; nodeId: string; label: string; reuseJobId?: string; node: MotionNode; context: GraphContext }) {
+  async generate(value: GenerateRequest, batch?: { id: string; nodeId: string; label: string; reuseJobId?: string; node: MotionNode; context: GraphContext; handPose?: HandPose }) {
     const request = generateSchema.parse(value)
     const graph = batch && !batch.node.legacySegments ? batch : undefined
     const character = this.character(request.characterId)
@@ -270,14 +328,32 @@ export class Studio {
     if (request.parentJobId && (!parent || parent.stage !== 'complete' || parent.kind !== 'generate' || parent.characterId !== character.id))
       throw new Error('Choose a completed motion from this character as the branch parent.')
     if (parent && parent.inPlace !== request.inPlace) throw new Error('Use the same root-motion mode as the parent clip.')
+    const savedPose = handPoseSchema.parse(batch ? batch.handPose : character.handPose)
+    const handPose = handPoseSchema.parse(batch?.node.fingerPose ?
+      { version: 2, detail: 'basic', left: savedPose.left, right: savedPose.right, ...batch.node.fingerPose } : savedPose)
+    assertHandPoseFits(handPose, character.setup)
+    const handRigSignature = hashConfiguration(handRigConfiguration(character.setup))
+    const wristRigSignature = hashConfiguration(handRigConfiguration({ rotation: [0, 0, 0], landmarks: {} }))
+    if (parent && (parent.handRigSignature ?? wristRigSignature) !== handRigSignature)
+      throw new Error('Restore the parent take\'s hand fitting and detail before branching, or start an independent motion.')
+    const parentPose = handPoseSchema.parse(parent?.handPose)
+    const parentTimeline = parent?.handTimeline ? handTimelineSchema.parse(parent.handTimeline) : undefined
+    if (parentTimeline && !sameHandPose(poseAt(parentTimeline.at(-1)!.pose, 1), poseAt(parentPose, 1)))
+      throw new Error('Parent take hand pose does not match the endpoint of its saved hand timeline.')
+    if (parent) assertHandSeam(parentPose, handPose, !!graph?.context.transitionSeconds)
+    if (graph?.node.loop && !sameHandPose(poseAt(handPose, 0), poseAt(handPose, 1)))
+      throw new Error('Looping nodes require matching first and last hand keys. Use an open-close-open track or match the endpoints.')
     if (parent) {
       const report = JSON.parse(readFileSync(join(this.root, 'jobs', parent.id, 'animation-report.json'), 'utf8'))
+      if (parentTimeline && parentTimeline.at(-1)!.end !== report.frames - 1) throw new Error('Parent hand timeline does not match its saved animation frames.')
       const segments = request.prompt.split('.').filter(p => p.trim()).length
       if (report.frames + Math.floor((request.seconds * segments + (graph?.context.transitionSeconds ?? 0)) * report.fps) - 1 > 1800)
         throw new Error('The full branch would exceed 60 seconds. Shorten this segment or start an independent motion.')
     }
     return this.job('generate', character.id, character.name, async (job, signal, settings) => {
       const aiRoute = this.ai.route('motion')
+      job.handPose = structuredClone(handPose)
+      job.handRigSignature = handRigSignature
       job.textEncoder = settings.textEncoder ?? 'llm2vec'
       Object.assign(job, { prompt: batch?.node.prompt ?? request.prompt, seconds: request.seconds, seed: request.seed, steps: request.steps, inPlace: request.inPlace, parentJobId: parent?.id, label: batch?.label, batchId: batch?.id, planNodeId: batch?.nodeId, reusedMotionFrom: batch?.reuseJobId, graphContext: batch?.context })
       this.update(job, 'preflight', 'Checking local rig, ComfyUI nodes, and text-encoder access', 5)
@@ -411,7 +487,14 @@ export class Studio {
         '--kimodo', kimodo,
         '--input', assembledMotion, '--output', join(dir, 'motion.json'), '--fps', String(generated.fps)
       ], { signal, log: join(dir, 'backend.log') })
-      await this.blender(job, { command: 'animate', input: join(character.rigDirectory!, 'rigged.blend'), motion: join(dir, 'motion.json'), output: dir, inPlace: request.inPlace }, signal, settings)
+      const fullFrames = JSON.parse(readFileSync(join(dir, 'motion.json'), 'utf8')).global_rot_mats.length
+      const parentFrames = parent ? JSON.parse(readFileSync(join(this.root, 'jobs', parent.id, 'animation-report.json'), 'utf8')).frames : 0
+      const transitionFrames = parent && graph?.context.transitionSeconds ? fullFrames - parentFrames - generated.frames + 2 : 0
+      const timeline = handTimelineSchema.parse(handTimeline(handPose, generated.frames, parent ?
+        { frames: parentFrames, pose: parentPose, timeline: parentTimeline } : undefined, transitionFrames))
+      if (timeline.at(-1)!.end !== fullFrames - 1) throw new Error('Hand timeline does not match the assembled motion frame count.')
+      job.handTimeline = timeline
+      await this.blender(job, { command: 'animate', input: join(character.rigDirectory!, 'rigged.blend'), motion: join(dir, 'motion.json'), output: dir, inPlace: request.inPlace, handPose, handTimeline: timeline }, signal, settings)
       signal.throwIfAborted()
       const report = JSON.parse(readFileSync(join(dir, 'animation-report.json'), 'utf8'))
       await validateCharacterGlb(join(dir, 'animated.glb'), true)
@@ -424,7 +507,8 @@ export class Studio {
           const input = join(dir, prefix === 'clip' ? 'motion.npz' : 'transition.npz')
           const motion = join(dir, `${prefix}-motion.json`)
           await runProcess(python, [join(this.appRoot, 'backend', 'prepare_motion.py'), '--kimodo', kimodo, '--input', input, '--output', motion, '--fps', String(generated.fps), '--origin', assembledMotion], processOptions)
-          await this.blender(job, { command: 'animate', input: join(character.rigDirectory!, 'rigged.blend'), motion, output: dir, inPlace: request.inPlace, exportPrefix: prefix, allowStatic: prefix === 'transition' }, signal, settings)
+          const outputHandPose = prefix === 'transition' ? timeline.at(-2)!.pose : handPose
+          await this.blender(job, { command: 'animate', input: join(character.rigDirectory!, 'rigged.blend'), motion, output: dir, inPlace: request.inPlace, exportPrefix: prefix, allowStatic: prefix === 'transition', handPose: outputHandPose }, signal, settings)
           await validateCharacterGlb(join(dir, `${prefix}.glb`), true)
           job.outputFiles.push(`${prefix}.glb`, `${prefix}.fbx`, `${prefix}.blend`)
           if (prefix === 'transition') job.outputFiles.push('transition.npz', 'transition.bvh')
@@ -437,7 +521,7 @@ export class Studio {
       job.warnings = [...report.warnings, ...(settings.textEncoder === 'lfm' ? ['Experimental LFM text conditioning: inspect handedness, stance and motion details before production use.'] : []),
         ...(graph?.node.loop ? ['Loop endpoint poses were checked; review velocity continuity and foot contact before production use.'] : [])]
       await writeFile(join(dir, 'manifest.json'), JSON.stringify({ request, samplingRequest, graph: batch ? { node: batch.node, context: batch.context } : undefined,
-        textEncoder: job.textEncoder, ai: job.ai, aiRoute, stages, promptId: generated.promptId, clipFrames: generated.frames, reusedMotionFrom: batch?.reuseJobId, source: character.name, setup: character.setup, report }, null, 2))
+        textEncoder: job.textEncoder, ai: job.ai, aiRoute, handPose, handRigSignature, handTimeline: timeline, stages, promptId: generated.promptId, clipFrames: generated.frames, reusedMotionFrom: batch?.reuseJobId, source: character.name, setup: character.setup, report }, null, 2))
     }, !!batch)
   }
 
@@ -468,15 +552,28 @@ export class Studio {
 
   private activeJobId(): string | undefined { return this.active?.job.id }
 
-  async runBatch(value: BatchRequest, savedPlan?: MotionPlan): Promise<void> {
+  async runBatch(value: BatchRequest, savedPlan?: MotionPlan, savedHandPoses?: Record<string, HandPose>, savedHandRigSignatures?: Record<string, string>): Promise<void> {
     if (this.designerBusy || this.active || this.batchController) throw new Error('Wait for the current job or batch to finish.')
     const request = batchSchema.parse(value)
     const plan = planSchema.parse(savedPlan ?? this.plan(request.planId))
+    const handPoses = Object.fromEntries(request.characterIds.map(id => {
+      if (savedHandPoses && !Object.hasOwn(savedHandPoses, id)) throw new Error('Saved batch is missing a character hand pose. Refusing to use current settings.')
+      return [id, handPoseSchema.parse(savedHandPoses ? savedHandPoses[id] : this.character(id).handPose)]
+    }))
+    const handRigSignatures = Object.fromEntries(request.characterIds.map(id => {
+      const character = this.character(id)
+      const signature = hashConfiguration(handRigConfiguration(!character.rigged && request.autoRig ? { ...plan.rigSetup, rotation: character.setup.rotation } : character.setup))
+      if (savedHandRigSignatures && savedHandRigSignatures[id] !== signature)
+        throw new Error('Restore this batch\'s original hand fitting and rig detail before rerunning. Saved batches never silently change finger rigs.')
+      return [id, signature]
+    }))
     const batch: Batch = {
       id: randomUUID(), name: plan.name, createdAt: new Date().toISOString(), status: 'running',
       plan: structuredClone(plan), request: structuredClone(request),
       textEncoder: this.state.settings.textEncoder ?? 'llm2vec',
       aiRoute: this.ai.route('motion'),
+      handPoses,
+      handRigSignatures,
       items: createBatchItems(plan, request, this.state.characters, randomUUID)
     }
     this.state.batches.unshift(batch)
@@ -508,7 +605,7 @@ export class Studio {
           const generation = this.generate({
             characterId: item.characterId, prompt: node.legacySegments ? node.prompt : node.prompt.replace(/\./g, ','), seconds: node.seconds,
             seed: item.seed, steps: node.steps, inPlace: node.inPlace, parentJobId: parent?.jobId
-          }, { id: batch.id, nodeId: node.id, label: item.context!.pathLabel, reuseJobId: reusable?.jobId, node, context: item.context! })
+          }, { id: batch.id, nodeId: node.id, label: item.context!.pathLabel, reuseJobId: reusable?.jobId, node, context: item.context!, handPose: batch.handPoses![item.characterId] })
           item.jobId = this.activeJobId()
           this.persist()
           const job = await generation
@@ -541,7 +638,10 @@ export class Studio {
       throw new Error('Select this batch\'s original motion provider, model and workflow before rerunning. Saved batches never silently switch providers.')
     if ((batch.textEncoder ?? 'llm2vec') !== (this.state.settings.textEncoder ?? 'llm2vec'))
       throw new Error(`Select this batch's original ${batch.textEncoder === 'lfm' ? 'LFM bridge' : 'Llama + LLM2Vec'} encoder in Backend connections before rerunning. Encoder changes would alter its saved motion conditioning.`)
-    return this.runBatch(batch.request, batch.plan)
+    const handPoses = batch.handPoses ?? Object.fromEntries(batch.request.characterIds.map(id => [id, handPoseSchema.parse(undefined)]))
+    const signatures = batch.handRigSignatures ?? Object.fromEntries(batch.request.characterIds.map(id =>
+      [id, hashConfiguration(handRigConfiguration({ rotation: [0, 0, 0], landmarks: {} }))]))
+    return this.runBatch(batch.request, batch.plan, handPoses, signatures)
   }
 
   async exportBatch(id: string, destination: string): Promise<string> {
@@ -640,7 +740,9 @@ export class Studio {
 
   output(jobId: string, file: string): string {
     const job = this.state.jobs.find(j => j.id === jobId)
-    if (!job || job.stage !== 'complete' || job.kind !== 'generate' || !job.outputFiles?.includes(file))
+    const fixedGrip = job?.kind === 'rig' && ['rigged.glb', 'fixed-grip.fbx', 'rigged.blend'].includes(file) &&
+      this.state.characters.some(c => c.id === job.characterId && c.fixedGrip?.jobId === jobId)
+    if (!job || job.stage !== 'complete' || (job.kind !== 'generate' && !fixedGrip) || !job.outputFiles?.includes(file))
       throw new Error('This is not a validated completed output.')
     return join(this.root, 'jobs', jobId, file)
   }

@@ -13,6 +13,7 @@ from mathutils.kdtree import KDTree
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from skin_weights import repair_weights
+from hand_rig import CHAINS, hand_definitions, build_hand_bones, skin_hands, finger_corrections, sample_hand_pose, validate_timeline
 
 C = Matrix(((1, 0, 0), (0, 0, -1), (0, 1, 0)))
 BONES = [
@@ -346,6 +347,7 @@ def rig_character(req):
     objects = meshes()
     normalize(objects, C @ r @ C.inverted())
     points = {name: C @ Vector(pos) for name, pos in setup["landmarks"].items()}
+    hands = hand_definitions(setup, C)
     emit("rigging", "Building fitted humanoid bones", 15)
     data = bpy.data.armatures.new("StudioHumanoid")
     rig = bpy.data.objects.new("StudioHumanoid", data)
@@ -362,6 +364,7 @@ def rig_character(req):
             bone.parent = data.edit_bones[parent]
             bone.use_connect = (bone.head - bone.parent.tail).length < 1e-5
         bone.align_roll(Vector((0, -1, 0)))
+    build_hand_bones(data, hands)
     bpy.ops.object.mode_set(mode="OBJECT")
     emit("rigging", "Solving Blender bone-heat skin weights (CPU)", 35)
     warnings = []
@@ -415,6 +418,7 @@ def rig_character(req):
         warnings.append(f"Repaired {repair['connectedVertices']:,} unweighted vertices from connected mesh surfaces. Inspect joint bending; complete weights do not guarantee good deformation.")
     if repair["fallbackVertices"]:
         warnings.append(f"Approximate fallback weights assigned to {repair['fallbackVertices']:,} vertices using your fitted bones. Separate pieces or touching limbs can bend incorrectly. Review deformation before using or exporting this character.")
+    hand_weights = skin_hands(rig, objects, hands)
     for obj in objects:
         bpy.context.view_layer.objects.active = obj
         if not obj.vertex_groups:
@@ -426,11 +430,13 @@ def rig_character(req):
     report["repair"] = repair
     report["seamWeld"] = seam_weld
     report["heatRetry"] = heat_retry
+    report["hands"] = hand_weights
     report["warnings"] = warnings + [
-        "Guided body rig: fingers, facial controls, and cloth simulation are not generated.",
+        "Guided three-chain hands use coarse region weights; inspect thumb/index separation and palm bend. Fused geometry is not repaired." if hands else "Wrist-only body rig: finger articulation is not enabled.",
+        "Facial controls and cloth simulation are not generated.",
         "Inspect joint placement and bending. Automatic weights may need artist cleanup.",
     ]
-    rig["studio_skinning_warnings"] = json.dumps(warnings)
+    rig["studio_skinning_warnings"] = json.dumps(report["warnings"])
     emit("rigging", "Validating skin and saving the actual rigged mesh", 80)
     out = Path(req["output"])
     out.mkdir(parents=True, exist_ok=True)
@@ -467,6 +473,20 @@ def animate_character(req):
     bpy.context.scene.frame_end = frames
     canonical = {}
     rest = {name: rig.data.bones[name].matrix_local.to_quaternion() for name, _, _ in BONES}
+    timeline = validate_timeline(req.get("handTimeline", [{"start": 0, "end": frames - 1, "pose": req.get("handPose")}]), frames)
+    preceding_hand = None
+    for span in timeline:
+        hand_corrections(span["pose"], rest)
+        endpoints = []
+        for time in (0, 1):
+            endpoint = sample_hand_pose(span["pose"], time)
+            finger_corrections(endpoint, rig)
+            endpoints.append([value for side in ("left", "right") for value in
+                              ((endpoint or {}).get(side, [0, 0, 0]) +
+                               [((endpoint or {}).get("fingers", {}).get(side, {}).get(control, 0)) for control in ("thumb", "index", "fingers", "opposition")])])
+        if preceding_hand and any(abs(a - b) > 1e-6 for a, b in zip(preceding_hand, endpoints[0])):
+            raise ValueError("Hand poses jump at a path seam. Match the endpoint keys or add a transition.")
+        preceding_hand = endpoints[1]
     for name, tail, _ in BONES:
         source_tail = tail
         if tail.endswith("HandEnd"):
@@ -480,6 +500,10 @@ def animate_character(req):
     previous = {}
     emit("retargeting", f"Retargeting {frames} frames onto skinned character", 12)
     for frame in range(frames):
+        span = next(span for span in reversed(timeline) if span["start"] <= frame)
+        pose = sample_hand_pose(span["pose"], (frame - span["start"]) / (span["end"] - span["start"]))
+        hand_offsets = hand_corrections(pose, rest)
+        fingers = finger_corrections(pose, rig)
         desired = {}
         for name, _, parent in BONES:
             source = Matrix(rotations[frame][names[name]])
@@ -489,12 +513,19 @@ def animate_character(req):
                 q = local_rest.inverted() @ desired[parent].inverted() @ desired[name]
             else:
                 q = rest[name].inverted() @ desired[name]
+            if name in hand_offsets:
+                q = q @ hand_offsets[name]
             if name in previous and q.dot(previous[name]) < 0:
                 q.negate()
             previous[name] = q.copy()
             pb = rig.pose.bones[name]
             pb.rotation_mode = "QUATERNION"
             pb.rotation_quaternion = q
+            pb.keyframe_insert(data_path="rotation_quaternion", frame=frame + 1, group=name)
+        for name, rotation in fingers.items():
+            pb = rig.pose.bones[name]
+            pb.rotation_mode = "QUATERNION"
+            pb.rotation_quaternion = rotation
             pb.keyframe_insert(data_path="rotation_quaternion", frame=frame + 1, group=name)
         source_root = C @ Vector(roots[frame])
         # Preserve target proportions; horizontal trajectory starts at the viewport origin.
@@ -552,16 +583,121 @@ def animate_character(req):
         "frames": frames, "fps": fps, "duration": (frames - 1) / fps,
         "sampledMeshDisplacement": displacement,
         "staticHold": displacement < 0.00001,
-        "warnings": json.loads(rig.get("studio_skinning_warnings", "[]")) + ["Foot contact cleanup is not installed; foot sliding can require manual cleanup.", "Body rig only; finger/facial animation is not retargeted."],
+        "handPose": req.get("handPose"),
+        "handTimeline": timeline,
+        "warnings": json.loads(rig.get("studio_skinning_warnings", "[]")) + ["Foot contact cleanup is not installed; foot sliding can require manual cleanup.", "Finger poses are local controls, not learned finger motion. Facial animation is not retargeted."],
     })
     write_json(out / ("animation-report.json" if prefix == "animated" else f"{prefix}-report.json"), report)
     emit("retargeting", "Animated character exported and mesh deformation verified", 100)
 
 
+def hand_corrections(pose, rest):
+    if pose is None:
+        return {}
+    if not isinstance(pose, dict) or type(pose.get("version")) is not int or not (
+        pose["version"] == 1 and pose.get("detail") == "wrist" and set(pose) == {"version", "detail", "left", "right"} or
+        pose["version"] == 2 and pose.get("detail") == "basic" and {"version", "detail", "left", "right", "fingers"} <= set(pose) <= {"version", "detail", "left", "right", "fingers", "keyframes"}
+    ):
+        raise ValueError("Unsupported hand pose. Expected wrist-only or Basic three-chain settings.")
+    result = {}
+    for side in ("left", "right"):
+        angles = pose[side]
+        if not isinstance(angles, list) or len(angles) != 3 or any(type(a) not in (int, float) or not math.isfinite(a) or abs(a) > 180 for a in angles):
+            raise ValueError("Hand rotations must be three finite angles between -180 and 180 degrees.")
+        name = side.capitalize() + "Hand"
+        if name not in rest:
+            raise ValueError(f"{name} is missing from this rig. Rebuild the humanoid rig.")
+        xyz = [math.radians(a) for a in angles]
+        offset = Matrix.Rotation(xyz[0], 3, "X") @ Matrix.Rotation(xyz[1], 3, "Y") @ Matrix.Rotation(xyz[2], 3, "Z")
+        offset = (C @ offset @ C.inverted()).to_quaternion()
+        result[name] = rest[name].inverted() @ offset @ rest[name]
+    return result
+
+
+def bake_grip(req):
+    bpy.ops.wm.open_mainfile(filepath=req["input"])
+    rig = bpy.data.objects.get("StudioHumanoid")
+    if rig is None or rig.type != "ARMATURE":
+        raise ValueError("Build a validated hand rig before baking a fixed grip.")
+    objects = meshes()
+    validate_skin(rig, objects)
+    pose = req["handPose"]
+    hand_corrections(pose, {name: rig.data.bones[name].matrix_local.to_quaternion() for name, _, _ in BONES})
+    if pose.get("keyframes") is not None:
+        raise ValueError("Disable hand animation and save a static pose before baking a fixed grip.")
+    rotations = finger_corrections(pose, rig)
+    if not rotations:
+        raise ValueError("The character has no fitted finger chains to bake.")
+    rig.animation_data_clear()
+    for bone in rig.pose.bones:
+        bone.matrix_basis = Matrix.Identity(4)
+    for name, rotation in rotations.items():
+        rig.pose.bones[name].rotation_mode = "QUATERNION"
+        rig.pose.bones[name].rotation_quaternion = rotation
+    bpy.context.view_layer.update()
+    emit("rigging", "Baking finger geometry into a new wrist-only variation", 30)
+    collapse = {f"{side}{chain}{i + 1}": side + "Hand" for side in ("Left", "Right")
+                for chain, _, count, _ in CHAINS for i in range(count)}
+    for obj in objects:
+        groups = {g.index: g.name for g in obj.vertex_groups}
+        weights = []
+        for vertex in obj.data.vertices:
+            values = {}
+            for group in vertex.groups:
+                name = collapse.get(groups[group.group], groups[group.group])
+                values[name] = values.get(name, 0) + group.weight
+            weights.append(values)
+        deps = bpy.context.evaluated_depsgraph_get()
+        data = bpy.data.meshes.new_from_object(obj.evaluated_get(deps), preserve_all_data_layers=True, depsgraph=deps)
+        if len(data.vertices) != len(weights):
+            raise ValueError("Grip baking changed topology. Refusing to copy incompatible skin weights.")
+        obj.modifiers.clear()
+        obj.data = data
+        obj.vertex_groups.clear()
+        targets = {name: obj.vertex_groups.new(name=name) for name, _, _ in BONES}
+        for index, values in enumerate(weights):
+            for name, weight in values.items():
+                if name in targets and weight > 0:
+                    targets[name].add([index], weight, "REPLACE")
+        modifier = obj.modifiers.new(name="StudioHumanoid", type="ARMATURE")
+        modifier.object = rig
+    bpy.context.view_layer.objects.active = rig
+    bpy.ops.object.mode_set(mode="EDIT")
+    for name in collapse:
+        if name in rig.data.edit_bones:
+            rig.data.edit_bones.remove(rig.data.edit_bones[name])
+    bpy.ops.object.mode_set(mode="OBJECT")
+    for bone in rig.pose.bones:
+        bone.matrix_basis = Matrix.Identity(4)
+    bpy.context.view_layer.update()
+    report = validate_skin(rig, objects)
+    report.update({"meshes": len(objects), "handPose": pose,
+                   "handEnds": {side: list(C.inverted() @ rig.data.bones[side.capitalize() + "Hand"].tail_local) for side in ("left", "right")},
+                   "warnings": ["Fixed finger shape baked from a guided hand pose. Wrist offsets remain separate; inspect collisions and skin deformation."]})
+    out = Path(req["output"])
+    out.mkdir(parents=True, exist_ok=True)
+    rig["studio_skinning_warnings"] = json.dumps(report["warnings"])
+    bpy.ops.wm.save_as_mainfile(filepath=str(out / "rigged.blend"))
+    export_glb(out / "rigged.glb", False)
+    bpy.ops.export_scene.fbx(filepath=str(out / "fixed-grip.fbx"), use_selection=False, object_types={"ARMATURE", "MESH"},
+                             add_leaf_bones=False, bake_anim=False, path_mode="COPY", embed_textures=True, axis_forward="-Z", axis_up="Y")
+    for obj in objects:
+        world = obj.matrix_world.copy()
+        obj.parent = None
+        obj.matrix_world = world
+        obj.modifiers.clear()
+        obj.vertex_groups.clear()
+    bpy.data.objects.remove(rig, do_unlink=True)
+    bpy.ops.wm.save_as_mainfile(filepath=str(out / "character.blend"))
+    export_glb(out / "preview.glb", False)
+    write_json(out / "grip-report.json", report)
+    emit("rigging", "Fixed-grip variation validated; original character preserved", 100)
+
+
 if __name__ == "__main__":
     try:
         request = json.loads(Path(sys.argv[sys.argv.index("--") + 1]).read_text(encoding="utf-8"))
-        {"import": import_character, "rig": rig_character, "animate": animate_character}[request["command"]](request)
+        {"import": import_character, "rig": rig_character, "animate": animate_character, "bake-grip": bake_grip}[request["command"]](request)
     except Exception as exc:
         emit("failed", str(exc), code="unweighted-skin" if isinstance(exc, UnweightedSkinError) else None)
         traceback.print_exc()

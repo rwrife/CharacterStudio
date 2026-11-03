@@ -5,6 +5,8 @@ import { expandGraph } from '../shared/plans'
 import { MotionGraph } from './MotionGraph'
 import { AiRouteBadge } from './AiProvidersPanel'
 import { aiRouteLabel } from '../shared/ai'
+import { FingerPoseEditor } from './FingerPoseEditor'
+import { openFingers } from '../shared/hand-rig'
 
 interface Props {
   snapshot: Snapshot
@@ -177,6 +179,13 @@ export function LibraryPanel(props: Props) {
             <div className="three-fields"><label>Seconds<input aria-label="Node duration" type="number" min="0.5" max="30" step="0.5" value={selected.seconds} disabled={locked} onChange={e => updateNode({ seconds: Number(e.target.value) })} /></label><label>Seed<input aria-label="Node seed" type="number" min="0" max="4294967295" value={selected.seed} disabled={locked} onChange={e => updateNode({ seed: Number(e.target.value) })} /></label><label>Steps<input aria-label="Node steps" type="number" min="10" max="500" value={selected.steps} disabled={locked} onChange={e => updateNode({ steps: Number(e.target.value) })} /></label></div>
             <label className="checkbox"><input type="checkbox" disabled={locked || selected.kind !== 'state' || selected.legacySegments} checked={selected.loop} onChange={e => updateNode({ loop: e.target.checked })} /> Constrain state loop endpoints</label>
             <label className="checkbox"><input type="checkbox" disabled={locked} checked={selected.inPlace} onChange={e => updateNode({ inPlace: e.target.checked })} /> In-place root motion</label>
+            <label className="checkbox"><input type="checkbox" disabled={locked} checked={!!selected.fingerPose} onChange={event => {
+              const pose = activeCharacter?.handPose
+              updateNode({ fingerPose: event.target.checked ? { fingers: pose?.version === 2 ? structuredClone(pose.fingers) :
+                { left: openFingers(), right: openFingers() }, keyframes: pose?.version === 2 ? structuredClone(pose.keyframes) : undefined } : undefined })
+            }} /> Override character finger pose for this node</label>
+            {selected.fingerPose && <FingerPoseEditor key={selected.id} value={selected.fingerPose} setup={plan.rigSetup} disabled={locked}
+              onChange={fingerPose => updateNode({ fingerPose })} />}
             <p className="fine-print">Root mode applies to the connected graph. State loops use a second constrained generation pass; endpoint poses are checked, but velocity continuity needs review.</p>
             {selected.legacySegments && <p className="fine-print">Legacy clip: periods still create segments. Select a node type to opt into single-clip graph instructions.</p>}
             <label className="field-label" htmlFor="connect-target">Connect to existing node</label><select id="connect-target" value={connectTarget} disabled={locked} onChange={e => setConnectTarget(e.target.value)}><option value="">Choose a destination</option>{plan.nodes.map(n => <option key={n.id} value={n.id}>{n.label}</option>)}</select>

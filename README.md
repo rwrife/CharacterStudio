@@ -2,7 +2,7 @@
 
 **An AI-assisted video game character creation studio.** The goal is to help game developers turn character assets into animated, reusable characters through a local workflow for preparation, rigging, natural-language motion generation, visual animation graphs, and export.
 
-The implementation combines **staged character design and existing humanoid FBX assets with AI-generated body motion**. Artists retain control over reference review, rig fitting, motion instructions, and the final exported character. Designer supports geometry-only and textured generation; neither produces a finished, rigged game asset.
+The implementation combines **staged character design and existing humanoid FBX assets with AI-generated body motion**. Artists retain control over reference review, body and hand fitting, wrist/finger poses, motion instructions, and the final exported character. Designer supports geometry-only and textured generation; neither produces a finished, rigged game asset.
 
 Local-first Windows ARM64 desktop app with **Designer** and **Animator** workspaces. Designer turns a character brief or local reference image into a scene concept, a T-pose reference, and a GLB model, with optional textures. Built-in inference stays local; [per-stage providers](#model-and-workflow-providers) can use custom workflows, explicitly approved remote GPU servers, or paid Tripo APIs. Animator imports humanoid meshes, fits and skins a body rig, generates compatible Kimodo motion through the selected provider, and exports the **animated character mesh** using local Blender.
 
@@ -18,6 +18,7 @@ Local-first Windows ARM64 desktop app with **Designer** and **Animator** workspa
 | [Model & workflow providers](#model-and-workflow-providers) | Choose hardware-fit local presets, custom checkpoints/mapped ComfyUI workflows, or remote ComfyUI/API routes per AI stage. Separate T-pose editing from cutout removal. Keep keys OS-encrypted and provider/workflow provenance with outputs. |
 | [Paid Tripo integration](#tripo-paid-api) | Use your own API key and credits for hosted Nano Banana or GPT Image models, Tripo H3 mesh generation with triangle budgets/Smart low-poly, and separate PBR/rigged GLB variations. These adapters have contract/desktop fixture coverage, not a verified paid end-to-end run. |
 | [Guided humanoid rigging](#animator-workflow) | Import FBX assets or send Designer meshes to Animator. Joint landmarks are [automatically fitted to the mesh](#automatic-landmark-fitting) on import; review and adjust them and the orientation with mirrored editing. Then build a Blender-skinned body rig with automatic missing-weight repair, or explicitly accept your points with approximate fallback skinning. |
+| [Configurable hand rigging](#hand-pose-and-rig-detail) | Choose wrist-only or guided three-chain hands independently per side. Pose thumb, index and grouped fingers; key opening/closing over body motion; or bake a fixed grip into a separate wrist-only character. Preview and exports share the pose math; completed takes remain unchanged. |
 | [Natural-language animation](#animator-workflow) | Generate motion takes with duration, seed, denoising steps, and in-place controls. Branch from a completed take's actual endpoint; preview with playback, scrubbing, orbit, zoom, and wireframe. |
 | [Motion encoder choice](#experimental-lfm-setup-no-llama-approval) | Use the original local Llama/LLM2Vec encoder or explicitly select the experimental ungated LFM bridge. Readiness checks and GPU guidance surface setup requirements without silently switching models. |
 | [Visual animation graphs](#visual-animation-graphs) | Connect states, reusable actions, transitions, and pose-constrained loops. Inspect path-specific incoming context, save layouts, and preview node clips, transitions, or full paths. |
@@ -88,7 +89,7 @@ This saved desktop run used the experimental local LFM bridge and produced a lea
 
 ![Animator playing a learned Wave hello take on a TRELLIS.2 textured character generated in Designer, paused with the right hand raised](docs/screenshots/animator-designer-wave.png)
 
-End-to-end local run: a Designer-generated TRELLIS.2 mesh (about 65,000 vertices) was sent to Animator, fitted, skinned with **Build skin + rig**, and animated with the **Wave hello** preset using the experimental LFM bridge. In the exported GLB, the raised right hand moves side to side for most of the 5-second take; the full-character GLB and FBX exports contain the textured skinned mesh. The body-only rig has no finger bones, so the hand stays rigid. This is one observed take, not a guarantee of handedness or motion quality for other prompts or seeds.
+End-to-end local run: a Designer-generated TRELLIS.2 mesh (about 65,000 vertices) was sent to Animator, fitted, skinned with **Build skin + rig**, and animated with the **Wave hello** preset using the experimental LFM bridge. In the exported GLB, the raised right hand moves side to side for most of the 5-second take; the full-character GLB and FBX exports contain the textured skinned mesh. This historical body-only rig has no finger bones, so the hand stays rigid; it predates the optional Basic hand rig. This is one observed take, not a guarantee of handedness or motion quality for other prompts or seeds.
 
 ### Visual animation graphs
 
@@ -215,8 +216,8 @@ For a portable distribution, point `args` to `scripts\mcp-client.mjs` under its 
 |---|---|
 | `studio_get_ui` | Read current text, alerts, modal, control labels, element refs, enabled states, values, dropdown options, and CSS-pixel bounds. Hidden workspace controls are excluded. |
 | `studio_get_state` | Read persisted settings, designs/references, characters/rig setups, jobs, plans and batches to track asynchronous work. Does not mutate UI or run workflows. |
-| `studio_click` | Activate a visible enabled control: switch workspace, select designs/characters/takes, create/run/cancel design or motion work, hand a mesh to Animator, build/save/reset a fit, refresh readiness, save settings, start ComfyUI, edit/save/apply graphs, run/rerun/cancel/export batches, open import/export dialogs, and use viewport/playback buttons. |
-| `studio_set_value` | Edit briefs/style, sampling, prompts, numeric joint coordinates, node/graph/transition fields, backend paths, file paths and playback ranges through their actual input handlers. |
+| `studio_click` | Activate a visible enabled control: switch workspace, select designs/characters/takes, create/run/cancel design or motion work, hand a mesh to Animator, build/save/reset a fit, pose hands, bake fixed grips, refresh readiness, save settings, start ComfyUI, edit/save/apply graphs, run/rerun/cancel/export batches, open import/export dialogs, and use viewport/playback buttons. |
+| `studio_set_value` | Edit briefs/style, sampling, prompts, numeric joint coordinates, hand detail/radii/wrist/finger controls and key preview time, node/graph/transition fields, backend paths, file paths and playback ranges through their actual input handlers. |
 | `studio_select` | Choose returned option values for model profiles/weights/encoder, rotation/joint, branch parent, node type, incoming context, connection destination and batch seed variation. |
 | `studio_set_checked` | Set mirrored fitting, isolated T-pose, in-place motion, state looping/entry, batch targets/auto-rig, explicit file overwrite, and the MCP enable toggle (disabling it disconnects the agent). |
 | `studio_press_key` | Focus a returned element and send a single character or navigation key, optionally with Shift/Control/Alt/Meta. |
@@ -240,7 +241,7 @@ Enable this only for agents you trust with **all of the app's local user privile
 
 The server controls **Studio's window only**, not the OS, external browser pages, authentication prompts, ComfyUI's separate UI, or other desktop applications. Model access, downloads and third-party authentication remain subject to the existing manual setup guidance. The user can continue interacting with the same window; coordinate edits to avoid conflicting selections. Turn off **Enable MCP control** to revoke access immediately, including when launched with `--mcp`. A stale connection file after a crash is not a running server; restart Studio rather than reusing its token.
 
-`npm run test:mcp` builds and exercises the real stdio-to-HTTP-to-Electron path in an isolated workspace under ignored `artifacts\mcp-smoke`: visible Designer fields and cancellation, graph edits and dragging, save/import/export with overwrite checks, backend settings and folder selection, stale refs, keyboard/scrolling, screenshots, in-app disable/re-enable with revoked credentials, saved-toggle restoration, cleanup and a default-off launch. It also runs generation-rerun and provider regressions in temporary workspaces with deterministic local HTTP fixtures. A landmark auto-fit regression on procedural box meshes checks that **Auto-fit landmarks to mesh** updates the visible joint fields without saving, **Save fit without rigging** persists them, and a non-humanoid block reports an error and keeps its landmarks. It needs no model weights, Blender or third-party character. Provider credential coverage requires a working OS encryption backend. It does not establish successful learned generation, paid API interoperability, rigging, motion quality, or cross-platform GUI compatibility.
+`npm run test:mcp` builds and exercises the real stdio-to-HTTP-to-Electron path in an isolated workspace under ignored `artifacts\mcp-smoke`: visible Designer fields and cancellation, graph edits and dragging, save/import/export with overwrite checks, backend settings and folder selection, stale refs, keyboard/scrolling, screenshots, in-app disable/re-enable with revoked credentials, saved-toggle restoration, cleanup and a default-off launch. It also runs generation-rerun and provider regressions in temporary workspaces with deterministic local HTTP fixtures. A landmark auto-fit regression on procedural box meshes checks that **Auto-fit landmarks to mesh** updates the visible joint fields without saving, **Save fit without rigging** persists them, and a non-humanoid block reports an error and keeps its landmarks. Hand coverage observes visible wrist/finger deformation, fitting controls, key scrubbing, graph overrides and immutable takes. It needs no model weights, Blender or third-party character. Provider credential coverage requires a working OS encryption backend. It does not establish successful learned generation, paid API interoperability, native rigging, motion quality, or cross-platform GUI compatibility. The separate `npm run test:hand-desktop` uses local Blender for actual fixed-grip baking and export.
 
 ## Model and workflow providers
 
@@ -528,6 +529,38 @@ Shoulders, elbows and knees are estimated from proportions and cross-sections, s
 
 A 759,039-vertex textured character from another image-to-3D generator was also tested. It was imported with a −90° suggested rotation. After auto-fit, **Build skin + rig** weighted every vertex automatically in about two minutes. In one posed test render it bent cleanly at the hips, knees, elbows and neck. Complete weights and a single test pose don't establish animation quality.
 
+### Hand pose and rig detail
+
+**Choose detail during Fit & skin.** **Left hand rig detail** and **Right hand rig detail** independently support **Wrist only - fixed finger shape** (the compatible default) and **Basic three-chain**. Basic adds two thumb bones, three index bones and three bones shared by the remaining fingers; it does not remove fingers from the mesh. Individual fingers remains a disabled future option. From a built rig, **Hand pose & rig detail > Change hand rig detail & fitting** returns to these controls.
+
+**Fit the hand before rebuilding.** Selecting Basic adds an editable template, not automatic hand detection. Place point 1 at each knuckle, subsequent points at bends and the final point at the tip. `PalmNormal` points out of the **back** of the hand and establishes its bend plane. Use **Focus left hand / Focus right hand**, front/side views, the landmark selector, and 1mm XYZ fields. Influence radii are meters in the normalized 2m character frame, bounded to 3mm-8cm; the grouped region is normally wider. Body auto-fit keeps manual hand points; use **Reset left/right hand template** explicitly when needed. **Try auto-rigging** or **Use adjusted points + fallback skinning** builds the result. Finger regions redistribute only nearby wrist/forearm weights, leaving other body influences untouched. Missing hand influence fails rather than publishing an empty finger rig.
+
+Edit **Left wrist X/Y/Z** and **Right wrist X/Y/Z** to preview rotations on the actual skinned rig. Angles range from -180 to 180 degrees in XYZ order, using the normalized character's rest-frame axes (+Y up, +Z forward). The offsets follow the animated wrist; these are not automatically calibrated anatomical bend/twist axes or a world-space hand lock. **Copy left rotation to right** copies the same signed angles, not a mirrored grip.
+
+Built Basic hands expose **Open**, **Relaxed**, **Fist**, **Close whole hand**, independent thumb/index/grouped curl, and thumb opposition. Controls are 0-1; zero keeps the fitted mesh's existing shape. **Save hand pose** persists without running Blender or rebuilding skin weights. **Reset wrist rotations** resets only wrists; **Discard hand pose changes** restores the saved pose and keys. Save or discard before leaving or generating motion. Changing fitting/detail requires rebuilding; choosing Wrist only clears that side's finger controls and keys, not its geometry.
+
+**Animate opening and closing.** Enable **Animate fingers over clip**, scrub **Hand key preview**, and edit controls at that time to insert/update a key. Up to 16 ordered keys span 0%-100% of each clip, with linear interpolation. **Open-close-open hand animation** supplies a three-key starting point; **Remove selected hand key** removes interior keys. Motion graph nodes can **Override character finger pose for this node** using the same editor. The rigged preview scrubs these local controls; new character GLB, FBX and Blender animations bake them after body retargeting. This is authored finger animation, not learned motion from the text model.
+
+**Preserve path continuity.** Branches keep the parent's full saved hand timeline unchanged. Wrist offsets and hand fitting/detail must match the parent. Without a transition the child starts at the parent's actual final finger pose; graph transitions interpolate between the two endpoints. Looping nodes require matching first/last hand keys. Jobs/manifests retain the pose, fitting signature and full-path spans. Batches freeze character poses plus node overrides, and reject reruns if hand fitting/detail changed. Older batches retain wrist-only behavior and zero offsets. Completed takes never receive current hand settings again; motion-only BVH/NPZ remain the original source motion.
+
+**Bake a fixed FPS grip.** Pose a Basic hand, or disable finger animation at the desired preview time, then save. **Bake fixed grip as new wrist-only character** creates a separate working variation: finger deformation becomes geometry, finger weights collapse onto each wrist, and only the 22 body bones remain. Source geometry, UVs/materials, original character and completed takes are preserved. Wrist offsets stay separate and editable rather than being applied twice. **Export fixed-grip GLB / FBX / Blender** exports the skinned rig at rest wrists; saved wrist offsets apply to new animations, not these static rig files.
+
+**Limitations:** Wrist-only cannot manufacture a grip from flat geometry. Three-chain fitting is guided, approximate rigging, not universal hand repair; fused/missing digits, sparse topology, adjacent-finger leakage and self-intersection may require manual mesh/weight cleanup. Grouped middle/ring/little fingers do not bend independently. There is no collision/contact solver, automatic weapon fitting, anatomical wrist calibration, individual-finger retargeting or learned hand fitting. No extra inference model or GPU is required; rig building, grip baking and character export require the existing local Blender runtime. Representative generated-hand quality has not been evaluated for this feature.
+
+![Actual Animator Hand pose panel with independent wrist rotations applied to a procedural box humanoid](docs/screenshots/hand-pose.png)
+
+Wrist-only controls on an actual desktop/MCP procedural fixture.
+
+![Actual three-chain hand controls with a posed procedural box hand in the close-up viewport](docs/screenshots/hand-three-chain.png)
+
+Actual desktop/MCP capture of authored finger controls, not a generated hand or a production-quality grip.
+
+![Native Blender-baked fixed-grip fixture shown as a separate wrist-only character](docs/screenshots/hand-fixed-grip.png)
+
+Actual desktop/MCP capture of a native Blender bake on a procedural capsule fixture. It demonstrates the separate variation, not weapon contact quality.
+
+After `npm run build`, `node --import tsx scripts\hand-pose-smoke.mjs` exercises fitting, visible wrist/finger deformation, key scrubbing, graph overrides, save/discard/reset, restart persistence and immutable takes without Blender or weights; it is included in `npm run test:mcp`. `npm run test:rigging` verifies native skinning, keyed GLB vertex parity, FBX round-trips, parent-timeline preservation, seam rejection and fixed-grip geometry. After `npm run setup:blender`, `npm run test:hand-desktop` exercises a real native bake, source preservation, 22-bone export through the visible file picker and restart persistence. These checks use procedural fixtures, not a third-party character or learned inference.
+
 ### Recovering from incomplete skinning
 
 **Build skin + rig** uses your fitted points, runs Blender bone-heat weighting, and automatically attempts to fill unweighted vertices from the closest weighted vertex along connected mesh edges. Existing positive weights are retained before the usual four-influence limit and normalization. Repair does not move your points, remesh the character, alter materials, or overwrite the original import.
@@ -647,7 +680,7 @@ The branch constraint serialization, conversion to the real SOMA30 model skeleto
 
 - Official **Blender 4.5.15 LTS ARM64** portable distribution, checksum-verified by `scripts\setup-blender.ps1`. Isolated under `.tools`; no CUDA auto-rigging packages are installed into ComfyUI.
 - A real 22-bone humanoid body rig, Blender bone-heat skinning, maximum four normalized influences per vertex, and required body-bone/vertex-coverage checks. This is **guided rig fitting**, not an unvalidated universal AI auto-rigger. Fingers/faces, cloth, quadrupeds, and arbitrary poses are outside this version.
-- SOMA-77 global rotations are converted from Y-up into Blender coordinates, corrected for the fitted target rest pose, and baked onto the skinned character. Root trajectory is scaled to the character; optional in-place mode removes horizontal root displacement. Fine finger motion is not transferred to the body-only rig.
+- SOMA-77 global body rotations are converted from Y-up into Blender coordinates, corrected for the fitted target rest pose, and baked onto the skinned character. Root trajectory is scaled to the character; optional in-place mode removes horizontal root displacement. Fine source finger motion is not retargeted; optional Basic hand poses/tracks are authored locally and applied after body retargeting.
 - FBX export uses Blender, **not** the unavailable ARM64 Autodesk Python SDK.
 - Foot contact cleanup is not installed. Foot sliding, extreme joint bends, or imperfect automatic weights can require manual cleanup. Playback looping is not a promise of a seamless looping animation.
 - Imports start from geometrically estimated landmarks for standing T- or A-pose humanoids. This is not learned pose detection; unusual proportions, poses, clothing or props can require manual placement.
@@ -669,6 +702,8 @@ npm test
 npm run typecheck
 npm run test:desktop
 npm run test:mcp
+npm run test:rigging
+npm run test:hand-desktop
 node --import tsx scripts\generation-smoke.mjs
 node scripts\provider-smoke.mjs
 python tests\test_provider_nodes.py
