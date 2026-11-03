@@ -103,7 +103,14 @@ try {
   assert.match(badge[0].name, /built-in|local/i, 'Capture defaults to the built-in local route.')
   assert.match(badge[0].name, /MediaPipe Pose/, 'The badge names the built-in capture model.')
   await click('Capture options', 'summary')
-  assert.ok(matching(await ui(), 'Use Pose Lite', 'radio')[0]?.checked, 'Pose Lite is the default model.')
+  const liteControl = matching(await ui(), 'Use Pose Lite', 'radio')[0]
+  assert.ok(liteControl?.checked, 'Pose Lite is the default model.')
+  await click('Capture options', 'summary')
+  state = await ui()
+  assert.equal(matching(state, 'Capture options', 'summary')[0].expanded, 'false')
+  assert.equal(matching(state, 'Use Pose Lite', 'radio').length, 0, 'Collapsed details must not expose their controls.')
+  const hiddenEdit = await client.callTool({ name: 'studio_set_checked', arguments: { ref: liteControl.ref, checked: true } })
+  assert.equal(hiddenEdit.isError, true, 'A previously visible reference must not edit a collapsed control.')
   await click('Import video')
 
   // Record a real WebM take from the (fake) webcam through the visible controls.
@@ -145,7 +152,7 @@ try {
   await call('studio_press_key', { ref: (await locate('Clip start', 'textbox')).ref, key: 'Enter' })
   await until(async () => matching(await ui(), 'Clip start', 'textbox')[0]?.value === '00:00.0', 'clip start reset')
 
-  if (!matching(await ui(), 'Use Pose Lite', 'radio').length) await click('Capture options', 'summary')
+  if (matching(await ui(), 'Capture options', 'summary')[0]?.expanded !== 'true') await click('Capture options', 'summary')
   if (!seeded) {
     await click('Download Pose Lite')
     await until(async () => (await mocap()).models.lite.status === 'ready', 'Pose Lite download', 120000)

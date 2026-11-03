@@ -33,6 +33,9 @@ export async function desktopControl(command: DesktopCommand) {
   }
   const registry = root.__studioMcpElements
   const visible = (el: Element) => {
+    for (let parent = el.parentElement; parent; parent = parent.parentElement) {
+      if (parent instanceof HTMLDetailsElement && !parent.open && !parent.querySelector(':scope > summary')?.contains(el)) return false
+    }
     const style = getComputedStyle(el)
     return el.isConnected && !el.closest('[hidden], [inert], [aria-hidden="true"]') &&
       style.display !== 'none' && style.visibility !== 'hidden' && el.getClientRects().length > 0
@@ -67,7 +70,8 @@ export async function desktopControl(command: DesktopCommand) {
         ...(el instanceof HTMLInputElement ? { type: el.type, checked: el.checked } : {}),
         ...(field && !(el instanceof HTMLInputElement && el.type === 'password') ? { value: el.value } : {}),
         ...(el instanceof HTMLSelectElement ? { options: Array.from(el.options).map(o => ({ label: o.label, value: o.value, disabled: o.disabled || !!o.closest('optgroup:disabled') })) } : {}),
-        ...(el.hasAttribute('aria-expanded') ? { expanded: el.getAttribute('aria-expanded')! } : {}),
+        ...(el.hasAttribute('aria-expanded') ? { expanded: el.getAttribute('aria-expanded')! } :
+          el.tagName === 'SUMMARY' && el.parentElement instanceof HTMLDetailsElement ? { expanded: String(el.parentElement.open) } : {}),
         ...(el.hasAttribute('aria-selected') ? { selected: el.getAttribute('aria-selected')! } : {}),
         ...(el.hasAttribute('aria-current') ? { current: el.getAttribute('aria-current')! } : {}),
         ...(el.hasAttribute('aria-pressed') ? { pressed: el.getAttribute('aria-pressed')! } : {})

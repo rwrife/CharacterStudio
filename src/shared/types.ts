@@ -1,9 +1,36 @@
 export type Vec3 = [number, number, number]
 export type Landmarks = Record<string, Vec3>
 export type SkinningMode = 'automatic' | 'fallback'
+export interface FingerPose {
+  thumb: number
+  index: number
+  fingers: number
+  opposition: number
+}
+export interface FingerTrack {
+  fingers: { left: FingerPose; right: FingerPose }
+  keyframes?: { time: number; fingers: { left: FingerPose; right: FingerPose } }[]
+}
+export type HandPose = {
+  version: 1
+  detail: 'wrist'
+  left: Vec3
+  right: Vec3
+} | {
+  version: 2
+  detail: 'basic'
+  left: Vec3
+  right: Vec3
+  fingers: { left: FingerPose; right: FingerPose }
+  keyframes?: FingerTrack['keyframes']
+}
+export interface HandPoseSpan { start: number; end: number; pose: HandPose }
+export type HandSide = 'left' | 'right'
+export type HandRig = { detail: 'wrist' } | { detail: 'basic'; thumbRadius: number; indexRadius: number; fingersRadius: number }
 export interface RigSetup {
   rotation: Vec3
   landmarks: Landmarks
+  hands?: { left: HandRig; right: HandRig }
 }
 export interface LandmarkSuggestion {
   landmarks: Landmarks
@@ -28,6 +55,8 @@ export interface Character {
   rigged: boolean
   rigPreviewUrl?: string
   rigWarnings?: string[]
+  handPose?: HandPose
+  fixedGrip?: { sourceCharacterId: string; jobId: string; pose: HandPose }
 }
 export type Stage = 'importing' | 'rigging' | 'preflight' | 'queued' | 'generating' | 'retargeting' | 'complete' | 'failed' | 'cancelled'
 export interface Job {
@@ -61,6 +90,9 @@ export interface Job {
   transitionPreviewUrl?: string
   textEncoder?: 'llm2vec' | 'lfm'
   ai?: import('./ai').AiProvenance[]
+  handPose?: HandPose
+  handRigSignature?: string
+  handTimeline?: HandPoseSpan[]
 }
 export interface Check {
   name: string
@@ -90,6 +122,7 @@ export interface MotionNode {
   stance: string
   position: { x: number; y: number }
   legacySegments?: boolean
+  fingerPose?: FingerTrack
 }
 export interface MotionEdge {
   id: string
@@ -146,6 +179,8 @@ export interface Batch {
   items: BatchItem[]
   textEncoder?: 'llm2vec' | 'lfm'
   aiRoute?: import('./ai').AiRoute
+  handPoses?: Record<string, HandPose>
+  handRigSignatures?: Record<string, string>
 }
 export interface Snapshot {
   settings: Settings
@@ -191,6 +226,8 @@ export interface StudioApi {
   importCharacter(): Promise<Character | null>
   importCollection(): Promise<Character[]>
   saveSetup(id: string, setup: RigSetup): Promise<Character>
+  saveHandPose(id: string, pose: HandPose): Promise<Character>
+  bakeHandGrip(id: string): Promise<Character>
   fitLandmarks(id: string, rotation: Vec3): Promise<LandmarkSuggestion>
   rig(id: string, skinning?: SkinningMode): Promise<void>
   generate(request: GenerateRequest): Promise<void>

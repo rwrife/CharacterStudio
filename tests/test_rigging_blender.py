@@ -46,6 +46,7 @@ class BlenderSkinTests(unittest.TestCase):
         for name, tail, _ in character.BONES:
             center = character.C @ ((Vector(self.points[name]) + Vector(self.points[tail])) * 0.5)
             bpy.ops.mesh.primitive_uv_sphere_add(segments=8, ring_count=6, radius=0.02, location=center)
+            bpy.context.object["fixture_bone"] = name
         self.input = self.root / "input.blend"
         bpy.ops.wm.save_as_mainfile(filepath=str(self.input))
         self.request = {"input": str(self.input), "output": str(self.root / "output"),
@@ -231,9 +232,92 @@ class BlenderSkinTests(unittest.TestCase):
         for index, weights in preserved.items():
             self.assertEqual([(g.group, g.weight) for g in obj.data.vertices[index].groups], weights)
 
+    def test_wrist_offsets_bake_without_changing_skin_or_source_motion(self):
+        self.run_rig("fallback")
+        rig = bpy.data.objects["StudioHumanoid"]
+        for obj in character.meshes():
+            obj.vertex_groups.clear()
+            obj.vertex_groups.new(name=obj["fixture_bone"]).add(list(range(len(obj.data.vertices))), 1, "REPLACE")
+        character.validate_skin(rig, character.meshes())
+        rest = {name: rig.data.bones[name].matrix_local.to_quaternion().copy() for name, _, _ in character.BONES}
+        source = self.root / "source.blend"
+        bpy.ops.wm.save_as_mainfile(filepath=str(source))
+        names = list(self.points)
+        positions = dict(self.points)
+        for side in ("Left", "Right"):
+            names.append(side + "HandMiddle1")
+            positions[side + "HandMiddle1"] = positions[side + "HandEnd"]
+        rotations = [[list(row) for row in Matrix.Identity(3)] for _ in names]
+        second = json.loads(json.dumps(rotations))
+        second[names.index("LeftHand")] = [list(row) for row in Matrix.Rotation(0.4, 3, "Y")]
+        motion = self.root / "motion.json"
+        motion.write_text(json.dumps({
+            "joint_names": names, "neutral_joints": [positions[name] for name in names],
+            "global_rot_mats": [rotations, second],
+            "root_positions": [positions["Hips"], positions["Hips"]], "fps": 30
+        }))
+        original_motion = motion.read_bytes()
+        pose = {"version": 1, "detail": "wrist", "left": [31, -42, 63], "right": [0, 0, 0]}
+        baseline = {}
+        weights = None
+        for label, hand_pose in (("base", None), ("offset", pose)):
+            output = self.root / label
+            character.animate_character({
+                "input": str(source), "motion": str(motion), "output": str(output), "handPose": hand_pose
+            })
+            rig = bpy.data.objects["StudioHumanoid"]
+            current_weights = {o.name: [[(o.vertex_groups[g.group].name, g.weight) for g in v.groups] for v in o.data.vertices]
+                               for o in character.meshes()}
+            if label == "base":
+                weights = current_weights
+            else:
+                self.assertEqual(current_weights, weights)
+            for frame in (1, 2):
+                bpy.context.scene.frame_set(frame)
+                values = {bone.name: bone.rotation_quaternion.copy() for bone in rig.pose.bones}
+                if label == "base":
+                    baseline[frame] = values
+                else:
+                    offsets = character.hand_corrections(pose, rest)
+                    for name, value in values.items():
+                        expected = baseline[frame][name]
+                        if name in offsets:
+                            expected = expected @ offsets[name]
+                        self.assertLess(value.rotation_difference(expected).angle, 0.001)
+            report = json.loads((output / "animation-report.json").read_text())
+            self.assertEqual(report["handPose"], hand_pose)
+            self.assertEqual(motion.read_bytes(), original_motion)
+            if os.environ.get("STUDIO_RIG_TEST_OUTPUT"):
+                destination = Path(os.environ["STUDIO_RIG_TEST_OUTPUT"])
+                shutil.copyfile(output / "animated.glb", destination / f"hand-{label}.glb")
+                (destination / "hand-pose.json").write_text(json.dumps(pose))
+            # Reimport FBX and check its actual baked wrist matrix at the first frame.
+            bpy.context.scene.frame_set(1)
+            expected_matrix = rig.pose.bones["LeftHand"].matrix.copy()
+            bpy.ops.wm.read_factory_settings(use_empty=True)
+            bpy.ops.import_scene.fbx(filepath=str(output / "animated.fbx"), ignore_leaf_bones=False)
+            bpy.context.scene.frame_set(1)
+            imported = next(obj for obj in bpy.context.scene.objects if obj.type == "ARMATURE")
+            self.assertLess(imported.pose.bones["LeftHand"].matrix.to_quaternion().rotation_difference(expected_matrix.to_quaternion()).angle, 0.001)
+
+    def test_hand_pose_validation_and_rest_frame(self):
+        rest = {"LeftHand": Matrix.Rotation(0.9, 3, "Z").to_quaternion(), "RightHand": Matrix.Rotation(-0.4, 3, "X").to_quaternion()}
+        pose = {"version": 1, "detail": "wrist", "left": [90, 0, 0], "right": [0, 0, 0]}
+        offsets = character.hand_corrections(pose, rest)
+        expected = (character.C @ Matrix.Rotation(math.pi / 2, 3, "X") @ character.C.inverted()).to_quaternion() @ rest["LeftHand"]
+        self.assertLess((rest["LeftHand"] @ offsets["LeftHand"]).rotation_difference(expected).angle, 0.001)
+        self.assertLess(offsets["RightHand"].angle, 0.001)
+        self.assertEqual(character.hand_corrections(None, rest), {})
+        for invalid in ({}, {**pose, "detail": "basic"}, {**pose, "version": True}, {**pose, "extra": 1},
+                        {**pose, "left": [0, 0, 181]}, {**pose, "left": [0, 0, float("nan")]},
+                        {**pose, "right": [0, 0, True]}, {**pose, "left": [0, 0]}):
+            with self.assertRaises(ValueError):
+                character.hand_corrections(invalid, rest)
+
 
 suite = unittest.defaultTestLoader.loadTestsFromTestCase(BlenderSkinTests)
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 suite.addTests(unittest.defaultTestLoader.loadTestsFromName("test_skin_weights"))
+suite.addTests(unittest.defaultTestLoader.loadTestsFromName("test_hand_rig_blender"))
 if not unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful():
     raise RuntimeError("Rigging regression tests failed")

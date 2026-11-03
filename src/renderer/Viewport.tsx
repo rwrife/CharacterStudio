@@ -3,13 +3,17 @@ import * as THREE from 'three'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { TransformControls } from 'three/addons/controls/TransformControls.js'
-import { boneLinks } from '../shared/rig'
-import type { RigSetup, Vec3 } from '../shared/types'
-import { Box, Crosshair, Pause, Play, RotateCcw, Scan, PersonStanding } from 'lucide-react'
+import { fingerChains, fingerRotation, fittingLinks, fittingPoints, handPrefix, handSides, openFingers } from '../shared/hand-rig'
+import type { HandPose, RigSetup, Vec3 } from '../shared/types'
+import { wristCorrection } from '../shared/hand-pose'
+import { poseAt } from '../shared/hand-animation'
+import { Box, Crosshair, Hand, Pause, Play, RotateCcw, Scan, PersonStanding } from 'lucide-react'
 
 interface Props {
   url?: string
   setup?: RigSetup
+  handPose?: HandPose
+  handTime?: number
   fit: boolean
   selected: string
   onSelect: (name: string) => void
@@ -28,6 +32,7 @@ interface SceneState {
   mixer?: THREE.AnimationMixer
   clips: THREE.AnimationClip[]
   clock: THREE.Clock
+  wrists: Map<string, { bone: THREE.Bone; local: THREE.Quaternion; world: THREE.Quaternion }>
 }
 
 function disposeObject(root: THREE.Object3D) {
@@ -100,7 +105,7 @@ export function Viewport(props: Props) {
       if (p) latest.current.onMove(latest.current.selected, [p.x, p.y, p.z])
     })
     scene.add(model, landmarks, transform.getHelper())
-    const current: SceneState = { scene, camera, controls, transform, model, landmarks, bones, markers: new Map(), clips: [], clock: new THREE.Clock() }
+    const current: SceneState = { scene, camera, controls, transform, model, landmarks, bones, markers: new Map(), clips: [], clock: new THREE.Clock(), wrists: new Map() }
     state.current = current
     const raycaster = new THREE.Raycaster()
     const pick = (event: PointerEvent) => {
@@ -152,6 +157,7 @@ export function Viewport(props: Props) {
     s.mixer?.stopAllAction()
     s.mixer = undefined
     s.clips = []
+    s.wrists.clear()
     disposeObject(s.model)
     s.model.clear()
     setDuration(0); setTime(0); setError('')
@@ -164,8 +170,11 @@ export function Viewport(props: Props) {
       const container = new THREE.Group()
       container.add(gltf.scene)
       s.model.add(container)
+      gltf.scene.updateMatrixWorld(true)
       gltf.scene.traverse(obj => {
         if (obj instanceof THREE.Mesh) { obj.frustumCulled = false }
+        if (obj instanceof THREE.Bone && /^(Left|Right)(Hand|Thumb[12]|Index[123]|Fingers[123])$/.test(obj.name))
+          s.wrists.set(obj.name, { bone: obj, local: obj.quaternion.clone(), world: obj.getWorldQuaternion(new THREE.Quaternion()) })
       })
       s.clips = gltf.animations
       if (gltf.animations.length) {
@@ -205,10 +214,14 @@ export function Viewport(props: Props) {
     }
     s.landmarks.visible = props.fit
     if (!props.fit || !props.setup) { s.transform.detach(); return }
-    for (const [name, position] of Object.entries(props.setup.landmarks)) {
+    const points = fittingPoints(props.setup)
+    for (const [name, marker] of s.markers) if (!points[name]) {
+      s.landmarks.remove(marker); disposeObject(marker); s.markers.delete(name)
+    }
+    for (const [name, position] of Object.entries(points)) {
       let marker = s.markers.get(name)
       if (!marker) {
-        marker = new THREE.Mesh(new THREE.SphereGeometry(0.022, 12, 8), new THREE.MeshBasicMaterial({ depthTest: false, transparent: true, opacity: 0.9 }))
+        marker = new THREE.Mesh(new THREE.SphereGeometry(/(Thumb|Index|Fingers|PalmNormal)/.test(name) ? 0.006 : 0.022, 12, 8), new THREE.MeshBasicMaterial({ depthTest: false, transparent: true, opacity: 0.9 }))
         marker.name = name
         marker.renderOrder = 10
         s.markers.set(name, marker)
@@ -219,7 +232,7 @@ export function Viewport(props: Props) {
       material.color.set(name === props.selected ? '#ffffff' : '#c2e986')
       marker.scale.setScalar(name === props.selected ? 1.4 : 1)
     }
-    const coords = boneLinks.flatMap(([a, b]) => [...props.setup!.landmarks[a], ...props.setup!.landmarks[b]])
+    const coords = fittingLinks(props.setup).filter(([a, b]) => points[a] && points[b]).flatMap(([a, b]) => [...points[a], ...points[b]])
     s.bones.geometry.dispose()
     s.bones.geometry = new THREE.BufferGeometry()
     s.bones.geometry.setAttribute('position', new THREE.Float32BufferAttribute(coords, 3))
@@ -227,14 +240,49 @@ export function Viewport(props: Props) {
     if (selected) s.transform.attach(selected)
   }, [props.setup, props.fit, props.selected, props.kind, ready, wireframe])
 
-  function view(mode: 'front' | 'side' | 'reset') {
+  useEffect(() => {
+    const s = state.current
+    if (!s || props.kind !== 'rig' || !props.handPose) return
+    const pose = poseAt(props.handPose, props.handTime ?? 0)
+    for (const side of ['left', 'right'] as const) {
+      const name = side === 'left' ? 'LeftHand' : 'RightHand'
+      const wrist = s.wrists.get(name)
+      if (!wrist) {
+        if (s.model.children.length) setError(`Cannot preview ${name}: the hand bone is missing. Rebuild the humanoid rig.`)
+        continue
+      }
+      wrist.bone.quaternion.copy(wrist.local).multiply(wristCorrection(pose[side], wrist.world))
+    }
+    for (const side of handSides) for (const chain of fingerChains) for (let i = 0; i < chain.segments; i++) {
+      const name = `${handPrefix(side)}${chain.name}${i + 1}`
+      const joint = s.wrists.get(name)
+      if (!joint) {
+        if (props.setup?.hands?.[side].detail === 'basic' && s.model.children.length)
+          setError(`Cannot preview ${name}: rebuild the fitted hand rig.`)
+        continue
+      }
+      joint.bone.quaternion.copy(joint.local).multiply(fingerRotation(side, chain, i,
+        pose.version === 2 ? pose.fingers[side] : openFingers()))
+    }
+    s.model.updateMatrixWorld(true)
+  }, [props.handPose, props.handTime, props.setup, props.kind, props.url, ready])
+
+  function view(mode: 'front' | 'side' | 'reset' | 'left-hand' | 'right-hand') {
     const s = state.current
     if (!s) return
     s.controls.enableDamping = false
     s.controls.update()
-    s.controls.target.set(0, 1, 0)
     s.camera.up.set(0, 1, 0)
-    s.camera.position.set(...(mode === 'front' ? [0, 1, 5] : mode === 'side' ? [5, 1, 0] : [3.3, 2.2, 4.8]) as Vec3)
+    if (mode === 'left-hand' || mode === 'right-hand') {
+      const name = mode === 'left-hand' ? 'LeftHand' : 'RightHand'
+      const start = props.setup?.landmarks[name], end = props.setup?.landmarks[`${name}End`]
+      if (!start || !end) return
+      s.controls.target.copy(new THREE.Vector3(...start).add(new THREE.Vector3(...end)).multiplyScalar(0.5))
+      s.camera.position.copy(s.controls.target).add(new THREE.Vector3(0, 0.3, 0.5))
+    } else {
+      s.controls.target.set(0, 1, 0)
+      s.camera.position.set(...(mode === 'front' ? [0, 1, 5] : mode === 'side' ? [5, 1, 0] : [3.3, 2.2, 4.8]) as Vec3)
+    }
     s.controls.update()
     s.controls.enableDamping = true
   }
@@ -245,6 +293,8 @@ export function Viewport(props: Props) {
       <button title="Front view" aria-label="Front view" onClick={() => view('front')}><PersonStanding size={17} /></button>
       <button title="Side view" aria-label="Side view" onClick={() => view('side')}><Box size={17} /></button>
       <button title="Reset camera" aria-label="Reset camera" onClick={() => view('reset')}><Scan size={17} /></button>
+      {props.setup && handSides.map(side => <button key={side} title={`Focus ${side} hand`} aria-label={`Focus ${side} hand`}
+        onClick={() => view(`${side}-hand`)}><Hand size={17} aria-hidden="true" style={{ transform: side === 'left' ? 'scaleX(-1)' : undefined }} /></button>)}
       <button title="Wireframe" aria-label="Toggle wireframe" aria-pressed={wireframe} className={wireframe ? 'selected' : ''} onClick={() => setWireframe(!wireframe)}><Crosshair size={17} /></button>
     </div>
     {!props.url && <div className="empty-viewport"><div className="character-outline"><PersonStanding size={100} strokeWidth={0.65} /></div><h2>Your character. In motion.</h2><p>Import an FBX to start building<br />a locally rigged, animated character.</p><span>FBX → RIG → MOTION → ANIMATED MESH</span></div>}

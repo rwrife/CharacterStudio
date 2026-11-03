@@ -263,6 +263,8 @@ if (ownsWorkspace) app.whenReady().then(async () => {
     return characters
   })
   handle('studio:setup', (id: string, setup: RigSetup) => studio.saveSetup(id, setup))
+  handle('studio:hand-pose', (id: unknown, pose: unknown) => studio.saveHandPose(z.string().uuid().parse(id), pose))
+  handle('studio:bake-hand-grip', (id: unknown) => studio.bakeHandGrip(z.string().uuid().parse(id)))
   handle('studio:fit-landmarks', (id: unknown, rotation: unknown) => studio.fitLandmarks(z.string().uuid().parse(id), rotationSchema.parse(rotation)))
   handle('studio:rig', (id: string, skinning?: import('../shared/types').SkinningMode) => studio.rig(id, false, skinning))
   handle('studio:generate', (request: GenerateRequest) => studio.generate(request))
