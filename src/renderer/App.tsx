@@ -8,7 +8,7 @@ import { MocapPanel } from './MocapPanel'
 import { SetupWizard } from './SetupWizard'
 import { FileDialog } from './FileDialog'
 import { LaunchCheck } from './LaunchCheck'
-import { defaultLandmarks } from '../shared/rig'
+import { defaultLandmarks, turnModel } from '../shared/rig'
 import { AiProvidersPanel, AiRouteBadge } from './AiProvidersPanel'
 import { AiConsent } from './AiConsent'
 import { HandPosePanel } from './HandPosePanel'
@@ -148,6 +148,12 @@ export function App() {
     const updated = await window.studio.saveSetup(character.id, setup)
     setSetup(updated.setup); setHandPose(updated.handPose ?? defaultHandPose()); setDirty(false)
   }
+  function reorient(rotation: Vec3) {
+    if (locked) return
+    setSetup(old => ({ ...old, rotation })); setDirty(true)
+    setMode('input'); setFit(true)
+    setNotice('Orientation preview updated. Face the model forward (+Z), then auto-fit or review the landmarks before saving and rebuilding the rig. Original files and completed takes are unchanged.')
+  }
   async function autoFit() {
     if (!character) return
     await perform(async () => {
@@ -246,8 +252,18 @@ export function App() {
             setNotice('Hand pose saved without rebuilding skin weights. New character animations use these offsets; completed takes are unchanged.')
           })} /> : animatorStep === 'fit' ? character ? <>
           <div className="section-kicker">02 / PREPARE CHARACTER</div><h2>Fit the humanoid rig</h2><p className="panel-description">Use a full-body T- or A-pose. Point the character forward (+Z), auto-fit the joints, then check that each joint sits inside the mesh.</p>
-          <label className="field-label">Orientation <span>degrees</span></label>
-          <div className="xyz-fields">{(['X', 'Y', 'Z'] as const).map((axis, i) => <label key={axis}>{axis}<select aria-label={`Rotate ${axis}`} disabled={locked} value={setup.rotation[i]} onChange={e => { const rotation = [...setup.rotation] as Vec3; rotation[i] = Number(e.target.value); setSetup({ ...setup, rotation }); setDirty(true) }}>{[-180, -90, 0, 90, 180].map(v => <option key={v} value={v}>{v}°</option>)}</select></label>)}</div>
+          <div className="model-orientation" role="group" aria-label="Reorient model">
+            <label className="field-label">Reorient model <span>degrees</span></label>
+            <p className="fine-print">Sideways or lying down? Tilt on X or Z. Facing sideways or backward? Turn on Y. These rotate the model, not the camera.</p>
+            <div className="xyz-fields">{(['X', 'Y', 'Z'] as const).map((axis, i) => <label key={axis}>{axis}<select aria-label={`Rotate ${axis}`} disabled={locked} value={setup.rotation[i]} onChange={e => { const rotation: Vec3 = [...setup.rotation]; rotation[i] = Number(e.target.value); reorient(rotation) }}>{[...new Set([-180, -90, 0, 90, 180, setup.rotation[i]])].sort((a, b) => a - b).map(v => <option key={v} value={v}>{v}°</option>)}</select></label>)}</div>
+            {(['X', 'Y', 'Z'] as const).map((axis, i) => <div className="orientation-turns" key={axis}>
+              <span>{axis === 'Y' ? 'Turn Y' : `Tilt ${axis}`}</span>
+              {([-90, 90] as const).map(degrees => <button key={degrees} disabled={locked} aria-label={`Rotate model ${axis} ${degrees > 0 ? '+' : ''}${degrees} degrees`} onClick={() => reorient(turnModel(setup.rotation, i as 0 | 1 | 2, degrees))}>{degrees > 0 ? '+' : ''}{degrees}°</button>)}
+            </div>)}
+            <button className="text-button full" disabled={locked} onClick={() => reorient(turnModel(setup.rotation, 1, 180))}>Turn model around (180°)</button>
+            <button className="text-button full" disabled={locked || setup.rotation.every(angle => angle === 0)} onClick={() => reorient([0, 0, 0])}>Reset model orientation</button>
+            <p className="fine-print">Preview only until you save the fit or build the rig. Landmarks stay in place; auto-fit after changing orientation. Saving requires rebuilding the rig for new animations.</p>
+          </div>
           <HandRigControls setup={setup} disabled={locked} onChange={(value, point) => { setSetup(value); setSelected(point); setDirty(true) }} />
           <label className="field-label" htmlFor="joint-select">Selected landmark</label>
           <select id="joint-select" value={activeLandmark} disabled={locked} onChange={e => setSelected(e.target.value)}>{Object.keys(fittingPoints(setup)).map(name => <option key={name}>{name}</option>)}</select>
@@ -261,6 +277,10 @@ export function App() {
             setSetup(reset); setSelected('Hips'); setDirty(true)
           }}><RotateIcon /> Reset landmark template</button>
           {dirty && <button className="text-button full" disabled={locked} onClick={() => void perform(async () => { await saveFit(); setNotice('Fit saved. Rebuild the rig to apply these changes.') })}><CheckIcon size={14} /> Save fit without rigging</button>}
+          {dirty && <button className="text-button full" disabled={locked} onClick={() => {
+            setSetup(structuredClone(character.setup)); setDirty(false)
+            setMode('input'); setFit(true); setNotice('Unsaved orientation and landmark changes discarded.')
+          }}>Discard fit changes</button>}
           <div className="rig-action-step">
             <strong>1. Try automatic rigging first</strong>
             <p>Build a skinned rig from these points. If it fails or the joints bend poorly, adjust the points and use step 2.</p>
