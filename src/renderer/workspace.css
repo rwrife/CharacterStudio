@@ -21,6 +21,9 @@
 .topbar > .brand { justify-self: start; }
 .brand > .brand-mark { width: 42px; height: 42px; display: block; object-fit: contain; background: none; border-radius: 0; }
 .brand-name { display: flex; flex-direction: column; gap: 3px; }
+.brand-name > strong { font-size: 24px; font-weight: 700; letter-spacing: -.8px; line-height: 1.1; }
+.brand-name > strong > span { color: var(--accent-primary); font-weight: 300; margin-left: 4px; }
+.brand-tagline { color: var(--accent-primary); font-size: 8px; font-weight: 500; letter-spacing: 1.5px; line-height: 1.4; text-transform: uppercase; }
 .topbar > .topbar-actions { justify-self: end; }
 .connection.icon-only { padding: 8px; aspect-ratio: 1; }
 .workspace-tabs { display: flex; align-items: center; gap: 24px; justify-self: center; }
