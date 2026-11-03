@@ -190,7 +190,7 @@ export function App() {
   ]
   return <div className="app">
     <header className="topbar">
-      <div className="brand"><img className="brand-mark" src="./icon.png" alt="" width={48} height={48} /><div className="brand-name"><strong>character<span>studio</span></strong></div></div>
+      <div className="brand"><img className="brand-mark" src="./icon.png" alt="" width={48} height={48} /><div className="brand-name"><strong>character<span>studio</span></strong><span className="brand-tagline">Your vision. In motion.</span></div></div>
       <nav className="workspace-tabs" role="tablist" aria-label="Character workspace" onKeyDown={event => {
         if (handDirty || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
         event.preventDefault()
