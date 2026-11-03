@@ -47,6 +47,16 @@ const click = async (name, role = 'button') => call('studio_click', { ref: (awai
 const fill = async (name, value) => call('studio_set_value', { ref: (await locate(name, 'textbox')).ref, value })
 try {
   const page = await app.firstWindow()
+  const checkHeaderButtons = async () => {
+    const buttons = await Promise.all(['Model Settings', 'Setup checklist', 'Backend connections'].map(name =>
+      page.getByRole('button', { name, exact: true }).boundingBox()))
+    assert.ok(buttons.every(Boolean), 'All header actions are visible.')
+    for (const box of buttons) {
+      assert.equal(box.height, 34, 'Header buttons share a consistent 34px height.')
+      assert.ok(Math.abs(box.y - buttons[0].y) < 0.5, 'Header buttons align at the same top edge.')
+    }
+    assert.equal(buttons[1].width, 34, 'The icon-only setup button remains square.')
+  }
   page.on('pageerror', error => errors.push(error.message))
   await page.getByRole('heading', { name: 'Character lab' }).waitFor()
   await until(() => access(connection).then(() => true, error => { if (error.code !== 'ENOENT') throw error; return false }), 'MCP connection file')
@@ -61,6 +71,7 @@ try {
   assert.equal(await page.getByRole('dialog', { name: 'Model Settings' }).count(), 0)
   for (const width of [1100, 1440, 1700]) {
     await page.setViewportSize({ width, height: 1000 })
+    await checkHeaderButtons()
     const canvasWidth = (await page.getByLabel('Designer canvas', { exact: true }).boundingBox()).width
     assert.ok(canvasWidth > width - 350)
     await click('Model Settings')
@@ -77,6 +88,7 @@ try {
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(1.25))
   for (const workspace of ['Designer', 'Animator']) {
     await click(workspace, 'tab')
+    await checkHeaderButtons()
     assert.ok(await page.locator('.topbar').evaluate(el => el.scrollWidth <= el.clientWidth + 1), 'Header fits the minimum window at 125% scale.')
     const process = page.getByRole('navigation', { name: `${workspace} process` })
     const top = (await process.boundingBox()).y

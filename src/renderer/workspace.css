@@ -22,7 +22,8 @@
 .brand > .brand-mark { width: 42px; height: 42px; display: block; object-fit: contain; background: none; border-radius: 0; }
 .brand-name { display: flex; flex-direction: column; gap: 3px; }
 .topbar > .topbar-actions { justify-self: end; }
-.connection.icon-only { padding: 8px; aspect-ratio: 1; }
+.topbar-actions > .connection { height: 34px; white-space: nowrap; }
+.connection.icon-only { width: 34px; padding: 0; flex-shrink: 0; }
 .workspace-tabs { display: flex; align-items: center; gap: 24px; justify-self: center; }
 .workspace-tabs button { padding: 10px 0; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--text-secondary); font-size: 19px; }
 .workspace-tabs button.active { color: var(--text-primary); border-bottom-color: var(--lime); }
