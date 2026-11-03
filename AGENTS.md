@@ -29,7 +29,7 @@ npm run dev
 
 `npm run build` performs type checking and builds the Electron application. `npm start` opens the build. `npm run package` creates the Windows ARM64 portable application with its isolated Blender runtime.
 
-ComfyUI is a separately configured local dependency, normally under `%LOCALAPPDATA%\ComfyUI` with a loopback API at `http://127.0.0.1:8189`. Use the README and in-app readiness guide for model requirements and authentication; do not install or replace backend packages indiscriminately.
+ComfyUI is a separately configured local dependency, normally under `%LOCALAPPDATA%\ComfyUI` with a loopback API at `http://127.0.0.1:8189`. Use `GUIDE.md` and the in-app readiness guide for detailed model requirements and authentication; do not install or replace backend packages indiscriminately.
 
 ## Implementation principles
 
@@ -86,15 +86,17 @@ npm run typecheck
 
 For MCP or desktop control changes, also run `npm run test:mcp`. This exercises a real stdio MCP client against the visible Electron app, including graph persistence, imports/exports, file selection and settings without requiring inference weights or a sample FBX. New workflows must include coverage that observes their actual UI effect; clicking a generation button does not establish successful inference.
 
-Use `npm run test:desktop` for FBX import and rig-control changes when the required local tools and sample asset are available. The other focused smoke and integration commands are documented in the README.
+Use `npm run test:desktop` for FBX import and rig-control changes when the required local tools and sample asset are available. The other focused smoke and integration commands are documented in `GUIDE.md`.
 
 Native integration checks require the isolated Blender runtime and, for some checks, the existing ComfyUI Python environment. Character integration scripts expect a user-supplied `artifacts\Bruiser_base.fbx`; that asset is not versioned. Do not download substitute third-party assets or gated weights just to make a check pass.
 
 ## README maintenance
 
-- Update `README.md` in the same change whenever adding a major user-facing feature or materially changing an existing one. Also update it when changing setup, supported workflows, exports, model requirements, or limitations; documentation is part of completing the feature.
-- Keep the introduction and **Features at a glance** aligned with the implemented application. Add or revise the relevant workflow section with how to access the feature, required setup, supported inputs/outputs, and important limitations. Use actual UI labels and working commands.
-- Add or refresh screenshots for major UI features under `docs/screenshots` and embed them in the README with descriptive alt text and captions. Use actual app captures, not mockups; keep repository-owned copies rather than linking to ignored `artifacts` files, temporary paths, or private external locations.
+- Treat `README.md` as a concise, screenshot-led marketing landing page, not a changelog, technical manual or test report. Add feature coverage only for major user-facing additions or material changes to the product story; do not append routine bug fixes, minor controls, implementation details or test logs.
+- Keep the introduction, **Features at a glance** and **Advanced features** focused on compelling user benefits that the application actually implements. Keep **Future directions** explicitly labeled as unshipped aspirations, separate from available features; do not invent delivery dates or guarantees.
+- Retain concise **Basic requirements** and **Getting started** sections with working commands. Correct existing setup, compatibility, export or limitation claims whenever a change would make them misleading, even if the change is not a major feature; this is an accuracy correction, not a new marketing callout.
+- Put detailed workflow instructions, model/setup requirements, provider/API contracts, troubleshooting, validation commands and technical limitations in `GUIDE.md` (or a focused linked document), not in new README subsections. Update the relevant guide in the same change when behavior changes, and link from the README only where useful for onboarding or a major feature.
+- Add or refresh screenshots for major UI features under `docs/screenshots` and embed a curated selection in the README with descriptive alt text and concise captions. Use actual app captures, not mockups; keep repository-owned copies rather than linking to ignored `artifacts` files, temporary paths, or private external locations. Keep extended galleries and detailed evidence in the guide.
 - Inspect screenshots before including them. Omit private paths, credentials, and personal data. Label historical UI, imported assets, analytic/test fixtures, and experimental outputs accurately; screenshots are not proof of motion quality or end-to-end success.
 - Verify feature claims against the implementation and observed results. Distinguish available functionality from prerequisites, unverified stages, experiments, and future goals. When evidence changes, update stale limitations without extrapolating success to other stages or models.
-- Before finishing, check that README links and screenshot paths resolve and that existing setup and compatibility guidance remains accurate. If a required capture or integration result is unavailable, state that limitation rather than inventing evidence.
+- Before finishing, check that README and guide links and screenshot paths resolve and that existing setup and compatibility guidance remains accurate. If a required capture or integration result is unavailable, state that limitation rather than inventing evidence.
