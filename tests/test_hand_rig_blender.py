@@ -8,7 +8,7 @@ import tempfile
 import unittest
 
 import bpy
-from mathutils import Matrix, Vector
+from mathutils import Matrix, Quaternion, Vector
 import character
 from hand_rig import CHAINS, finger_corrections
 
@@ -156,6 +156,34 @@ class BlenderHandTests(unittest.TestCase):
                                          "handTimeline": [timeline[0], {"start": 2, "end": 6, "pose": closed_pose}]})
         self.assertFalse((self.root / "invalid-branch" / "animated.glb").exists())
         self.assertEqual(self.source.read_bytes(), source_bytes)
+
+    def test_mocap_preserves_saved_wrist_offsets_and_finger_keys(self):
+        rig = self.rig()
+        source = self.root / "rig" / "rigged.blend"
+        before = source.read_bytes()
+        rest = {name: rig.data.bones[name].matrix_local.to_quaternion() for name, _, _ in character.BONES}
+        names = [name for name, _, _ in character.BONES if not name.endswith("Hand")]
+        motion = self.root / "mocap.json"
+        motion.write_text(json.dumps({"version": 1, "fps": 30, "frames": 3, "bones": names,
+                                     "rotations": [[[1, 0, 0, 0] for _ in names]] * 3, "hips": [[0, 0, 0]] * 3}))
+        opened = {side: {"thumb": 0, "index": 0, "fingers": 0, "opposition": 0} for side in ("left", "right")}
+        closed = {**opened, "left": {**opened["left"], "index": .8}}
+        pose = {"version": 2, "detail": "basic", "left": [15, -20, 10], "right": [0, 0, 0], "fingers": opened,
+                "keyframes": [{"time": 0, "fingers": opened}, {"time": .5, "fingers": closed}, {"time": 1, "fingers": opened}]}
+        output = self.root / "mocap"
+        character.mocap_character({"input": str(source), "motion": str(motion), "handPose": pose, "output": str(output)})
+        rig = bpy.data.objects["StudioHumanoid"]
+        for frame, curl in ((1, 0), (2, .8), (3, 0)):
+            bpy.context.scene.frame_set(frame)
+            self.assertLess(rig.pose.bones["LeftIndex3"].rotation_quaternion.rotation_difference(
+                Quaternion((1, 0, 0), -math.radians(55) * curl)).angle, .001)
+            self.assertLess(rig.pose.bones["LeftHand"].rotation_quaternion.rotation_difference(
+                character.hand_corrections(pose, rest)["LeftHand"]).angle, .001)
+            self.assertLess(rig.pose.bones["RightIndex3"].rotation_quaternion.angle, .001)
+        self.assertEqual(json.loads((output / "animation-report.json").read_text())["handPose"], pose)
+        for suffix in ("blend", "glb", "fbx"):
+            self.assertGreater((output / f"animated.{suffix}").stat().st_size, 50)
+        self.assertEqual(source.read_bytes(), before)
 
     def test_missing_hand_geometry_is_not_a_success(self):
         for obj in list(character.meshes()):

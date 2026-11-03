@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { readFile, stat } from 'node:fs/promises'
 import { cpus, freemem, totalmem } from 'node:os'
-import { join } from 'node:path'
+import { extname, join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { z } from 'zod'
 import {
@@ -57,6 +57,8 @@ export function motionProviderTemplate(request: GenerateRequest, parameters: Par
     { kind: 'metadata', node: '6', field: 'motion_json' }
   ] })
 }
+const formatClock = (seconds: number) => `${Math.floor(seconds / 60)}:${(seconds % 60).toFixed(1).padStart(4, '0')}`
+const videoMime = (path: string) => ({ '.webm': 'video/webm', '.mov': 'video/quicktime' } as Record<string, string>)[extname(path).toLowerCase()] ?? 'video/mp4'
 interface Execution {
   stage: AiStage
   route?: AiRoute
@@ -68,6 +70,9 @@ interface Execution {
   textEncoder?: string
   image?: string
   mesh?: string
+  /** Source video for pose capture. The whole file is transmitted; the clip range selects the processed span. */
+  video?: string
+  clip?: { start: number; end: number; subject: string }
   constraints?: unknown
   native?: (parameters: Partial<Record<WorkflowParameter, unknown>>) => WorkflowTemplate
   nativeBudgetGB?: number
@@ -162,7 +167,9 @@ export class AiProviders {
       options.progress('Waiting for approval in the desktop. No prompt or asset has been sent.')
       const approved = await this.confirm({
         id: randomUUID(), stage: options.stage, endpoint: route.endpoint, model: route.model,
-        provider: route.provider, inputs: ['Prompt and generation settings', ...(options.image ? ['Character reference image'] : []),
+        provider: route.provider, inputs: [options.stage === 'capture' ? 'Capture settings (clip range and subject)' : 'Prompt and generation settings',
+          ...(options.video && options.clip ? [`Entire reference video file (frames ${formatClock(options.clip.start)}-${formatClock(options.clip.end)} are captured)`] : []),
+          ...(options.image ? ['Character reference image'] : []),
           ...(route.provider === 'tripo' && options.stage === 'mesh' && route.tripoMesh ?
             [`Maximum triangles: ${route.tripoMesh.maxTriangles?.toLocaleString('en-US') ?? 'Automatic'}`, `Smart low-poly: ${route.tripoMesh.smartLowPoly ? 'on' : 'off'}`] : []),
           ...(options.mesh ? ['Character mesh and embedded textures'] : []), ...(options.constraints ? ['Actual incoming / endpoint pose constraints'] : [])]
@@ -201,11 +208,15 @@ export class AiProviders {
       model: network.route.model, textEncoder: options.textEncoder ?? this.settings().textEncoder ?? 'llm2vec',
       referenceStrength: options.referenceStrength ?? 0.3, constraints: JSON.stringify(options.constraints ?? {}),
       prefix: `studio_${randomUUID().replaceAll('-', '')}`,
-      image: options.image ? 'studio_input.png' : '', mesh: options.mesh ? 'studio_input.glb' : ''
+      image: options.image ? 'studio_input.png' : '', mesh: options.mesh ? 'studio_input.glb' : '',
+      video: options.video ? 'studio_input' + extname(options.video).toLowerCase() : '',
+      clipStart: options.clip?.start ?? 0, clipEnd: options.clip?.end ?? 0, subject: options.clip?.subject ?? 'primary'
     }
     const template = network.route.workflow ?? options.native!(parameters)
     if (options.image && network.route.workflow && !template.bindings.some(binding => binding.parameter === 'image'))
       throw new Error('This workflow has no image binding. It cannot preserve the supplied character reference.')
+    if (options.video && !template.bindings.some(binding => binding.parameter === 'video'))
+      throw new Error('This workflow has no video binding. It cannot capture the supplied reference video.')
     const nodes = z.record(z.string(), z.object({ api_node: z.boolean().optional() }).passthrough())
       .parse(await network.json('/object_info', signal))
     for (const node of Object.values(template.prompt)) {
@@ -221,11 +232,11 @@ export class AiProviders {
       if (!stats.devices.some(device => device.type !== 'cpu' && device.vram_free / 2 ** 30 >= budget))
         throw new Error(`This profile requires an estimated ${budget} GiB free on one GPU. Choose a lower-memory model or a Remote route.`)
     }
-    for (const [parameter, path] of [['image', options.image], ['mesh', options.mesh]] as const) {
+    for (const [parameter, path] of [['image', options.image], ['mesh', options.mesh], ['video', options.video]] as const) {
       if (!path) continue
-      const name = `${randomUUID()}.${parameter === 'image' ? 'png' : 'glb'}`
+      const name = `${randomUUID()}${parameter === 'image' ? '.png' : parameter === 'mesh' ? '.glb' : extname(path).toLowerCase()}`
       const form = new FormData()
-      form.append('image', new Blob([new Uint8Array(await this.input(path, parameter === 'mesh' ? 50 * MB : 20 * MB))]), name)
+      form.append('image', new Blob([new Uint8Array(await this.input(path, parameter === 'mesh' ? 50 * MB : parameter === 'video' ? 500 * MB : 20 * MB))]), name)
       form.append('overwrite', 'false')
       const uploaded = z.object({ name: z.string(), subfolder: z.string(), type: z.literal('input') }).parse(await network.json('/upload/image', signal, form))
       if (uploaded.name !== name || uploaded.subfolder) throw new Error('ComfyUI returned an unexpected uploaded input location.')
@@ -288,7 +299,7 @@ export class AiProviders {
   }
   private requireResult(stage: AiStage, result: AiResult) {
     const valid = stage === 'naming' ? !!result.text : stage === 'motion' ? !!result.npz && !!result.bvh && !!result.metadata :
-      ['scene', 'tpose', 'cutout'].includes(stage) ? !!result.image : ['landmarks', 'cloth'].includes(stage) ? result.json !== undefined : !!result.model
+      ['scene', 'tpose', 'cutout'].includes(stage) ? !!result.image : ['landmarks', 'cloth', 'capture'].includes(stage) ? result.json !== undefined : !!result.model
     if (!valid) throw new Error(`Provider completed without the required ${stage} output. No fallback or partial result was published.`)
   }
   private async gateway(network: AiNetwork, options: Execution, submitted: (id: string) => Promise<void>): Promise<AiResult> {
@@ -297,13 +308,15 @@ export class AiProviders {
     const inputs: { kind: string; mimeType: string; base64: string }[] = []
     if (options.image) inputs.push({ kind: 'image', mimeType: 'image/png', base64: (await this.input(options.image)).toString('base64') })
     if (options.mesh) inputs.push({ kind: 'mesh', mimeType: 'model/gltf-binary', base64: (await this.input(options.mesh, 50 * MB)).toString('base64') })
+    if (options.video) inputs.push({ kind: 'video', mimeType: videoMime(options.video), base64: (await this.input(options.video, 100 * MB)).toString('base64') })
     await submitted(id)
     let complete = false
     try {
       const response = z.object({ id: taskIdSchema }).parse(await network.json('/jobs', signal, {
         version: 1, id, stage: options.stage, model: network.route.model, prompt: options.prompt,
         seed: options.seed, steps: options.steps, seconds: options.seconds, textEncoder: options.textEncoder,
-        referenceStrength: options.referenceStrength, constraints: options.constraints, inputs
+        referenceStrength: options.referenceStrength, constraints: options.constraints, inputs,
+        ...(options.clip ? { clipStart: options.clip.start, clipEnd: options.clip.end, subject: options.clip.subject } : {})
       }))
       if (response.id !== id) throw new Error('The API gateway must preserve the supplied job ID for safe cancellation and deduplication.')
       const deadline = Date.now() + 60 * 60 * 1000

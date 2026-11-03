@@ -8,7 +8,7 @@ await mkdir(output, { recursive: true })
 const packaged = process.argv.includes('--packaged')
 const app = await electron.launch({
   ...(packaged ? { executablePath: resolve('release', 'CharacterStudio-win32-arm64', 'CharacterStudio.exe'), args: [] } : { args: ['.'] }),
-  env: { ...process.env, STUDIO_SKIP_SETUP_CHECKLIST: '1', STUDIO_DATA_DIR: resolve('artifacts', 'validation-state') }, timeout: 60000
+  env: { ...process.env, STUDIO_SKIP_SETUP_CHECKLIST: '1', STUDIO_NO_AUTO_INSTALL: '1', STUDIO_DATA_DIR: resolve('artifacts', 'validation-state') }, timeout: 60000
 })
 try {
   const page = await app.firstWindow(), errors = []
@@ -16,6 +16,7 @@ try {
   page.on('console', e => { if (e.type() === 'error') errors.push(e.text()) })
   await page.getByRole('heading', { name: 'Character lab' }).waitFor()
   await page.getByRole('button', { name: 'Motion library & batches' }).click()
+  await page.getByText('Saved graphs & templates', { exact: true }).click()
   await page.getByRole('button', { name: 'Fighting graph template' }).click()
   await expect(page.locator('.react-flow__node')).toHaveCount(3)
   await expect(page.locator('.react-flow__edge')).toHaveCount(3)
@@ -34,11 +35,12 @@ try {
   let state = await page.evaluate(() => window.studio.snapshot())
   const planId = state.plans[0].id, punchId = state.plans[0].nodes.find(n => n.label === 'Right hook').id
   const initialPosition = state.plans[0].nodes.find(n => n.id === punchId).position
+  await punch.scrollIntoViewIfNeeded()
   const box = await punch.boundingBox()
   assert.ok(box)
-  await page.mouse.move(box.x + box.width / 2, box.y + 35)
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
   await page.mouse.down()
-  await page.mouse.move(box.x + box.width / 2 - 30, box.y + 95, { steps: 10 })
+  await page.mouse.move(box.x + box.width / 2 - 30, box.y + box.height / 2 + 60, { steps: 10 })
   await page.mouse.up()
   await page.getByRole('button', { name: 'Save graph', exact: true }).click()
   await expect.poll(async () => (await page.evaluate(() => window.studio.snapshot())).plans.find(p => p.id === planId).nodes.find(n => n.id === punchId).position.y).not.toBe(initialPosition.y)

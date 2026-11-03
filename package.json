@@ -18,13 +18,14 @@
     "test:setup": "node scripts/setup-smoke.mjs",
     "test:rigging": "node --import tsx scripts/test-rigging.ts",
     "test:hand-desktop": "npm run build && node --import tsx scripts/hand-grip-smoke.mjs",
-    "test:mcp": "npm run build && node scripts/mcp-smoke.mjs && node --import tsx scripts/generation-smoke.mjs && node scripts/provider-smoke.mjs && node --import tsx scripts/autofit-smoke.mjs && node --import tsx scripts/hand-pose-smoke.mjs",
+    "test:mcp": "npm run build && node scripts/mcp-smoke.mjs && node --import tsx scripts/generation-smoke.mjs && node scripts/provider-smoke.mjs && node --import tsx scripts/autofit-smoke.mjs && node --import tsx scripts/hand-pose-smoke.mjs && node --import tsx scripts/mocap-smoke.mjs",
     "mcp": "node scripts/mcp-client.mjs",
     "setup:blender": "node --import tsx scripts/setup-blender.ts",
     "package": "npm run build && node --import tsx scripts/package.ts",
     "package:app": "node --import tsx scripts/package.ts"
   },
   "dependencies": {
+    "@mediapipe/tasks-vision": "0.10.35",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@xyflow/react": "12.12.0",
     "lucide-react": "1.61.0",

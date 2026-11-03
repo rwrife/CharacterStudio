@@ -66,6 +66,17 @@ const api: StudioApi = {
   runBatch: request => ipcRenderer.invoke('studio:run-batch', request),
   rerunBatch: id => ipcRenderer.invoke('studio:rerun-batch', id),
   exportBatch: id => ipcRenderer.invoke('studio:export-batch', id),
+  mocapImportCharacter: () => ipcRenderer.invoke('mocap:import-character'),
+  mocapImportVideo: () => ipcRenderer.invoke('mocap:import-video'),
+  mocapSaveRecording: data => ipcRenderer.invoke('mocap:save-recording', data),
+  mocapSaveCapture: (takeId, capture) => ipcRenderer.invoke('mocap:save-capture', takeId, capture),
+  mocapReadCapture: takeId => ipcRenderer.invoke('mocap:read-capture', takeId),
+  mocapCapture: request => ipcRenderer.invoke('mocap:capture', request),
+  mocapDeleteTake: takeId => ipcRenderer.invoke('mocap:delete-take', takeId),
+  mocapDownloadModel: model => ipcRenderer.invoke('mocap:download-model', model),
+  mocapCancelDownload: () => ipcRenderer.invoke('mocap:cancel-download'),
+  mocapModel: model => ipcRenderer.invoke('mocap:model', model),
+  mocapExport: request => ipcRenderer.invoke('mocap:export', request),
   onUpdate: callback => {
     const listener = (_: Electron.IpcRendererEvent, snapshot: Snapshot) => callback(snapshot)
     ipcRenderer.on('studio:update', listener)

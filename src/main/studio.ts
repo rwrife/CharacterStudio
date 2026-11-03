@@ -17,12 +17,14 @@ import { runProcess } from './process'
 import { validateCharacterGlb, validateDesignGlb } from './export-validation'
 import { texturedMeshSettings } from '../shared/designer'
 import { Designer } from './designer'
+import { Mocap } from './mocap'
+import { MOCAP_MIN_DETECTION, parseCaptureRequest, parseMocapOptions, parseProviderCapture, solveMocap, type MocapExportRequest } from '../shared/mocap'
 import { bundledBlenderPath, comfyPythonPath, defaultComfyRoot } from './native-runtime'
 import { AiProviders, hashConfiguration, motionProviderTemplate } from './ai-providers'
-import type { AiConfiguration } from '../shared/ai'
+import type { AiConfiguration, AiProvenance } from '../shared/ai'
 
 interface StoredCharacter extends Character { rigDirectory?: string }
-interface StoredState extends Omit<Snapshot, 'characters' | 'designer'> { characters: StoredCharacter[] }
+interface StoredState extends Omit<Snapshot, 'characters' | 'designer' | 'mocap'> { characters: StoredCharacter[] }
 const terminal = new Set(['complete', 'failed', 'cancelled'])
 
 export class Studio {
@@ -34,6 +36,7 @@ export class Studio {
   private lifetime = new AbortController()
   private designerBusy = false
   readonly designer: Designer
+  readonly mocap: Mocap
   readonly ai: AiProviders
   readonly assets = new Map<string, string>()
   onUpdate: (snapshot: Snapshot) => void = () => {}
@@ -75,6 +78,7 @@ export class Studio {
       this.designerBusy = true
       return () => { this.designerBusy = false }
     }, () => this.onUpdate(this.snapshot()), decodeImage, undefined, this.ai)
+    this.mocap = new Mocap(root, this.assets, () => this.onUpdate(this.snapshot()))
     this.refreshAssets()
     this.persist()
   }
@@ -89,7 +93,7 @@ export class Studio {
       c.previewUrl = this.asset(`${c.id}-input`, join(this.root, 'characters', c.id, 'preview.glb'))
       if (c.rigged && c.rigDirectory) c.rigPreviewUrl = this.asset(`${c.id}-rig`, join(c.rigDirectory, 'rigged.glb'))
     }
-    for (const j of this.state.jobs) if (j.stage === 'complete' && j.kind === 'generate') {
+    for (const j of this.state.jobs) if (j.stage === 'complete' && (j.kind === 'generate' || j.kind === 'mocap')) {
       j.previewUrl = this.asset(`${j.id}-output`, join(this.root, 'jobs', j.id, 'animated.glb'))
       if (j.outputFiles?.includes('clip.glb')) j.clipPreviewUrl = this.asset(`${j.id}-clip`, join(this.root, 'jobs', j.id, 'clip.glb'))
       if (j.outputFiles?.includes('transition.glb')) j.transitionPreviewUrl = this.asset(`${j.id}-transition`, join(this.root, 'jobs', j.id, 'transition.glb'))
@@ -98,7 +102,7 @@ export class Studio {
 
   snapshot(): Snapshot {
     return structuredClone({
-      ...this.state, ai: this.ai.snapshot(), designer: this.designer.snapshot(), characters: this.state.characters.map(({ rigDirectory: _, ...character }) => character)
+      ...this.state, ai: this.ai.snapshot(), designer: this.designer.snapshot(), mocap: this.mocap?.snapshot(), characters: this.state.characters.map(({ rigDirectory: _, ...character }) => character)
     })
   }
 
@@ -224,7 +228,7 @@ export class Studio {
     try {
       await work(job, signal, settings)
       signal.throwIfAborted()
-      this.update(job, 'complete', kind === 'generate' ? 'Animated character ready' : kind === 'rig' ? 'Rigged mesh ready for motion' : 'Character imported', 100)
+      this.update(job, 'complete', kind === 'generate' ? 'Animated character ready' : kind === 'mocap' ? 'Animated mocap character ready' : kind === 'capture' ? 'Pose capture saved' : kind === 'rig' ? 'Rigged mesh ready for motion' : 'Character imported', 100)
       return job
     } catch (error) {
       let cleanup = ''
@@ -525,6 +529,78 @@ export class Studio {
     }, !!batch)
   }
 
+  async mocapExport(value: MocapExportRequest) {
+    if (!value || typeof value !== 'object' || typeof value.takeId !== 'string' || typeof value.characterId !== 'string') throw new Error('Choose a captured take and a rigged character.')
+    const options = parseMocapOptions(value.options)
+    const take = this.mocap.take(value.takeId)
+    const character = this.character(value.characterId)
+    if (!character.rigged || !character.rigDirectory) throw new Error('Build the skin and rig for this character before exporting mocap.')
+    const capture = await this.mocap.readCapture(take.id)
+    const setup = structuredClone(character.setup)
+    const handPose = handPoseSchema.parse(character.handPose)
+    assertHandPoseFits(handPose, setup)
+    const handRigSignature = hashConfiguration(handRigConfiguration(setup))
+    const rigDirectory = character.rigDirectory
+    return this.job('mocap', character.id, character.name, async (job, signal, settings) => {
+      const dir = join(this.root, 'jobs', job.id)
+      job.label = take.name
+      job.mocapTakeId = take.id
+      job.mocapOptions = options
+      job.handPose = structuredClone(handPose)
+      job.handRigSignature = handRigSignature
+      this.update(job, 'retargeting', 'Solving bone rotations from captured pose landmarks', 10)
+      const motion = solveMocap(capture, setup.landmarks, options)
+      await writeFile(join(dir, 'landmarks.json'), JSON.stringify(capture))
+      await writeFile(join(dir, 'mocap-motion.json'), JSON.stringify(motion))
+      signal.throwIfAborted()
+      await this.blender(job, { command: 'mocap', input: join(rigDirectory, 'rigged.blend'), motion: join(dir, 'mocap-motion.json'), handPose, output: dir }, signal, settings)
+      signal.throwIfAborted()
+      const report = JSON.parse(readFileSync(join(dir, 'animation-report.json'), 'utf8'))
+      await validateCharacterGlb(join(dir, 'animated.glb'), true)
+      if (report.weightedVertices !== report.vertices || report.frames < 2 || report.sampledMeshDisplacement <= 0.00001)
+        throw new Error('Mocap output did not pass skin/animation validation.')
+      job.outputFiles = ['animated.glb', 'animated.fbx', 'animated.blend', 'mocap-motion.json', 'landmarks.json']
+      for (const file of job.outputFiles) if ((await stat(join(dir, file))).size < 50) throw new Error(`Mocap output is empty: ${file}`)
+      job.previewUrl = this.asset(`${job.id}-output`, join(dir, 'animated.glb'))
+      job.warnings = [...new Set([...motion.warnings, ...report.warnings])]
+      await writeFile(join(dir, 'manifest.json'), JSON.stringify({ kind: 'mocap', take: { id: take.id, name: take.name, source: take.source, capture: take.capture },
+        poseModel: capture.model, clipStart: capture.start ?? 0, subject: capture.subject ?? 'primary', provenance: take.capture?.provenance, options, legs: motion.legs, detectedFrames: motion.detected, frames: motion.frames, fps: motion.fps, source: character.name, setup, handPose, handRigSignature, report }, null, 2))
+    })
+  }
+
+  /** Run pose capture through the selected routed provider. The built-in provider runs in the visible Mocap window. */
+  async mocapCapture(value: unknown) {
+    const request = parseCaptureRequest(value)
+    const take = this.mocap.take(request.takeId)
+    const route = this.ai.route('capture')
+    if (route.provider === 'builtin') throw new Error('The built-in capture provider runs MediaPipe in the Mocap window. Use Capture motion there.')
+    const video = this.mocap.videoFile(take.id)
+    return this.job('capture', '', take.name, async (job, signal) => {
+      job.label = take.name
+      job.mocapTakeId = take.id
+      this.update(job, 'generating', 'Preparing the capture provider request', 5)
+      const record = async (provenance: AiProvenance) => {
+        job.ai ??= []
+        const existing = job.ai.findIndex(item => item.createdAt === provenance.createdAt)
+        if (existing < 0) job.ai.push(structuredClone(provenance))
+        else job.ai[existing] = structuredClone(provenance)
+        this.persist()
+      }
+      const result = await this.ai.execute({
+        stage: 'capture', route, prompt: '', seed: 0, steps: 0, video, clip: request, signal,
+        submitted: id => { job.promptId = id; this.persist() },
+        progress: message => this.update(job, 'generating', message, 40), record
+      })
+      signal.throwIfAborted()
+      this.update(job, 'retargeting', 'Validating returned pose landmarks', 90)
+      const capture = parseProviderCapture(result.json, request)
+      const detected = capture.frames.filter(Boolean).length
+      if (detected / capture.frames.length < MOCAP_MIN_DETECTION)
+        throw new Error(`The capture provider found a person in only ${detected} of ${capture.frames.length} frames. No capture was saved.`)
+      await this.mocap.saveCapture(take.id, capture, job.ai?.at(-1))
+    })
+  }
+
   async cancel() {
     this.batchController?.abort()
     const active = this.active
@@ -742,13 +818,14 @@ export class Studio {
     const job = this.state.jobs.find(j => j.id === jobId)
     const fixedGrip = job?.kind === 'rig' && ['rigged.glb', 'fixed-grip.fbx', 'rigged.blend'].includes(file) &&
       this.state.characters.some(c => c.id === job.characterId && c.fixedGrip?.jobId === jobId)
-    if (!job || job.stage !== 'complete' || (job.kind !== 'generate' && !fixedGrip) || !job.outputFiles?.includes(file))
+    if (!job || job.stage !== 'complete' || (job.kind !== 'generate' && job.kind !== 'mocap' && !fixedGrip) || !job.outputFiles?.includes(file))
       throw new Error('This is not a validated completed output.')
     return join(this.root, 'jobs', jobId, file)
   }
 
   async dispose() {
     this.lifetime.abort()
+    this.mocap.dispose()
     try { await Promise.all([this.cancel(), this.designer.cancel()]) }
     finally { this.managedComfy?.kill() }
   }

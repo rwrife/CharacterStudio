@@ -333,11 +333,13 @@ test('Tripo non-JSON, malformed and empty HTTP errors never echo the response bo
 
 interface FixtureJob {
   id: string; stage: AiStage; prompt: string; model: string; seed: number; steps: number; seconds?: number
-  constraints?: unknown; inputs: { kind: string; base64: string }[]
+  constraints?: unknown; inputs: { kind: string; mimeType: string; base64: string }[]
+  clipStart?: number; clipEnd?: number; subject?: string
 }
 async function gateway(t: TestContext) {
   const jobs: FixtureJob[] = [], cancelled: string[] = []
-  const state = { pending: false, failed: false, bad: false, output: Buffer.from('fixture-image'), metadata: { num_joints: 77, num_frames: 60, fps: 30 } }
+  const state = { pending: false, failed: false, bad: false, output: Buffer.from('fixture-image'), metadata: { num_joints: 77, num_frames: 60, fps: 30 },
+    capture: { version: 1, fps: 30, width: 64, height: 48, frames: [] } as unknown }
   const server = createServer(async (request, response) => {
     response.setHeader('Content-Type', 'application/json')
     if (request.method === 'POST' && request.url === '/jobs') {
@@ -351,7 +353,7 @@ async function gateway(t: TestContext) {
     } else {
       const job = jobs.find(job => `/jobs/${job.id}` === request.url)
       if (!job) { response.statusCode = 404; response.end('{}'); return }
-      const outputs = state.bad ? {} : job.stage === 'naming' ? { text: 'Named by fixture' } :
+      const outputs = state.bad ? {} : job.stage === 'naming' ? { text: 'Named by fixture' } : job.stage === 'capture' ? { json: state.capture } :
         job.stage === 'motion' ? { npz: Buffer.from('fixture-npz').toString('base64'), bvh: Buffer.from('fixture-bvh').toString('base64'), metadata: state.metadata } :
           { [job.stage === 'scene' || job.stage === 'tpose' || job.stage === 'cutout' ? 'image' : 'model']:
             (job.stage === 'mesh' ? glb() : job.stage === 'rig' ? glb(true) : state.output).toString('base64') }
@@ -744,4 +746,94 @@ test('Tripo v3 uses paid credential headers only on API requests, exact routes a
   assert.equal(calls.filter(call => call.options?.method === 'POST' && call.url.includes('/generation/')).length, 1)
   for (const call of calls.filter(call => call.url.startsWith(chosen.endpoint)))
     assert.equal(new Headers(call.options?.headers).get('Authorization'), 'Bearer test-only-tripo-key')
+})
+
+test('remote video capture requires approval, sends the whole video with its clip and subject, and returns JSON landmarks', async t => {
+  const remote = await gateway(t), root = await temp(t), video = join(root, 'reference.webm')
+  await writeFile(video, 'actual reference video')
+  const providers = new AiProviders(root, () => settings)
+  const options = { stage: 'capture' as const, route: route(remote.endpoint), prompt: '', seed: 0, steps: 0, video, clip: { start: 61.5, end: 64, subject: 'left' },
+    signal: AbortSignal.timeout(5000), submitted: () => {}, progress: () => {}, record: async () => {} }
+  let inputs: string[] = []
+  providers.confirm = async request => { inputs = request.inputs; return false }
+  await assert.rejects(providers.execute(options), /not approved/)
+  assert.equal(remote.jobs.length, 0)
+  assert.ok(inputs.some(input => input.includes('Entire reference video') && input.includes('1:01') && input.includes('1:04')))
+  assert.ok(!inputs.some(input => input.startsWith('Prompt')))
+  providers.confirm = async () => true
+  const result = await providers.execute(options)
+  assert.deepEqual(result.json, { version: 1, fps: 30, width: 64, height: 48, frames: [] })
+  const job = remote.jobs[0]
+  assert.deepEqual({ stage: job.stage, clipStart: job.clipStart, clipEnd: job.clipEnd, subject: job.subject }, { stage: 'capture', clipStart: 61.5, clipEnd: 64, subject: 'left' })
+  assert.equal(job.inputs[0].kind, 'video')
+  assert.equal(job.inputs[0].mimeType, 'video/webm')
+  assert.equal(Buffer.from(job.inputs[0].base64, 'base64').toString(), 'actual reference video')
+  remote.state.bad = true
+  await assert.rejects(providers.execute(options), /required capture output/)
+})
+
+test('ComfyUI video capture requires a mapped workflow, uploads the video and binds the clip range', async t => {
+  const root = await temp(t), video = join(root, 'reference.mp4')
+  await writeFile(video, 'actual capture video bytes')
+  const template = (bindings: string[]) => workflowSchema.parse({
+    version: 1,
+    prompt: { '1': { class_type: 'FixturePose', inputs: { video: '', start: 0, end: 0, person: '', filename_prefix: '' } } },
+    bindings: bindings.map(parameter => ({ parameter, node: '1', input: { video: 'video', clipStart: 'start', clipEnd: 'end', subject: 'person', prefix: 'filename_prefix' }[parameter] })),
+    outputs: [{ kind: 'json', node: '1', field: 'pose' }]
+  })
+  const full = ['video', 'clipStart', 'clipEnd', 'subject', 'prefix']
+  assert.throws(() => aiConfigurationSchema.parse({ version: 1, stages: { capture: route('https://gpu.example', 'comfyui') } }), /capture requires a custom ComfyUI workflow/)
+  assert.throws(() => aiConfigurationSchema.parse({ version: 1, stages: { capture: { ...route('https://gpu.example', 'comfyui'), workflow: template(['clipStart', 'clipEnd', 'prefix']) } } }))
+  assert.equal(resolveAiRoute(defaultAiConfiguration, 'capture').provider, 'builtin')
+  let prompt: Record<string, { inputs: Record<string, unknown> }> = {}, id = '', uploaded = ''
+  const server = createServer(async (request, response) => {
+    response.setHeader('Content-Type', 'application/json')
+    let body = ''; for await (const chunk of request) body += chunk
+    if (request.url === '/object_info') response.end(JSON.stringify({ FixturePose: {} }))
+    else if (request.url === '/upload/image') {
+      assert.match(body, /actual capture video bytes/)
+      uploaded = /filename="([^"]+)"/.exec(body)![1]
+      response.end(JSON.stringify({ name: uploaded, subfolder: '', type: 'input' }))
+    } else if (request.url === '/prompt') {
+      const data = JSON.parse(body); prompt = data.prompt; id = data.prompt_id
+      response.end(JSON.stringify({ prompt_id: id }))
+    } else if (request.url?.startsWith('/history/')) response.end(JSON.stringify({
+      [id]: { status: { completed: true, status_str: 'success' }, outputs: { '1': { pose: ['{"version":1}'] } } }
+    }))
+    else { response.statusCode = 404; response.end('{}') }
+  })
+  server.listen(0, '127.0.0.1'); await once(server, 'listening')
+  t.after(() => { server.closeAllConnections(); server.close() })
+  const address = server.address(); assert.ok(address && typeof address !== 'string')
+  const selected = { ...route(`http://127.0.0.1:${address.port}`, 'comfyui'), workflow: template(full) }
+  const providers = new AiProviders(root, () => settings)
+  providers.confirm = async () => true
+  const result = await providers.execute({ stage: 'capture', route: selected, prompt: '', seed: 0, steps: 0, video, clip: { start: 2, end: 5.5, subject: 'right' },
+    signal: AbortSignal.timeout(5000), submitted: () => {}, progress: () => {}, record: async () => {} })
+  assert.equal(result.json, '{"version":1}')
+  assert.match(uploaded, /\.mp4$/)
+  assert.deepEqual(prompt['1'].inputs, { ...prompt['1'].inputs, video: uploaded, start: 2, end: 5.5, person: 'right' })
+})
+
+test('Studio routes capture only to an explicit provider and saves validated landmarks with provenance', async t => {
+  const remote = await gateway(t), root = await temp(t), video = join(root, 'walk.webm')
+  await writeFile(video, Buffer.concat([Buffer.from([0x1a, 0x45, 0xdf, 0xa3]), Buffer.alloc(124, 1)]))
+  const studio = new Studio(root, root)
+  studio.ai.confirm = async () => true
+  const take = await studio.mocap.importVideo(video)
+  const request = { takeId: take.id, start: 0, end: 2, subject: 'primary' }
+  await assert.rejects(studio.mocapCapture(request), /built-in capture provider/)
+  assert.equal(remote.jobs.length, 0)
+  studio.saveAiSettings({ version: 1, stages: { capture: route(remote.endpoint) } })
+  const point = [0.1, -0.2, 0.05, 0.9]
+  remote.state.capture = { version: 1, fps: 30, width: 64, height: 48, frames: Array.from({ length: 61 }, (_, i) => i % 3 ? Array.from({ length: 33 }, () => point) : null) }
+  const job = await studio.mocapCapture(request)
+  assert.deepEqual({ kind: job.kind, stage: job.stage, take: job.mocapTakeId }, { kind: 'capture', stage: 'complete', take: take.id })
+  const saved = studio.mocap.snapshot().takes[0].capture!
+  assert.deepEqual({ model: saved.model, frames: saved.frames, detected: saved.detected }, { model: 'provider', frames: 61, detected: 40 })
+  assert.equal(saved.provenance?.route.endpoint, remote.endpoint)
+  assert.match(saved.provenance!.configurationHash, /^[a-f0-9]{64}$/)
+  remote.state.capture = { version: 1, fps: 30, width: 64, height: 48, frames: Array.from({ length: 61 }, (_, i) => i % 3 ? null : Array.from({ length: 33 }, () => point)) }
+  await assert.rejects(studio.mocapCapture(request), /found a person in only 21 of 61/)
+  assert.equal(studio.mocap.snapshot().takes[0].capture?.detected, 40)
 })

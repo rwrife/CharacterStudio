@@ -1,16 +1,4 @@
 [hidden]{display:none!important}
-.app>.topbar{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr)}
-.topbar>.brand{justify-self:start}
-.brand>.brand-mark{width:48px;height:48px;display:block;object-fit:contain;flex-shrink:0;background:none;border-radius:0}
-.brand-name{display:flex;flex-direction:column;gap:3px}
-.brand-name .version{margin-left:0;padding-left:0;border-left:0;letter-spacing:.45px}
-.topbar>.connection,.topbar>.topbar-actions{justify-self:end}.connection.icon-only{padding:8px;aspect-ratio:1}
-.workspace-tabs{display:flex;align-items:center;gap:18px;justify-self:center}
-.workspace-tabs button{padding:7px 0;border:0;border-radius:0;background:transparent;color:#7f8984;font-size:23px;font-weight:350;letter-spacing:-.5px}
-.workspace-tabs button.active{background:transparent;color:#f0f2ed}
-.workspace-tabs button:hover:not(:disabled){background:transparent;color:#dce3d7}
-.workspace-tabs button:focus-visible{outline:0;text-decoration:underline;text-underline-offset:7px}
-.module-divider{color:#47514a;font-size:20px;font-weight:300;user-select:none}
 .designer-layout{display:grid;grid-template-columns:290px minmax(390px,1fr) 288px;min-height:0;flex:1}
 .designer-layout.models-hidden{grid-template-columns:290px minmax(390px,1fr)}
 .design-brief,.design-models{padding:25px 22px;background:var(--panel);overflow:auto}
