@@ -1,4 +1,11 @@
-import type { Landmarks } from './types'
+import type { Landmarks, Vec3 } from './types'
+
+export function turnModel(rotation: Vec3, axis: 0 | 1 | 2, degrees: -90 | 90 | 180): Vec3 {
+  const result: Vec3 = [...rotation]
+  const angle = result[axis] + degrees
+  result[axis] = ((angle + 180) % 360 + 360) % 360 - 180
+  return result
+}
 
 // Normalized character height is 2m; Three.js coordinates are Y-up, facing +Z.
 export function defaultLandmarks(): Landmarks {

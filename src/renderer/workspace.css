@@ -25,7 +25,8 @@
 .brand-name > strong > span { color: var(--accent-primary); font-weight: 300; margin-left: 4px; }
 .brand-tagline { color: var(--accent-primary); font-size: 8px; font-weight: 500; letter-spacing: 1.5px; line-height: 1.4; text-transform: uppercase; }
 .topbar > .topbar-actions { justify-self: end; }
-.connection.icon-only { padding: 8px; aspect-ratio: 1; }
+.topbar-actions > .connection { height: 34px; white-space: nowrap; }
+.connection.icon-only { width: 34px; padding: 0; flex-shrink: 0; }
 .workspace-tabs { display: flex; align-items: center; gap: 24px; justify-self: center; }
 .workspace-tabs button { padding: 10px 0; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--text-secondary); font-size: 19px; }
 .workspace-tabs button.active { color: var(--text-primary); border-bottom-color: var(--lime); }
@@ -39,6 +40,12 @@
 .workflow-settings .fine-print, .workflow-main .fine-print { font-size: 11px; color: var(--text-secondary); }
 .workflow-settings .section-kicker { color: var(--text-secondary); }
 .workflow-settings .panel-rule { margin: 18px 0; }
+.model-orientation { border: 1px solid var(--line); border-radius: 7px; padding: 12px; margin: 16px 0; background: var(--surface-raised); }
+.model-orientation > .field-label { margin-top: 0; }
+.model-orientation .fine-print { margin-top: 8px; }
+.orientation-turns { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; align-items: center; margin-top: 8px; }
+.orientation-turns > span { color: var(--text-secondary); font-size: 11px; }
+.orientation-turns > button { border-color: var(--border-control); background: var(--surface-panel); padding: 7px 4px; font-size: 11px; }
 .workflow-settings .primary.full { margin-top: 14px; }
 .workflow-settings h2 { margin-top: 14px; }
 .workflow-settings .asset-list, .workflow-settings .design-list { max-height: 230px; min-height: 0; }
