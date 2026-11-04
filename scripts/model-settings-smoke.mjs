@@ -102,9 +102,36 @@ try {
     await page.setViewportSize({ width: 1100, height: 760 })
     await app.evaluate(({ BrowserWindow }, zoom) => BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(zoom), zoom)
     assert.ok(await page.getByRole('dialog', { name: 'Model Settings' }).evaluate(el => el.scrollWidth <= el.clientWidth + 1))
+    const checkFocusRing = async name => {
+      const field = page.getByRole('combobox', { name, exact: true })
+      await expect(field).toBeFocused()
+      const geometry = await field.evaluate(el => {
+        const scroller = el.closest('.model-settings-content')
+        const bounds = el.getBoundingClientRect(), clip = scroller.getBoundingClientRect()
+        const style = getComputedStyle(el)
+        const outlineWidth = parseFloat(style.outlineWidth)
+        const ring = outlineWidth + parseFloat(style.outlineOffset)
+        return { ring, outlineWidth, left: bounds.left - ring, right: bounds.right + ring,
+          clipLeft: clip.left + scroller.clientLeft,
+          clipRight: clip.left + scroller.clientLeft + scroller.clientWidth,
+          horizontalOverflow: scroller.scrollWidth > scroller.clientWidth }
+      })
+      assert.ok(geometry.outlineWidth > 0 && geometry.ring >= 3, `${name} retains its visible outward keyboard focus ring at ${zoom} zoom (allowing pixel rounding).`)
+      assert.ok(geometry.left >= geometry.clipLeft - 0.5, `${name} left focus ring is inside the scroll clip at ${zoom} zoom.`)
+      assert.ok(geometry.right <= geometry.clipRight + 0.5, `${name} right focus ring is inside the scroll clip at ${zoom} zoom.`)
+      assert.equal(geometry.horizontalOverflow, false, 'The focus gutter does not create horizontal scrolling.')
+    }
+    await call('studio_press_key', { ref: await locate('Refresh computer specs', 'button'), key: 'Tab' })
+    await checkFocusRing('Task')
     await click('Advanced', 'summary')
     assert.ok((await ui()).elements.some(item => item.name === 'Execution provider'))
+    await call('studio_press_key', { ref: await locate('API keys & connections', 'summary'), key: 'Tab' })
+    await checkFocusRing('Execution provider')
     await click('Advanced', 'summary')
+    await call('studio_scroll', { ref: await locate('Model Settings content', 'region'), y: 10000 })
+    assert.ok(await page.getByRole('region', { name: 'Model Settings content' }).evaluate(el => el.scrollTop > 0), 'Settings still scroll vertically.')
+    await call('studio_scroll', { ref: await locate('Model Settings content', 'region'), y: -10000 })
+    assert.equal(await page.getByRole('region', { name: 'Model Settings content' }).evaluate(el => el.scrollTop), 0)
   }
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(1))
   await call('studio_press_key', { ref: await locate('Close Model Settings', 'button'), key: 'Escape' })
