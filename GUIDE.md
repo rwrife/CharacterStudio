@@ -49,9 +49,9 @@ Actual desktop/MCP captures from isolated empty test workspaces, not generated a
 
 ### App identity and titlebar
 
-![Character Studio titlebar with a large green anime avatar icon beside the app name, Designer and Animator tabs, and setup and backend controls](docs/screenshots/app-titlebar.png)
+![Character Studio app header with its green avatar icon, shared wordmark typography, workspace tabs, and model, setup and backend controls](docs/screenshots/app-titlebar.png)
 
-The green avatar artwork is used for the desktop window and packaged Windows application. This older titlebar capture predates the shared **Model Settings** launcher; see the current layout above.
+The green avatar artwork is used for the desktop window and packaged Windows application. The app-drawn header shares Sound Studio's Segoe UI font stack, 78 px desktop height, 40 px icon and 24 px wordmark, with matching spacing and 34 px actions. Names, icon artwork and accent colors remain distinct. The [shared header metrics](docs/model-settings-ux-plan.md#shared-app-header-metrics) also specify compact padding and tagline typography. The native Windows titlebar remains OS-managed.
 
 ### Setup checklist on first launch
 

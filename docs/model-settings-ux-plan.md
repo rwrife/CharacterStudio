@@ -48,3 +48,19 @@ New Character Studio installations start with the recommended SD 1.5/DreamShaper
 - Desktop checks cover fresh and saved-custom settings, keyboard access, focus restoration, visible errors, supported minimum window size, and relaunch persistence. Character changes retain MCP operability.
 - Run each repository's existing tests, type checking and build, plus the relevant desktop/MCP checks. Do not install model weights or start paid inference to validate a settings UX.
 - Submit both PRs with the shared-plan link, accurate scope, validation evidence and any real limitations; cross-link the companion PRs.
+
+## Shared app-header metrics
+
+The app-drawn headers use the same geometry and typography, while retaining each application's name, icon artwork and accent color. Native operating-system title bars remain native, including their active/inactive appearance.
+
+| Element | Shared desktop value |
+|---|---|
+| Font stack | `"Segoe UI Variable", "Segoe UI", sans-serif` |
+| Header | 78 px including bottom border; 24 px horizontal padding above 1200 px, 18 px at or below 1200 px; no vertical padding; 20 px column gap |
+| Brand icon | 40 by 40 px, non-shrinking; 12 px gap before text |
+| Wordmark | 24 px; line-height 1.1; -0.8 px letter spacing; first word weight 700, `studio` weight 300; explicit 4 px inter-word spacing |
+| Tagline | 8 px, weight 500, line-height 1.4, 1.5 px letter spacing, uppercase; 3 px gap below wordmark |
+| Header actions | 34 px high; 12 px, weight 500, 16 px line-height; 8 px gap, reduced to 6 px at or below 1200 px |
+| Workspace labels | 19 px |
+
+Keep the brand metrics at each app's supported desktop minimum. Preserve the existing narrow-preview fallback rather than forcing desktop geometry into unsupported small widths. Verify the computed metrics and overflow at normal/minimum sizes and higher zoom. Scroll containers around Model Settings controls must include room for the visible keyboard focus outline rather than clipping or hiding it.

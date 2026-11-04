@@ -97,6 +97,8 @@ try {
   // Capture real OS/CPU/RAM and honest disconnected GPU state, with no private paths.
   await page.setViewportSize({ width: 1440, height: 1000 })
   await call('studio_scroll', { ref: await locate('Model Settings content', 'region'), y: -10000 })
+  await call('studio_press_key', { ref: await locate('Refresh computer specs', 'button'), key: 'Tab' })
+  await expect(page.getByRole('combobox', { name: 'Task', exact: true })).toBeFocused()
   await page.screenshot({ path: resolve('docs', 'screenshots', 'model-settings-simple.png') })
   for (const zoom of [1, 1.25]) {
     await page.setViewportSize({ width: 1100, height: 760 })
