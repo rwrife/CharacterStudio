@@ -27,6 +27,7 @@ try {
   await page.getByRole('button', { name: 'Save settings', exact: true }).click()
   await expect.poll(() => page.evaluate(async () => (await window.studio.snapshot()).settings.comfyUrl)).toBe(base)
   await page.getByRole('button', { name: 'Model Settings', exact: true }).click()
+  await page.getByText('Advanced', { exact: true }).click()
   await page.getByLabel('Kimodo text encoder', { exact: true }).selectOption('lfm')
   await page.getByRole('button', { name: 'Save settings', exact: true }).click()
   await expect.poll(() => page.evaluate(async () => (await window.studio.snapshot()).settings.textEncoder)).toBe('lfm')

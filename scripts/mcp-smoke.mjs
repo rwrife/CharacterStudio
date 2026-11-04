@@ -63,7 +63,7 @@ try {
   await connect()
   assert.equal((await client.listTools()).tools.length, 12)
   await call('studio_show_window')
-  assert.equal(await page.locator('.brand').innerText(), 'characterstudio')
+  assert.equal(await page.locator('.brand-name > strong').innerText(), 'characterstudio')
   assert.equal(await page.locator('.brand .version').count(), 0, 'No header subtitle should be rendered.')
   await click('Designer', 'tab')
   assert.equal(find(await ui(), 'Mocap', 'tab').selected, 'false')
@@ -75,6 +75,9 @@ try {
     const canvasWidth = (await page.getByLabel('Designer canvas', { exact: true }).boundingBox()).width
     assert.ok(canvasWidth > width - 350)
     await click('Model Settings')
+    assert.ok((await ui()).text.includes('Your computer'))
+    assert.ok(!(await ui()).elements.some(el => el.name === 'Image model family'), 'Advanced is initially collapsed.')
+    await click('Advanced', 'summary')
     const modelField = find(await ui(), 'Image model family', 'combobox').ref
     assert.equal((await ui()).modal, 'Model Settings')
     assert.equal((await page.getByLabel('Designer canvas', { exact: true }).boundingBox()).width, canvasWidth, 'Settings overlay must not resize the workspace.')
@@ -207,6 +210,7 @@ try {
   await click('Backend connections')
   assert.equal(find(await ui(), 'Enable MCP control', 'checkbox').checked, true)
   await click('Model Settings')
+  await click('Advanced', 'summary')
   const encoder = find(await ui(), 'Kimodo text encoder', 'combobox')
   await call('studio_select', { ref: encoder.ref, values: ['lfm'] })
   await click('Save settings')

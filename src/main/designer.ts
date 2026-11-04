@@ -12,6 +12,7 @@ import { errorText } from './validation'
 import { imageWorkflow, isolationWorkflow, meshWorkflow, tposeWorkflow, type Workflow } from './design-workflows'
 import { validateCharacterGlb, validateDesignGlb } from './export-validation'
 import { designerModelPackages, needsDesignerModel, type DesignerModelPackage, type DesignerModel, type ModelDownload } from '../shared/designer-models'
+import { recommendedDesignerConfig } from '../shared/model-settings'
 import { installDesignerModel } from './model-download'
 import { AiProviders, nativeTemplate } from './ai-providers'
 import type { AiStage, WorkflowParameter, WorkflowTemplate } from '../shared/ai'
@@ -124,7 +125,7 @@ export class Designer {
     mkdirSync(join(root, 'designs'), { recursive: true })
     const path = join(root, 'designer.json')
     this.state = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {
-      config: { imageProfile: 'sd15', checkpoint: '', controlnet: '', meshProfile: 'mini', meshCheckpoint: '', titleModel: '' },
+      config: { ...recommendedDesignerConfig },
       references: [], designs: []
     }
     this.state.config = designConfigSchema.parse(this.state.config)

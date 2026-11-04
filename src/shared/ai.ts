@@ -219,7 +219,7 @@ export interface AiHardware {
   cpu: string
   ramGB: number
   freeRamGB: number
-  devices: { name: string; totalGB: number; freeGB: number }[]
+  devices: { name: string; type?: string; totalGB: number; freeGB: number }[]
   warning?: string
 }
 export interface AiConsent {

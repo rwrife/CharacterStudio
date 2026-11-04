@@ -131,10 +131,10 @@ export class AiProviders {
     }
     try {
       const stats = z.object({ devices: z.array(z.object({
-        name: z.string(), type: z.string(), vram_total: z.number().nonnegative(), vram_free: z.number().nonnegative()
-      })) }).parse(await api(this.settings().comfyUrl, '/system_stats'))
-      result.devices = stats.devices.filter(device => device.type !== 'cpu').map(device => ({
-        name: device.name, totalGB: device.vram_total / 2 ** 30, freeGB: device.vram_free / 2 ** 30
+        name: z.string(), type: z.string(), vram_total: z.number().finite().nonnegative(), vram_free: z.number().finite().nonnegative()
+      }).refine(device => device.vram_free <= device.vram_total, 'Free GPU memory exceeds total memory.')) }).parse(await api(this.settings().comfyUrl, '/system_stats'))
+      result.devices = stats.devices.filter(device => device.type.toLowerCase().split(':')[0] !== 'cpu').map(device => ({
+        name: device.name, type: device.type.toLowerCase().split(':')[0], totalGB: device.vram_total / 2 ** 30, freeGB: device.vram_free / 2 ** 30
       }))
       if (!result.devices.length) result.warning = 'Local ComfyUI reports no GPU. GPU compatibility is unknown; no profile was changed.'
     } catch { result.warning = 'Local GPU telemetry is unavailable. Start local ComfyUI to detect total/free VRAM; no remote server is queried.' }
