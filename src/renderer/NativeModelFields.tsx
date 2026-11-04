@@ -7,6 +7,7 @@ function InstalledModel({ id, label, value = '', names = [], disabled, onChange 
 }) {
   return <div>
     <label className="field-label" htmlFor={id}>{label}</label>
+    <p className="fine-print">Installed files must match the selected task architecture. Custom model requirements depend on the weights; the task estimate is not a compatibility guarantee.</p>
     <select id={id} disabled={disabled} value={value} onChange={event => onChange(event.target.value)}>
       <option value="">Select installed local weights</option>
       {value && !names.includes(value) && <option value={value}>{value} (not detected)</option>}
@@ -73,6 +74,7 @@ export function NativeModelFields({ stage, config, ready, disabled, budgetText, 
       ]) : <InstalledModel id="mesh-checkpoint" label="Installed 3D checkpoint" value={config.meshCheckpoint}
         names={ready?.checkpoints.filter(name => /hunyuan/i.test(name))} disabled={disabled} onChange={meshCheckpoint => onChange({ ...config, meshCheckpoint })} />}
       <p className="fine-print">Hunyuan3D creates geometry; TRELLIS.2 creates a new textured GLB. Both are unrigged. Output quality is configured in the 3D step. Unsupported/missing weights are errors, never geometry-only fallbacks.</p>
+      <p className="fine-print">2mini is the lower-memory alternative and requires manual weights/node setup. Standard Hunyuan3D 2 has a supported download package. TRELLIS.2 needs its native nodes and four compatible components.</p>
     </>}
     {stage === 'naming' && <>
       <InstalledModel id="title-model" label="Automatic title model" value={config.titleModel} names={ready?.titleModels}

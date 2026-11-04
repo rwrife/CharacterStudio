@@ -184,6 +184,7 @@ try {
   await regeneration('Regenerate scene')
   const regenerationRef = (await control('Regenerate scene')).ref
   await click('Model Settings')
+  await click('Advanced')
   await call('studio_select', { ref: (await control('Installed image checkpoint')).ref, values: ['scene-b.safetensors'] })
   assert.equal((await client.callTool({ name: 'studio_click', arguments: { ref: regenerationRef } })).isError, true, 'Unsaved modal settings cannot be bypassed to generate.')
   await click('Close Model Settings')
@@ -198,6 +199,7 @@ try {
   await until(async () => (await state()).designer.designs[0]?.status === 'running')
   assert.equal((await control('Generate scene')).disabled, true, 'Concurrent submissions must stay blocked.')
   await click('Model Settings')
+  await click('Advanced')
   assert.equal((await control('Installed image checkpoint')).disabled, true)
   assert.equal((await state()).designer.designs[0]?.status, 'running', 'Opening settings must not interrupt generation.')
   await click('Close Model Settings')
@@ -218,7 +220,7 @@ try {
   await until(async () => !(await control('Generate scene')).disabled)
   await click('Review model settings')
   assert.equal((await call('studio_get_ui')).modal, 'Model Settings')
-  await expect(page.getByLabel('Image model family')).toBeFocused()
+  await expect(page.getByLabel('Current task setup')).toBeFocused()
   await click('Close Model Settings')
   fail = false
   await click('Generate scene')

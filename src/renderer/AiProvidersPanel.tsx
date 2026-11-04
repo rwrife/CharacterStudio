@@ -9,6 +9,8 @@ import { NativeModelFields } from './NativeModelFields'
 import { ModelSetupGuide } from './ModelSetupGuide'
 import { useModalSurface } from './useModalSurface'
 import { recommendTextEncoder } from '../shared/text-encoder'
+import { memoryGuidance, nativeTaskSummary, recommendedModelFields, recommendedTaskSetup } from '../shared/model-settings'
+import { designerModelPackages, needsDesignerModel, type DesignerModelPackage } from '../shared/designer-models'
 import './ai.css'
 
 const choices: Record<string, { label: string; provider: AiRoute['provider']; location: AiRoute['location']; endpoint: string }> = {
@@ -20,7 +22,7 @@ const choices: Record<string, { label: string; provider: AiRoute['provider']; lo
   tripo: { label: 'Tripo v3 (remote / paid API credits)', provider: 'tripo', location: 'remote', endpoint: tripoCredentialEndpoints.tripo }
 }
 const future = new Set<AiStage>(['segmentation', 'landmarks', 'cloth'])
-const explain = (error: unknown) => (error instanceof Error ? error.message : String(error)).replace(/^Error invoking remote method '[^']+': Error: /, '')
+const explain = (error: unknown) => (error instanceof Error ? error.message : String(error)).replace(/^Error invoking remote method '[^']+': (?:Error|TypeError): /, '')
 
 function TripoKeySetup({ target, disabled, onBusy, onDraftChange }: {
   target?: TripoCredentialTarget; disabled: boolean; onBusy: (busy: boolean) => void; onDraftChange: (dirty: boolean) => void
@@ -101,6 +103,7 @@ export function AiProvidersPanel({ snapshot, initialStage = 'scene', initialFiel
   const [modelChecks, setModelChecks] = useState<BackendCheck[]>([])
   const [confirmClose, setConfirmClose] = useState(false)
   const [keyDirty, setKeyDirty] = useState(false)
+  const [advanced, setAdvanced] = useState(false)
   const ownRoute = stage === 'global' ? config.globalComfy : config.stages[stage]
   const route = stage === 'global' ? config.globalComfy ?? localRoute : resolveAiRoute(config, stage)
   const inherited = stage !== 'global' && !ownRoute
@@ -116,9 +119,17 @@ export function AiProvidersPanel({ snapshot, initialStage = 'scene', initialFiel
   const tripoEndpoint = route.provider === 'tripo' ? route.endpoint.replace(/\/+$/, '') : tripoCredentialEndpoints.tripo
   const tripoTarget = tripoEndpoint === tripoCredentialEndpoints.tripo ? 'tripo' :
     tripoEndpoint === tripoCredentialEndpoints['tripo-com'] ? 'tripo-com' : undefined
-  const free = Math.max(0, ...(hardware?.devices.map(device => device.freeGB) ?? []))
   const encoderGpu = modelChecks.find(check => check.gpu)?.gpu
-  const encoderAdvice = recommendTextEncoder(encoderGpu)
+  const encoderAdvice = hardware?.devices.some(device => ['cuda', 'hip', 'rocm'].includes(device.type ?? '')) ?
+    recommendTextEncoder(encoderGpu) : { detail: 'Dedicated GPU memory is unknown or shared/unified. Choose only a compatible backend; memory readings alone do not establish encoder compatibility.' }
+  const task = stage === 'global' ? undefined : nativeTaskSummary(stage, native, encoder)
+  const recommended = route.provider === 'builtin' && (stage === 'motion' ? encoder === 'llm2vec' :
+    stage === 'global' || Object.entries(recommendedModelFields[stage] ?? {}).every(([key, value]) => native?.[key as keyof typeof native] === value))
+  const downloadPackage: DesignerModelPackage | undefined = stage === 'scene' ? native?.imageProfile === 'sdxl' ? 'sdxl' : 'sd15' :
+    stage === 'tpose' ? 'edit' : stage === 'cutout' ? 'background' : stage === 'mesh' ?
+      native?.meshProfile === 'standard' ? 'hunyuan' : native?.meshProfile === 'textured' ? 'textured' : undefined : undefined
+  const missingModels = downloadPackage && native && ready ?
+    designerModelPackages[downloadPackage].models.filter(model => needsDesignerModel(model, native, ready)) : undefined
   function requestClose() {
     if (busy) return
     if (dirty || secret || keyDirty) setConfirmClose(true)
@@ -134,7 +145,8 @@ export function AiProvidersPanel({ snapshot, initialStage = 'scene', initialFiel
   }
   useEffect(() => { if (route.provider === 'builtin') void refreshModels() }, [stage, route.provider])
   useEffect(() => {
-    if (initialField) dialog.current?.querySelector<HTMLElement>(`#${initialField}`)?.focus()
+    // Keep Advanced collapsed even when launched from a missing-model field.
+    if (initialField) dialog.current?.querySelector<HTMLElement>('#model-task-card')?.focus()
   }, [initialField])
   async function perform(work: () => Promise<void>) {
     setBusy(true); setError(''); setNotice('')
@@ -210,7 +222,7 @@ export function AiProvidersPanel({ snapshot, initialStage = 'scene', initialFiel
     setWorkflowText(workflow ? JSON.stringify(workflow, null, 2) : '')
     setNotice('Provider selections saved. Existing jobs keep their original provenance; remote generation still requires approval.')
   }
-  const budgetText = (gb: number) => hardware?.devices.length ? free >= gb ? 'Recommended for available VRAM' : 'Not enough free VRAM' : 'VRAM not detected'
+  const budgetText = (gb: number) => memoryGuidance(hardware, gb)
   return <div className="modal-backdrop model-settings-backdrop"><section ref={dialog} tabIndex={-1} className="settings-modal ai-modal model-settings" role="dialog" aria-modal="true" aria-label="Model Settings">
     <div className="modal-heading"><div><span className="section-kicker">LOCAL FIRST / PER-STAGE CONTROL</span><h2>Model Settings</h2></div>
       <button aria-label="Close Model Settings" disabled={busy} onClick={requestClose}><X size={20} /></button></div>
@@ -224,23 +236,78 @@ export function AiProvidersPanel({ snapshot, initialStage = 'scene', initialFiel
       {error && <p className="modal-error" role="alert">{error}</p>}
     </section>}
     <div className="model-settings-content" role="region" aria-label="Model Settings content" inert={confirmClose}>
-    <p className="panel-description">Choose hardware-fit local presets or opt in to a remote server. No model is switched automatically and no generation starts when you save.</p>
-    <details className="model-advanced"><summary>API keys & connections</summary>
-      <TripoKeySetup target={tripoTarget} disabled={disabled} onBusy={setBusy} onDraftChange={setKeyDirty} />
-    </details>
-    <details className="ai-hardware"><summary>Hardware guidance</summary><div aria-label="Local hardware">
-      <div className="section-heading"><strong>This machine</strong><button className="text-button" disabled={disabled} onClick={() => void perform(async () => setHardware(await window.studio.aiHardware()))}><RefreshCw size={14} /> Detect local hardware</button></div>
+    <p className="panel-description">Start with one setup for your task. Existing choices stay unchanged until you edit and save them.</p>
+    <section className="ai-hardware" aria-label="Your computer">
+      <div className="section-heading"><strong>Your computer</strong><button className="text-button" aria-label="Refresh computer specs" disabled={disabled} onClick={() => void perform(async () => setHardware(await window.studio.aiHardware()))}><RefreshCw size={14} /> Refresh</button></div>
       {hardware ? <><p>{hardware.platform} / {hardware.architecture} / {hardware.cpu}</p><p>{hardware.freeRamGB.toFixed(1)} GiB free / {hardware.ramGB.toFixed(1)} GiB system RAM</p>
-        {hardware.devices.map((device, index) => <p key={index}>{device.name}: {device.freeGB.toFixed(1)} GiB free / {device.totalGB.toFixed(1)} GiB total VRAM</p>)}
+        {hardware.devices.map((device, index) => <p key={index}>ComfyUI GPU: {device.name} ({device.type || 'unknown backend type'}): {device.freeGB.toFixed(1)} GiB free / {device.totalGB.toFixed(1)} GiB total reported memory
+          {!['cuda', 'hip', 'rocm'].includes(device.type ?? '') && ' - shared/unified or unknown; not used for a dedicated-GPU fit recommendation'}</p>)}
         {hardware.warning && <p>{hardware.warning}</p>}</> : <p>Detecting local hardware...</p>}
-      <p className="fine-print">Memory estimates are guidance, not guarantees. GPU architecture, drivers, precision and shared memory still matter.</p>
-    </div></details>
-    <label className="field-label" htmlFor="ai-stage">AI stage</label>
+      <p className="fine-print">OS reports CPU and RAM; local ComfyUI reports GPU memory. Shared/unified memory is not dedicated VRAM or proof of CUDA support. 32 GB RAM is the planning target; 64 GB and CUDA are preferred, not inference guarantees.</p>
+    </section>
+    <label className="field-label" htmlFor="ai-stage">Task</label>
     <select id="ai-stage" value={stage} disabled={disabled || workflowText !== (route.workflow ? JSON.stringify(route.workflow, null, 2) : '')} onChange={event => switchStage(event.target.value)}>
       <option value="global">Global ComfyUI connection</option>
       {Object.entries(aiStages).map(([value, label]) => <option key={value} value={value} disabled={future.has(aiStageSchema.parse(value))}>{label}</option>)}
     </select>
-    <p className="fine-print">Global ComfyUI applies to scene, T-pose, cutout, mesh and motion unless overridden. Naming, post-texturing, remote rigging and Mocap video pose capture are independent. Segmentation, landmark AI and cloth AI are not yet implemented.</p>
+    <section id="model-task-card" tabIndex={-1} className="ai-task-card" aria-label="Current task setup">
+      <span className="section-kicker">{recommended ? 'Recommended setup' : 'Current selection (preserved)'}</span>
+      <h3>{route.provider === 'builtin' ? task?.name ?? 'Default local connections' : aiModelLabel(route) || 'Custom connection'}</h3>
+      <p className={`ai-route-badge ${route.location}`}>{stage === 'global' ? `${route.location === 'remote' ? 'Remote' : 'Local'} / global connection` : aiRouteLabel(config, stage)}</p>
+      <p>{route.provider === 'builtin' ? task?.purpose : 'Your provider selection is preserved. Expand Advanced to review its model, connection and workflow.'}</p>
+      <p className="fine-print">{route.location === 'remote' ? 'Remote - local GPU not required. Approval is required before prompts or assets leave this PC; paid providers may charge credits.' :
+        route.provider !== 'builtin' ? 'Requirements depend on your workflow. No automatic model compatibility guarantee.' :
+        task?.gb ? `About ${task.gb} GiB free GPU memory recommended (estimate). ${budgetText(task.gb)}.` :
+        stage === 'motion' ? 'Experimental lower-memory encoder. No verified memory minimum; check backend compatibility before generating.' :
+        stage === 'capture' ? 'CPU - no local GPU, ComfyUI or Python required for capture. Blender is required for retargeting/export.' :
+        stage === 'naming' && native?.titleModel ? 'Requirements depend on your Ollama model.' : 'No additional inference model required by the default path.'}</p>
+      {route.provider === 'builtin' && stage === 'motion' && encoder !== (snapshot.settings.textEncoder ?? 'llm2vec') &&
+        <p className="fine-print" role="status">Encoder draft differs from saved settings. Access checks below describe the saved encoder; save and refresh to check the new selection.</p>}
+      {!recommended && native && route.provider === 'builtin' && <p className="fine-print">Selected weights: {stage === 'motion' ? encoder : stage === 'capture' ? 'Pose Lite / Full selected in Mocap' :
+        Object.keys(recommendedModelFields[stage === 'global' ? 'scene' : stage] ?? {}).map(key => native[key as keyof typeof native]).filter(value => typeof value === 'string' && value).join(' / ') || 'Default / not selected'}</p>}
+      {stage !== 'global' && !recommended && <button className="secondary" disabled={disabled || !!secret || keyDirty} onClick={() => {
+        const next = recommendedTaskSetup(config, native, stage)
+        setConfig(next.ai); setNative(next.native); setWorkflowText(''); setCustomTripoModel(false)
+        if (stage === 'motion') setEncoder('llm2vec')
+        setNotice('Recommended setup selected for this task only. Save settings to apply; no models were downloaded.')
+      }}>Use recommended setup</button>}
+    </section>
+    {route.provider === 'builtin' && <section aria-label="Setup status and actions">
+      <button className="text-button" aria-label="Refresh local models" disabled={disabled || checkingModels} onClick={() => void refreshModels()}><RefreshCw size={14} /> Refresh installed models</button>
+      {catalogError && <p className="modal-error" role="status">Could not refresh local model readiness: {catalogError}. Start local ComfyUI and check Backend connections.</p>}
+      {downloadPackage && <><p className="fine-print" role="status">{checkingModels ? 'Checking installed weights...' :
+        missingModels ? missingModels.length ? `Setup needed: ${missingModels.map(model => model.file).join(', ')}.` :
+        'Selected weights detected. Installed files alone do not establish node, hardware or inference compatibility.' : 'Installed weights not checked.'}</p>
+        <p className="fine-print">Required setup: {designerModelPackages[downloadPackage].label}. Missing or incompatible files block generation, never trigger a fallback.</p>
+        <button className="secondary" disabled={disabled || dirty} onClick={() => void perform(async () => {
+          const installed = await window.studio.designerInstallModels(downloadPackage)
+          if (installed) {
+            const latest = await window.studio.snapshot()
+            baseline.current = { ...baseline.current, designer: latest.designer }; setNative(latest.designer?.config)
+            await refreshModels(); setNotice('Required models verified and selected. Review the current task before generating.')
+          }
+        })}>Review required model download</button>
+        {dirty && <p className="fine-print">Save or discard settings before installing models.</p>}</>}
+      {stage === 'mesh' && native?.meshProfile === 'mini' && <p className="fine-print">Hunyuan3D 2mini needs manual model and native-node setup. No automatic download is available; standard Hunyuan3D 2 has a supported package.</p>}
+      {stage === 'motion' && <>
+        <ModelSetupGuide comfyRoot={snapshot.settings.comfyRoot} textEncoder={encoder} checking={checkingModels}
+          needsSetup={modelChecks.some(check => check.status === 'blocked' && check.name.includes('text encoder'))}
+          onAccessPage={() => void perform(() => window.studio.openAccessPage())}
+          onTokenSettings={() => void perform(() => window.studio.openTokenSettings())} onRefresh={() => void refreshModels()} />
+        {modelChecks.filter(check => check.status !== 'ready').map(check => <p className="fine-print" key={check.name}>{check.name}: {check.detail}</p>)}
+      </>}
+    </section>}
+    {snapshot.designer?.modelDownload && <section aria-label="Model download progress" role="status">
+      <p>{snapshot.designer.modelDownload.message}</p>
+      {snapshot.designer.modelDownload.status === 'running' && <button className="secondary" onClick={() => void perform(() => window.studio.designerCancelDownload())}>Cancel model download</button>}
+    </section>}
+    <details className="model-advanced" open={advanced} onToggle={event => setAdvanced(event.currentTarget.open)}>
+    <summary>Advanced</summary>
+    <p className="fine-print">Alternative models, installed files, custom workflows, providers and credentials. Local alternatives show estimated memory guidance; custom files depend on their model architecture. Remote alternatives do not require a local GPU.</p>
+    <details className="model-advanced"><summary>API keys & connections</summary>
+      <TripoKeySetup target={tripoTarget} disabled={disabled} onBusy={setBusy} onDraftChange={setKeyDirty} />
+    </details>
+    <p className="fine-print">Global ComfyUI applies to scene, T-pose, cutout, mesh and motion unless overridden. Other tasks are independent. Future AI stages remain unimplemented.</p>
     <label className="field-label" htmlFor="ai-provider">Execution provider</label>
     <select id="ai-provider" disabled={disabled} value={selected} onChange={event => choice(event.target.value)}>
       {stage !== 'global' && <option value="inherit">{stage === 'capture' ? 'Use default (built-in MediaPipe in Mocap)' : 'Use default / global ComfyUI connection'}</option>}
@@ -260,7 +327,7 @@ export function AiProvidersPanel({ snapshot, initialStage = 'scene', initialFiel
             setCustomTripoModel(event.target.value === 'custom')
             if (event.target.value !== 'custom') changeRoute({ ...route, model: event.target.value })
           }}>
-            {Object.entries(tripoImageModels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            {Object.entries(tripoImageModels).map(([value, label]) => <option key={value} value={value}>{label} / Remote - local GPU not required</option>)}
             <option value="custom">Custom model ID (advanced)</option>
           </select>
           <p className="fine-print">{unavailableTripoImageModels.some(model => model === tripoModel) ?
@@ -329,28 +396,19 @@ export function AiProvidersPanel({ snapshot, initialStage = 'scene', initialFiel
     </>}
     {route.provider !== 'builtin' && stage === 'capture' && <p className="fine-print">Routed capture uploads the entire reference video, then requires a mapped <code>json</code> output with 33 MediaPipe-compatible world landmarks per frame for the requested clip. Retargeting and FBX export stay in local Blender.</p>}
     {route.provider === 'builtin' && native && stage !== 'capture' && <>
-      <button className="text-button" aria-label="Refresh local models" disabled={disabled || checkingModels} onClick={() => void refreshModels()}>
-        <RefreshCw size={14} className={checkingModels ? 'spin' : ''} /> Refresh installed models
-      </button>
-      {catalogError && <p className="modal-error" role="status">Could not refresh local model readiness: {catalogError}</p>}
       {stage !== 'motion' && stage !== 'global' && <NativeModelFields stage={stage} config={native} ready={ready} disabled={disabled} budgetText={budgetText} onChange={setNative} />}
       {stage === 'motion' && <>
         <label className="field-label" htmlFor="ai-native-encoder">Kimodo text encoder</label>
         <select id="ai-native-encoder" disabled={disabled} value={encoder} onChange={event => setEncoder(event.target.value === 'lfm' ? 'lfm' : 'llm2vec')}>
           <option value="llm2vec">Kimodo + Llama / LLM2Vec / high memory (~24 GiB recommended){encoderAdvice.encoder === 'llm2vec' ? ' / Recommended for available memory' : ''}</option>
-          <option value="lfm">Kimodo + LFM bridge / low VRAM (experimental){encoderAdvice.encoder === 'lfm' ? ' / Recommended for available memory' : ''}</option>
+          <option value="lfm">Kimodo + LFM bridge / lower memory, minimum unknown (experimental)</option>
         </select>
         {encoderGpu && <p className="fine-print" aria-label="Detected GPU memory">{encoderGpu.name}: {encoderGpu.freeGB.toFixed(1)} GiB free / {encoderGpu.totalGB.toFixed(1)} GiB total VRAM</p>}
         <p className="fine-print" id="encoder-memory-guidance">{encoderAdvice.detail} Memory budgets are estimates, not guarantees. Your saved encoder is never changed automatically.</p>
-        <ModelSetupGuide comfyRoot={snapshot.settings.comfyRoot} textEncoder={encoder} checking={checkingModels}
-          needsSetup={modelChecks.some(check => check.status === 'blocked' && check.name.includes('text encoder'))}
-          onAccessPage={() => void perform(() => window.studio.openAccessPage())}
-          onTokenSettings={() => void perform(() => window.studio.openTokenSettings())}
-          onRefresh={() => void refreshModels()} />
-        {modelChecks.filter(check => check.status !== 'ready').map(check => <p className="fine-print" key={check.name}>{check.name}: {check.detail}</p>)}
       </>}
       <p className="fine-print">Select installed weights; missing-model failures in the workflow offer supported downloads with approval. Optional adapters, Ollama and unsupported checkpoints need manual setup. Native rigging uses local Blender; built-in PBR generation is the TRELLIS.2 mesh preset, not a post-texturing pass.</p>
     </>}
+    </details>
     {error && <p className="modal-error" role="alert">{error}</p>}
     {notice && <p className="banner success" role="status">{notice}</p>}
     </div>

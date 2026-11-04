@@ -62,10 +62,14 @@ Trim the clip, capture with MediaPipe Pose on the CPU and compare the estimated 
 | **Visual animation graphs** | Connect states, reusable actions, transitions and pose-constrained loops. Each incoming path carries its actual pose context, so a standing action is not silently reused for a crouched entry. [Graph workflow](GUIDE.md#visual-animation-graphs) |
 | **Hand posing and rig detail** | Choose wrist-only or basic three-chain hands per side. Pose wrists, thumb, index and grouped fingers; key hand changes over body motion or bake a fixed grip into a separate character. [Hand controls](GUIDE.md#hand-pose-and-rig-detail) |
 | **Collections and batch generation** | Apply configurations across FBX collections, reuse identical motion per path context or explore deterministic seed variations. Immutable batch snapshots preserve the original setup for reruns. [Batches](GUIDE.md#repeatability-and-collections) |
-| **Your models, your routes** | Open **Model Settings** for hardware-aware local profiles, custom checkpoints and mapped ComfyUI workflows. Route individual stages to explicitly approved remote ComfyUI servers or Studio API gateways. [Providers](GUIDE.md#model-and-workflow-providers) |
+| **Your models, your routes** | Start with one recommended setup per task and see your computer's specs in **Model Settings**. Keep alternative models, custom workflows and explicitly approved remote routes tucked away in **Advanced**. [Providers](GUIDE.md#model-and-workflow-providers) |
 | **Optional paid Tripo integration** | Use your own API key and credits for hosted images, mesh generation with triangle budgets/Smart low-poly, and separate PBR or rigged-GLB variations. Paid end-to-end interoperability is not yet verified. [Tripo setup](GUIDE.md#tripo-paid-api) |
 | **Visible AI-agent control** | Opt in to local MCP control so a trusted agent operates the actual desktop controls, previews and dialogs while you watch. Default off, authenticated and loopback-only, with immediate in-app revocation. [MCP setup and trust](GUIDE.md#desktop-mcp-control) |
 | **Local-first, with a record of the work** | Keep original assets, completed takes and workspace history on this PC. Outputs retain provider/model/workflow provenance; remote stages ask for approval before transmitting prompts or assets. [Data and provenance](GUIDE.md#data-and-reproducibility) |
+
+![Model Settings showing computer specs, a recommended scene setup and collapsed Advanced options](docs/screenshots/model-settings-simple.png)
+
+*Actual settings UI in an isolated desktop workspace. Local ComfyUI is intentionally disconnected: setup guidance stays visible, and memory estimates are not inference guarantees.*
 
 Graph authoring and endpoint validation are implemented, but seamless learned graph motion is not guaranteed. Experimental LFM constrained-branch attempts have failed the strict join checks; failed paths are not presented as complete.
 

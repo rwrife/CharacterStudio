@@ -106,7 +106,16 @@ const locate = async (name, role) => {
   }, `enabled ${role}: ${name}`)
   return match.ref
 }
-const click = async (name, role = 'button') => call('studio_click', { ref: await locate(name, role) })
+const click = async (name, role = 'button') => {
+  const result = await call('studio_click', { ref: await locate(name, role) })
+  if (name === 'Model Settings' || (name instanceof RegExp && name.test('3D mesh generation provider:'))) {
+    const view = await ui()
+    assert.ok(view.text.includes('Your computer'), 'Computer specs remain visible without Advanced.')
+    assert.ok(!view.elements.some(item => item.name === 'Execution provider'), 'Advanced starts collapsed, including saved custom providers.')
+    await call('studio_click', { ref: await locate('Advanced', 'summary') })
+  }
+  return result
+}
 const fill = async (name, value) => call('studio_set_value', { ref: await locate(name, 'textbox'), value })
 const select = async (name, value) => call('studio_select', { ref: await locate(name, 'combobox'), values: [value] })
 const save = async () => {
@@ -114,7 +123,7 @@ const save = async () => {
   await until(async () => (await ui()).text.includes('Provider selections saved.'), 'provider settings saved')
 }
 const configure = async (stage, provider, model = 'fixture-image') => {
-  await select('AI stage', stage)
+  await select('Task', stage)
   await select('Execution provider', provider)
   if (provider !== 'builtin') {
     await fill('Provider endpoint no key in URL', endpoint)
@@ -174,12 +183,12 @@ try {
   await select('Execution provider', 'inherit')
   assert.deepEqual((await state()).ai, originalConfiguration)
   assert.equal(jobs.length, 0)
-  await select('AI stage', 'global')
+  await select('Task', 'global')
   await select('Execution provider', 'remote-comfyui')
   await fill('Provider endpoint no key in URL', endpoint + '/comfy')
   await save()
   assert.equal((await state()).ai.globalComfy.location, 'remote')
-  await select('AI stage', 'scene')
+  await select('Task', 'scene')
   await select('Execution provider', 'builtin')
   await select('Image model family', 'sdxl')
   await save()
@@ -216,7 +225,7 @@ try {
   assert.deepEqual(jobs.map(job => job.stage), ['scene', 'tpose', 'cutout'])
   assert.deepEqual(Buffer.from(jobs[1].inputs[0].base64, 'base64'), png)
   await click('Model Settings')
-  await select('AI stage', 'mesh')
+  await select('Task', 'mesh')
   await select('Execution provider', 'remote-comfyui')
   await fill('Provider endpoint no key in URL', endpoint + '/comfy')
   await fill('Provider model / checkpoint ID', 'fixture-mesh')
@@ -283,7 +292,7 @@ try {
   await until(() => readFile(riggedExport).then(bytes => bytes.equals(modelFixture(true, true)), () => false), 'byte-preserving rigged mesh export')
   assert.deepEqual((await state()).designer.designs.find(design => design.id === designId), completed)
   await click('Model Settings')
-  await select('AI stage', 'mesh')
+  await select('Task', 'mesh')
   await select('Execution provider', 'tripo')
   assert.equal(await page.getByLabel('Maximum triangles', { exact: true }).inputValue(), '')
   await expect(page.getByRole('checkbox', { name: 'Smart low-poly', exact: true })).not.toBeChecked()
@@ -306,10 +315,10 @@ try {
   await click('Smart low-poly', 'checkbox')
   await save()
   for (const stage of ['scene', 'tpose', 'texture', 'rig']) {
-    await select('AI stage', stage)
+    await select('Task', stage)
     assert.ok(!(await ui()).elements.some(item => item.name === 'Maximum triangles' || item.name === 'Smart low-poly'))
   }
-  await select('AI stage', 'mesh')
+  await select('Task', 'mesh')
   assert.equal(await page.getByLabel('Maximum triangles', { exact: true }).inputValue(), '20000')
   await click('Close Model Settings')
   pending = true
@@ -330,7 +339,7 @@ try {
   assert.deepEqual((await state()).designer.designs.find(design => design.id === designId), completed)
 
   await click('Model Settings')
-  await select('AI stage', 'motion')
+  await select('Task', 'motion')
   await select('Execution provider', 'remote-comfyui')
   await fill('Provider endpoint no key in URL', 'https://credentials.example')
   await save()
@@ -350,7 +359,7 @@ try {
   await click('Remove credential')
   await until(async () => (await ui()).text.includes('Credential removed.'), 'credential removal')
 
-  await select('AI stage', 'scene')
+  await select('Task', 'scene')
   await select('Execution provider', 'tripo')
   const tripoOptions = (await ui()).elements.find(item => item.role === 'combobox' && item.name === 'Tripo image model').options
   assert.ok(!tripoOptions.some(option => ['midjourney', 'flux.1_dev', 'flux.1_kontext_pro', 'gpt_image_1.5'].includes(option.value)))
@@ -369,7 +378,7 @@ try {
   assert.equal((await state()).ai.stages.scene.model, 'custom-image-fixture')
   await click('Close Model Settings')
   await click('Model Settings')
-  await select('AI stage', 'scene')
+  await select('Task', 'scene')
   assert.equal(await page.getByLabel('Provider model / checkpoint ID', { exact: true }).inputValue(), 'custom-image-fixture')
   await select('Tripo image model', 'banana2')
   await save()
@@ -438,13 +447,13 @@ try {
   assert.ok(!JSON.stringify(await ui()).includes(tripoKey))
   assert.equal((await app.evaluate(() => globalThis.providerSmokeRequests)).length, 1, 'A rejected paid submission must not be retried.')
   await click('Model Settings')
-  await select('AI stage', 'scene')
+  await select('Task', 'scene')
   await select('Tripo image model', 'custom')
   await fill('Provider model / checkpoint ID', 'gpt_image_1.5')
   await save()
   await click('Close Model Settings')
   await click('Model Settings')
-  await select('AI stage', 'scene')
+  await select('Task', 'scene')
   assert.equal(await page.getByLabel('Tripo image model', { exact: true }).inputValue(), 'chat_image_1.5')
   assert.ok(!(await ui()).elements.some(item => item.role === 'textbox' && item.name === 'Provider model / checkpoint ID'))
   assert.equal((await state()).ai.stages.scene.model, 'gpt_image_1.5', 'Recognizing a saved alias must not rewrite history.')
@@ -500,7 +509,7 @@ try {
     face_limit: 20000, smart_low_poly: true
   })
   await click('Model Settings')
-  await select('AI stage', 'scene')
+  await select('Task', 'scene')
   await select('Tripo image model', 'banana2')
   await save()
   await click('API keys & connections', 'summary')
@@ -512,7 +521,7 @@ try {
   const screenshot = await client.callTool({ name: 'studio_screenshot', arguments: {} })
   assert.equal(screenshot.content[0].type, 'image')
   await writeFile(resolve('docs', 'screenshots', 'ai-providers.png'), Buffer.from(screenshot.content[0].data, 'base64'))
-  await select('AI stage', 'mesh')
+  await select('Task', 'mesh')
   await page.setViewportSize({ width: 1440, height: 2100 })
   await call('studio_scroll', { ref: await locate('Model Settings content', 'region'), y: -10000 })
   const meshScreenshot = await client.callTool({ name: 'studio_screenshot', arguments: {} })
@@ -542,7 +551,7 @@ try {
   assert.deepEqual(Buffer.from(await reopened.evaluate(async url => Array.from(new Uint8Array(await (await fetch(url)).arrayBuffer())), restoredPoseUrl)), png)
   await click('Designer', 'tab')
   await click('Model Settings')
-  await select('AI stage', 'mesh')
+  await select('Task', 'mesh')
   assert.equal(await reopened.getByLabel('Maximum triangles', { exact: true }).inputValue(), '20000')
   await expect(reopened.getByRole('checkbox', { name: 'Smart low-poly', exact: true })).toBeChecked()
   assert.deepEqual(errors, [])
